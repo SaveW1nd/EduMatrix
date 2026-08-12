@@ -218,7 +218,7 @@ CREATE TABLE `sys_role_menu` (
   `deleted_at`  BIGINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除标记：0=未删除；删除时写入毫秒时间戳。用时间戳而非 0/1，使同一业务键可容纳任意多条已删除行（唯一索引末尾追加本列）',
   `remark`      VARCHAR(500) NULL DEFAULT NULL       COMMENT '备注',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_role_menu` (`role_id`, `menu_id`, `deleted_at`) COMMENT '同一角色不可重复绑定同一菜单（追加 deleted_at 兼容逻辑删除）',
+  UNIQUE KEY `uk_role_menu` (`role_id`, `menu_id`, `deleted_at`) COMMENT '同一角色不可重复绑定同一菜单（追加 deleted_at 兼容逻辑删除）。【勿加 tenant_id】role_id 是雪花 ID、全局唯一，一个角色只属于一个租户，(role_id,menu_id) 跨租户不可能碰撞；加上 tenant_id 只会让同一角色在不同 tenant_id 下重复绑定同一菜单成为合法，反而削弱约束',
   KEY `idx_menu_id` (`menu_id`) COMMENT '按菜单反查授权角色'
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci COMMENT = '角色-菜单关联表';
 
