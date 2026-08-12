@@ -12,6 +12,7 @@
 | [docs/02-数据库设计.md](docs/02-数据库设计.md) | 数据库设计说明（ER 图、核心设计要点、逐表字段、索引、分区、容量估算） |
 | [docs/sql/edumatrix_ddl.sql](docs/sql/edumatrix_ddl.sql) | 可执行 DDL（MySQL 8.0，**41 张表**，已实测执行通过） |
 | [docs/03-API接口文档/](docs/03-API接口文档/) | API 接口文档（6 个分册，**159 个接口**，见 00-通用约定 内目录） |
+| [scripts/check_consistency.py](scripts/check_consistency.py) | 文档一致性检查（8 项，无依赖）：`python3 scripts/check_consistency.py`，说明见 [scripts/README.md](scripts/README.md) |
 | [references/README.md](references/README.md) | 参考开源仓库导读（RuoYi-Vue-Plus / roncoo-education / xzs / DPlayer） |
 
 ## 核心设计决策速览

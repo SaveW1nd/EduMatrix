@@ -310,7 +310,7 @@ CREATE TABLE `sys_tenant_config` (
 
 -- ----------------------------------------------------------------------------
 -- 11. org_node 统一组织树表【全系统核心表】
---     一棵树到底：机构/管理单元、管理员、教师、学生全部是本表的节点
+--     一棵树到底：平台超管、管理员、教师、学生全部是本表的节点（每个节点都是一个人）
 --     数据权限唯一规则（契约 2.4）：你能看到的数据 = 你所在节点的子树
 --       id = #{myNodeId} OR FIND_IN_SET(#{myNodeId}, ancestors)
 --     平台根节点（契约 2.1）：全表唯一一行 id=0 的虚拟根（node_type=1、tenant_id=0、
@@ -333,7 +333,7 @@ CREATE TABLE `org_node` (
   `id`             BIGINT        NOT NULL                COMMENT '节点ID（雪花算法；两个特例：平台根节点固定 id=0；机构节点的 id 即该租户的 tenant_id，契约 2.1）',
   `parent_id`      BIGINT        NOT NULL DEFAULT 0      COMMENT '父节点ID（-1=平台根节点自身，全表唯一；0=其父为平台根，即机构节点；其余为上级节点 id：管理员的父为机构/上级管理员，教师的父为管理员，学生的父为管理员或教师）',
   `ancestors`      VARCHAR(1000) NOT NULL DEFAULT '0'    COMMENT '祖级路径（逗号串，根在前、不含本节点，如 0,100,101,205；平台根节点自身为空串 ''''）：子树判定 FIND_IN_SET(#{nodeId},ancestors)；批量取子树用 LIKE CONCAT(ancestors,'','',id,'',%'') 走前缀索引；深度不设上限，1000 字符约容纳 50 级',
-  `node_name`      VARCHAR(100)  NOT NULL                COMMENT '节点名称（机构/管理单元填机构名或部门名；管理员/教师/学生节点填其真实姓名，与 sys_user.real_name 同步）',
+  `node_name`      VARCHAR(100)  NOT NULL                COMMENT '节点名称（管理员节点可命名为机构名/校区名以表达组织层级；管理员/教师/学生节点填其真实姓名，与 sys_user.real_name 同步）',
   `node_type`      TINYINT       NOT NULL                COMMENT '节点类型：0平台超管 1管理员 2教师 3学生（契约 §5，取值与 sys_user.user_type 完全一致）。承载规则：0只挂1；1可挂1/2/3；2只挂3；3为叶子。不设独立于人的组织单元节点——组织层级由管理员节点的嵌套表达',
   `ref_user_id`    BIGINT        NOT NULL                COMMENT '关联账号 user_id（→sys_user.id）：每个节点都是一个人，故全部非空，与 sys_user.node_id 互为反向引用',
   `sort`           INT           NOT NULL DEFAULT 0      COMMENT '同级显示顺序（升序）',
