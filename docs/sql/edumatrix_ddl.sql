@@ -3,7 +3,7 @@
 -- ----------------------------------------------------------------------------
 -- 日期        : 2026-08-12
 -- 数据库      : MySQL 8.0+
--- 表总数      : 41 张（sys_10 + org_10 + crs_4 + vod_4 + qb_3 + hw_6 + stat_4，见契约 §8.1）
+-- 表总数      : 41 张（sys_10 + org_10 + crs_4 + vod_4 + qb_3 + hw_6 + stat_4，见契约 §9.1）
 -- 核心模型     : 一棵树到底——平台超管/管理员/教师/学生全部是 org_node 上的节点
 --               （node_type 0/1/2/3，取值与 sys_user.user_type 完全一致）；每个节点都是一个人，
 --               不设不绑账号的组织单元节点，组织层级由管理员节点的嵌套表达。
@@ -760,7 +760,9 @@ CREATE TABLE `vod_video` (
 DROP TABLE IF EXISTS `vod_play_auth_log`;
 CREATE TABLE `vod_play_auth_log` (
   `id`          BIGINT       NOT NULL                COMMENT '记录ID（雪花算法）',
-  `student_id`  BIGINT       NOT NULL                COMMENT '学生ID（→org_student.id）',
+  `viewer_user_id` BIGINT    NOT NULL                COMMENT '取证人账号ID（→sys_user.id）：学生、教师、管理员均可取证，故审计主体统一用账号而非学生档案',
+  `viewer_type` TINYINT      NOT NULL                COMMENT '取证人类型（=sys_user.user_type）：1管理员 2教师 3学生。管理端预览与学生学习走同一接口、同一审计表，靠本列区分',
+  `student_id`  BIGINT       NULL DEFAULT NULL       COMMENT '学生ID（→org_student.id）：仅 viewer_type=3 时有值；教师/管理员预览时为 NULL——二者没有 org_student 档案行，此列若为 NOT NULL 则管理端预览必然插入失败或漏审计',
   `lesson_id`   BIGINT       NOT NULL                COMMENT '课时ID（→crs_lesson.id）',
   `video_id`    BIGINT       NOT NULL                COMMENT '媒资ID（→vod_video.id）',
   `auth_token`  VARCHAR(500) NOT NULL                COMMENT '发放的播放凭证（PlayAuth/Key，脱敏截断存储）',
@@ -771,7 +773,8 @@ CREATE TABLE `vod_play_auth_log` (
   `update_time` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   `deleted_at`  BIGINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除：0=未删除，删除时写入毫秒时间戳（日志业务恒为 0，清理走物理归档）',
   PRIMARY KEY (`id`),
-  KEY `idx_student_time` (`student_id`, `create_time`) COMMENT '审计某学生取证频次（防刷排查）',
+  KEY `idx_viewer_time` (`viewer_user_id`, `create_time`) COMMENT '审计某账号取证频次（防刷排查）：覆盖学生、教师、管理员三类取证人',
+  KEY `idx_student_time` (`student_id`, `create_time`) COMMENT '审计某学员取证频次；student_id 为 NULL 的管理端预览行不入本索引，正合需求',
   KEY `idx_lesson_time` (`lesson_id`, `create_time`) COMMENT '按课时统计取证量'
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci COMMENT = '播放凭证发放记录表（审计，可按时间归档清理）';
 

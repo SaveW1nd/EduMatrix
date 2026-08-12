@@ -278,7 +278,14 @@ def check_c5_interface_count():
 def check_c6_table_count(tables):
     """C6 DDL 建表数 = 契约第 4 节表清单 = 契约声明的总数 = README 声明"""
     contract = read(os.path.join(DOCS, 'DESIGN-CONTRACT.md'))
-    listed = set(re.findall(r'^\|\s*\*{0,2}`(\w+)`', contract, re.M))
+    # 只取第 4 节表清单，不扫全文——否则契约里任何 `snake_case` 反引号
+    # （如 §7.1 的监控指标名 vod_callback_orphan_total）都会被当成表名
+    m = re.search(r'^## 4\..*?(?=^## 5\.)', contract, re.M | re.S)
+    if not m:
+        report('ERROR', 'C6', os.path.join(DOCS, 'DESIGN-CONTRACT.md'),
+               '未能定位第 4 节表清单，检查标题格式')
+        return
+    listed = set(re.findall(r'^\|\s*\*{0,2}`(\w+)`', m.group(0), re.M))
     listed = {t for t in listed if re.match(r'(sys|org|crs|vod|qb|hw|stat)_', t)}
     ddl_set = set(tables)
 
@@ -519,6 +526,22 @@ def check_c10_type_semantics(tables):
                     report('WARN', 'C10', DDL_PATH,
                            f'{tname}.deleted_at 第 {n} 行注释未说明其为时间戳：「{comment[:26]}」')
         del seen_deleted_at
+
+    # DDL 之外，02-数据库设计的逐表字段表也逐列复述了类型，同样会脱节
+    # （实际发生过：DDL 全部改为 BIGINT 时间戳后，字段表 40 行仍写 TINYINT + 0否 1是）
+    db_doc = os.path.join(DOCS, '02-数据库设计.md')
+    for i, line in enumerate(read(db_doc).split('\n'), 1):
+        m = re.match(r'\|\s*(\w+)\s*\|\s*([A-Z]+(?:\(\d+(?:,\d+)?\))?)\s*\|'
+                     r'\s*[NY]\s*\|[^|]*\|([^|]*)\|', line)
+        if not m:
+            continue
+        col, typ, desc = m.group(1), m.group(2).upper(), m.group(3)
+        if typ.startswith('BIGINT') and any(w in desc for w in BOOL_WORDS):
+            report('ERROR', 'C10', db_doc,
+                   f'第 {i} 行 {col} 类型 {typ}，说明却是布尔语义「{desc.strip()[:26]}」')
+        if col == 'deleted_at' and not typ.startswith('BIGINT'):
+            report('ERROR', 'C10', db_doc,
+                   f'第 {i} 行 deleted_at 写作 {typ}，DDL 中为 BIGINT 毫秒时间戳')
 
 
 # ================== C11 接口编号交叉引用完整性（分册内 + 跨分册）

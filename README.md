@@ -11,7 +11,7 @@
 | [docs/01-PRD-产品需求文档.md](docs/01-PRD-产品需求文档.md) | 产品需求文档（角色与权限、五大模块功能详述、验收标准、页面清单、50 条边界场景） |
 | [docs/02-数据库设计.md](docs/02-数据库设计.md) | 数据库设计说明（ER 图、核心设计要点、逐表字段、索引、分区、容量估算） |
 | [docs/sql/edumatrix_ddl.sql](docs/sql/edumatrix_ddl.sql) | 可执行 DDL（MySQL 8.0，**41 张表**，已实测执行通过） |
-| [docs/03-API接口文档/](docs/03-API接口文档/) | API 接口文档（6 个分册，**157 个接口**，见 00-通用约定 内目录） |
+| [docs/03-API接口文档/](docs/03-API接口文档/) | API 接口文档（6 个分册，**158 个接口**，见 00-通用约定 内目录） |
 | [scripts/check_consistency.py](scripts/check_consistency.py) | 文档一致性检查（12 项，无依赖）：`python3 scripts/check_consistency.py`，说明见 [scripts/README.md](scripts/README.md) |
 | [references/README.md](references/README.md) | 参考开源仓库导读（RuoYi-Vue-Plus / roncoo-education / xzs / DPlayer） |
 
@@ -25,6 +25,14 @@
 - **题库版本防错乱**：题目雪花物理 ID 恒定，编辑即生成不可变版本快照 `qb_question_version`；作业发布时固化版本；错题本绑定做错时刻版本
 - **统计双快照上卷**：`stat_student_daily` 为唯一事实表，凭行内 `teacher_node_id` / `node_id` 快照分别上卷到导师维度与节点维度；历史归原导师、以自然日结算
 - **软删除**：核心业务数据一律逻辑删除，禁止物理删除。`deleted_at` 是**毫秒时间戳而非 0/1 标志**——0/1 方案下同一业务键最多只能容纳一条已删除行，反复增删到第二次就撞唯一键
+
+## 运行期约定
+
+设计之外、上线前必须定死的三块（契约 §7）：
+
+- **可观测性**：全链路 `traceId`（响应头 `X-Trace-Id` 回传）+ 7 项监控指标。其中 `grant_dangling_count`（真悬挂授权）与 `vod_callback_orphan_total`（回调反查不到媒资）的告警线都是 **> 0**——这两类每发生一次就是一次静默的数据错误
+- **合规**：K12 场景收集监护人手机号，属敏感个人信息。监护人同意留痕、最小必要、删除请求走"归档 + 脱敏"而非物理删除——这几条会决定表结构，事后补要改数据模型
+- **库变更**：`edumatrix_ddl.sql` 是 Flyway 初始基线，此后只走增量脚本。`hw_answer_detail` 稳态 3600 万行，改列类型必须走 gh-ost，禁止直接 ALTER
 
 ## 三条不可违反的铁律
 
