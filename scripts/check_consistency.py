@@ -485,6 +485,80 @@ def check_c12_anchors():
             report('ERROR', 'C12', path, f'缺失承重锚句 `{anchor[:40]}`——{why}')
 
 
+# ============ C13 承载平台级行（tenant_id=0）的表必须在契约 §2.9 登记
+
+def check_c13_platform_rows(tables):
+    """C13 凡 `tenant_id` 带 DEFAULT 0 的表，必须在契约 §2.9 的清单里逐表定案
+
+    真实缺陷：sys_role 与 sys_role_menu 的内置角色行 tenant_id=0，而租户插件按
+    `AND tenant_id = ?` 注入 → 租户用户加载 roles/perms 命中 0 行 → 全员零权限、
+    系统开箱不可用。这是**不报错的故障**：接口返回 200、字段齐全，只是数组为空。
+
+    检查两件事：
+      1. DDL 里 `tenant_id ... DEFAULT 0` 的表，都在契约 §2.9 表格中出现；
+      2. §2.9 登记的表，都确实存在于 DDL（防清单腐烂）。
+    新增这类表时若忘了定案，本项会拦下来。
+    """
+    contract_path = os.path.join(DOCS, 'DESIGN-CONTRACT.md')
+    contract = read(contract_path)
+    m = re.search(r'^### 2\.9 .*?(?=^## 3\.)', contract, re.M | re.S)
+    if not m:
+        report('ERROR', 'C13', contract_path, '未能定位 §2.9 平台级行小节，检查标题格式')
+        return
+    section = m.group(0)
+    registered = set(re.findall(r'^\|\s*`(\w+)`\s*\|', section, re.M))
+
+    defaulted = set()
+    for tname, t in tables.items():
+        for _, line in t['lines']:
+            if re.match(r"\s+`tenant_id`\s+BIGINT.*DEFAULT 0", line):
+                defaulted.add(tname)
+    for t in sorted(defaulted - registered):
+        report('ERROR', 'C13', contract_path,
+               f'`{t}.tenant_id` 有 DEFAULT 0（可承载平台级行），但未在 §2.9 清单中定案——'
+               f'漏定案的后果是运行期静默零权限或静默越权，不会报错')
+    for t in sorted(registered - set(tables)):
+        report('ERROR', 'C13', contract_path, f'§2.9 登记了 `{t}`，但 DDL 中无此表')
+
+
+# ====== C14 DDL 列集合 = 02-数据库设计逐表字段表（逐表逐列比对）
+
+def check_c14_column_sets(tables):
+    """C14 每张表的列集合，DDL 与 02-数据库设计的字段表必须完全一致
+
+    真实缺陷：给 hw_answer_detail 补冗余列、给 vod_play_auth_log 换审计主体、
+    给 vod_heartbeat_log 补 seeked 时，DDL 改了而文档字段表漏改（或反之）——
+    C10 只看类型与注释语义，看不出"少了一整列"。而 02-数据库设计是实现方最常
+    照着建表的文档，漏一列就是漏一个字段。
+
+    只比对列名集合；类型与注释的语义一致性由 C10 负责。
+    """
+    doc_path = os.path.join(DOCS, '02-数据库设计.md')
+    doc = read(doc_path)
+    # 小节标题形如「#### 4.3.8 hw_answer_detail 逐题作答明细表」
+    secs = list(re.finditer(r'^#### [\d.]+ (\w+) [^\n]*\n(.*?)(?=^#### |\Z)', doc, re.M | re.S))
+    documented = {}
+    for m in secs:
+        name = m.group(1)
+        if name not in tables:
+            continue
+        documented[name] = [c for c in re.findall(r'^\| (\w+) \| [A-Z]', m.group(2), re.M)]
+
+    for name in sorted(set(tables) - set(documented)):
+        report('WARN', 'C14', doc_path, f'DDL 有表 `{name}`，02-数据库设计中未找到其字段表小节')
+
+    for name, doc_cols in sorted(documented.items()):
+        ddl_cols = tables[name]['cols']
+        only_ddl = [c for c in ddl_cols if c not in doc_cols]
+        only_doc = [c for c in doc_cols if c not in ddl_cols]
+        if only_ddl:
+            report('ERROR', 'C14', doc_path,
+                   f'`{name}`：DDL 有而文档字段表缺 {only_ddl}')
+        if only_doc:
+            report('ERROR', 'C14', DDL_PATH,
+                   f'`{name}`：文档字段表有而 DDL 缺 {only_doc}')
+
+
 # ============================== C10 列类型与注释语义一致（DDL）
 
 _COL_DEF = re.compile(
@@ -605,6 +679,8 @@ def main():
         ('C10', lambda: check_c10_type_semantics(tables)),
         ('C11', check_c11_interface_refs),
         ('C12', check_c12_anchors),
+        ('C13', lambda: check_c13_platform_rows(tables)),
+        ('C14', lambda: check_c14_column_sets(tables)),
     ]
     for code, fn in checks:
         if only and code != only:
@@ -624,6 +700,8 @@ def main():
         'C10': 'DDL 列类型与注释语义相符',
         'C11': '接口编号交叉引用完整性',
         'C12': '承重论证锚句存在性',
+        'C13': '平台级行（tenant_id=0）已逐表定案',
+        'C14': 'DDL 列集合 = 02-数据库设计字段表',
     }
     errors = [r for r in results if r[0] == 'ERROR']
     warns = [r for r in results if r[0] == 'WARN']

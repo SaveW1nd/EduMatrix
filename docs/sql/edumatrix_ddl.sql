@@ -146,7 +146,7 @@ CREATE TABLE `sys_role` (
   `role_key`    VARCHAR(50)  NOT NULL                COMMENT '角色标识（仅决定操作权限，不决定数据范围）：super_admin平台超管 org_admin管理员 teacher教师/导师 student学生',
   `status`      TINYINT      NOT NULL DEFAULT 0      COMMENT '角色状态：0正常 1停用',
   `sort`        INT          NOT NULL DEFAULT 0      COMMENT '显示顺序（升序）',
-  `tenant_id`   BIGINT       NOT NULL DEFAULT 0      COMMENT '租户（机构）ID，平台内置角色为 0',
+  `tenant_id`   BIGINT       NOT NULL DEFAULT 0      COMMENT '租户（机构）ID，平台内置角色为 0，租户自建角色为其 tenant_id。【契约 §2.9】本表的租户插件注入条件必须是 (tenant_id = ? OR tenant_id = 0)——租户用户加载 roles/perms 走 sys_user_role→sys_role→sys_role_menu，只按等式过滤会命中 0 行、全员零权限；但不可改用 ignoreTable 整表忽略，否则租户 A 能列出并改删租户 B 自建的角色',
   `create_by`   BIGINT       NULL DEFAULT NULL       COMMENT '创建人 user_id',
   `create_time` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_by`   BIGINT       NULL DEFAULT NULL       COMMENT '更新人 user_id',
@@ -210,7 +210,7 @@ CREATE TABLE `sys_role_menu` (
   `id`          BIGINT       NOT NULL                COMMENT '主键ID（雪花算法）',
   `role_id`     BIGINT       NOT NULL                COMMENT '角色ID（→sys_role.id）',
   `menu_id`     BIGINT       NOT NULL                COMMENT '菜单ID（→sys_menu.id）',
-  `tenant_id`   BIGINT       NOT NULL DEFAULT 0      COMMENT '租户（机构）ID，平台内置角色绑定为 0',
+  `tenant_id`   BIGINT       NOT NULL DEFAULT 0      COMMENT '租户（机构）ID，平台内置角色的菜单绑定为 0。【契约 §2.9】本表的租户插件注入条件必须是 (tenant_id = ? OR tenant_id = 0)——否则租户用户加载 perms 时命中 0 行，所有权限校验 403，系统开箱不可用；但不可改用 ignoreTable 整表忽略，本表同时存租户自建角色的绑定',
   `create_by`   BIGINT       NULL DEFAULT NULL       COMMENT '创建人 user_id',
   `create_time` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_by`   BIGINT       NULL DEFAULT NULL       COMMENT '更新人 user_id',
@@ -818,6 +818,7 @@ CREATE TABLE `vod_heartbeat_log` (
   `video_id`         BIGINT        NOT NULL                COMMENT '媒资ID（→vod_video.id）',
   `current_time_sec` DECIMAL(10,1) NOT NULL DEFAULT 0.0    COMMENT '心跳上报时的播放位置（秒，对应请求体 currentTime；命名已避开保留字）',
   `interval_sec`     INT           NOT NULL DEFAULT 0      COMMENT '与上次心跳的实际间隔（秒，>=8s 视为有效，单次计入 min(实际间隔,15)）',
+  `seeked`           TINYINT       NOT NULL DEFAULT 0      COMMENT '本次心跳前是否发生 seek 或暂停恢复：0否 1是（对应请求体 seeked）。必须落库——它决定本次是否执行推进一致性校验（03-课程与视频 8.2.1 规则 6），不记录就无法回放这条心跳当时为什么被采纳或丢弃，而本表是防刷审计与进度争议回溯的唯一依据；同时供风控统计 seeked 频次：连续 >2 次或单课时每小时 >20 次即判异常，防脚本恒置 true 关闭规则 6',
   `client_ip`        VARCHAR(64)   NULL DEFAULT NULL       COMMENT '客户端 IP',
   `device`           VARCHAR(200)  NULL DEFAULT NULL       COMMENT '设备/浏览器标识（UA 摘要）',
   `created_time`     DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '心跳时间（分区键）',
@@ -1037,6 +1038,9 @@ CREATE TABLE `hw_answer_detail` (
   `answer_sheet_id`  BIGINT       NOT NULL                COMMENT '答卷ID（→hw_answer_sheet.id）',
   `question_id`      BIGINT       NOT NULL                COMMENT '题目物理ID（→qb_question.id）',
   `question_version` INT          NOT NULL                COMMENT '作答时刻的题目版本号快照（与作业固化版本一致）',
+  `student_id`       BIGINT       NOT NULL                COMMENT '【冗余】学生ID（→org_student.id）：与 answer_sheet_id 指向的 hw_answer_sheet.student_id 恒等，提交时一并写入。冗余理由见 submit_date——错题榜的分子分母都是 COUNT(DISTINCT student_id)，无此列则索引不覆盖，仍需为每行回表',
+  `teacher_node_id`  BIGINT       NULL DEFAULT NULL       COMMENT '【冗余】作答时刻导师节点ID快照（→org_node.id，node_type=2）：与 hw_answer_sheet.teacher_node_id 同源同时刻写入，NULL=作答时尚未分配导师。冗余理由见 submit_date',
+  `submit_date`      DATE         NULL DEFAULT NULL       COMMENT '【冗余】提交日期（= hw_answer_sheet.submit_time 的日期部分），与 student_id / teacher_node_id 在提交时**一并写入、不得二次计算**（三者必须与答卷头同源同时刻，否则错题榜与作业分析会得出两个不同的归属）。NULL = 尚未提交，故本列非空即等价于答卷 status ∈ {2,3}，无需再回头 join 判状态。三列冗余是为高频错题榜（PRD F4-1 / 03-05 §2.3(4)）：本表稳态 3600 万行，不冗余则只能先按 teacher_node_id 从 hw_answer_sheet 捞上万个 sheet_id（且 idx_teacher_node_homework 不含 submit_time，拿不到时间范围）再 IN 查明细分组聚合，看板首屏 2s 达不到',
   `student_answer`   JSON         NULL                    COMMENT '学生作答内容（JSON：选项/填空文本/简答富文本）',
   `is_correct`       TINYINT      NULL DEFAULT NULL       COMMENT '判定结果：0错误 1正确 2半对(多选漏选/填空部分对/主观题部分得分) NULL待批改（主观题批改前）；三态口径：正确率+漏选率+错误率=100%，半对不计入错误率',
   `score`            DECIMAL(6,2) NULL DEFAULT NULL       COMMENT '本题得分',
@@ -1052,7 +1056,8 @@ CREATE TABLE `hw_answer_detail` (
   `remark`           VARCHAR(500) NULL DEFAULT NULL       COMMENT '备注',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_sheet_question` (`answer_sheet_id`, `question_id`, `deleted_at`) COMMENT '同一答卷同一题仅一条作答记录（追加 deleted_at 兼容逻辑删除）',
-  KEY `idx_question_correct` (`question_id`, `is_correct`) COMMENT '高频错题排行榜：按题目聚合错误数（高频）'
+  KEY `idx_teacher_date_question` (`teacher_node_id`, `deleted_at`, `submit_date`, `question_id`, `is_correct`, `student_id`) COMMENT '【高频错题榜主路径，PRD F4-1】两个等值列（teacher_node_id、deleted_at）在前定位，submit_date 做范围裁剪，其后三列让 GROUP BY question_id / 按 is_correct 分档 / COUNT(DISTINCT student_id) 全在索引内完成——六列合起来恰好覆盖该查询引用的全部列，EXPLAIN 应为 Using index。deleted_at 不可省：它在 WHERE 里，漏掉就要为每行回表，覆盖失效（实测 EXPLAIN 退化为 Using index condition）。GROUP BY 列位于范围列之后，故仍有一次 filesort，但分组集是单个导师的题目数（百量级），可接受。缺此索引时唯一执行方式是 IN 上万个 sheet_id 扫 3600 万行明细',
+  KEY `idx_question_correct` (`question_id`, `is_correct`) COMMENT '全机构维度按题目聚合错误数（不限导师，如题库质量分析）；导师维度走 idx_teacher_date_question'
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci COMMENT = '逐题作答明细表';
 
 -- ----------------------------------------------------------------------------
