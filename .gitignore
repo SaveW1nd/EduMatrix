@@ -1,0 +1,6 @@
+# 参考开源仓库的克隆（各自带 .git、体积约 560MB，不纳入本仓库版本管理）
+# 拉取方式见 references/README.md 末尾的脚本
+references/*/
+
+# macOS
+.DS_Store
