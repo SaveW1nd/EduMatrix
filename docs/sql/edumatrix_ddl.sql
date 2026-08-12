@@ -123,7 +123,7 @@ CREATE TABLE `sys_user` (
   `remark`          VARCHAR(500) NULL DEFAULT NULL       COMMENT '备注',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_username` (`username`, `deleted_at`) COMMENT '登录账号全平台唯一（错误码 10001 依据）',
-  KEY `idx_tenant_type_status` (`tenant_id`, `user_type`, `status`) COMMENT '机构内按用户类型分页列表',
+  KEY `idx_tenant_type_status` (`tenant_id`, `user_type`, `status`) COMMENT '机构内按角色类型分页/统计（管理员列表、教师总数、停用账号巡检）',
   KEY `idx_node_id` (`node_id`) COMMENT '按节点反查账号（节点删除/移动前校验、登录时装配数据权限起点）',
   UNIQUE KEY `uk_tenant_phone` (`tenant_id`, `phone`, `deleted_at`) COMMENT '手机号租户内唯一（错误码 10013 依据）。phone 可为 NULL（管理员可不填），MySQL 唯一索引不约束 NULL，正好符合需求；缺此约束时并发创建必产生重复手机号，而学生 username 默认取手机号会导致后插者撞 uk_username 报 10001，提示与实际原因不符'
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci COMMENT = '统一账号表（管理员/教师/学生共用登录体系）';
@@ -317,8 +317,8 @@ CREATE TABLE `sys_tenant_config` (
 --       parent_id=-1、ancestors=''）。平台超管 sys_user.node_id=0，其子树 = 全平台，
 --       因此上面那条规则对超管同样成立，全系统无需为超管写特例分支。
 --     结构约束（服务层强制，DDL 无法表达）：
---       · node_type=3(教师) 的子节点只能是 node_type=4(学生)；
---       · node_type=4(学生) 必须是叶子，不得有任何子节点；
+--       · node_type=2(教师) 的子节点只能是 node_type=3(学生)；
+--       · node_type=3(学生) 必须是叶子，不得有任何子节点；
 --       · node_type=1/2 可挂 1/2/3/4 任意类型；
 --       · 移动前防成环：targetParentId != movingNodeId
 --         AND FIND_IN_SET(movingNodeId, targetParent.ancestors) = 0；
@@ -334,8 +334,8 @@ CREATE TABLE `org_node` (
   `parent_id`      BIGINT        NOT NULL DEFAULT 0      COMMENT '父节点ID（-1=平台根节点自身，全表唯一；0=其父为平台根，即机构节点；其余为上级节点 id：管理员的父为机构/上级管理员，教师的父为管理员，学生的父为管理员或教师）',
   `ancestors`      VARCHAR(1000) NOT NULL DEFAULT '0'    COMMENT '祖级路径（逗号串，根在前、不含本节点，如 0,100,101,205；平台根节点自身为空串 ''''）：子树判定 FIND_IN_SET(#{nodeId},ancestors)；批量取子树用 LIKE CONCAT(ancestors,'','',id,'',%'') 走前缀索引；深度不设上限，1000 字符约容纳 50 级',
   `node_name`      VARCHAR(100)  NOT NULL                COMMENT '节点名称（机构/管理单元填机构名或部门名；管理员/教师/学生节点填其真实姓名，与 sys_user.real_name 同步）',
-  `node_type`      TINYINT       NOT NULL                COMMENT '节点类型：1机构/管理单元 2管理员 3教师 4学生（契约 §5；承载规则：3 下只能挂 4，4 必为叶子）',
-  `ref_user_id`    BIGINT        NULL DEFAULT NULL       COMMENT '关联账号 user_id（→sys_user.id）：node_type=2/3/4 时必填且与 sys_user.node_id 互为反向引用；node_type=1（机构/管理单元）为 NULL',
+  `node_type`      TINYINT       NOT NULL                COMMENT '节点类型：0平台超管 1管理员 2教师 3学生（契约 §5，取值与 sys_user.user_type 完全一致）。承载规则：0只挂1；1可挂1/2/3；2只挂3；3为叶子。不设独立于人的组织单元节点——组织层级由管理员节点的嵌套表达',
+  `ref_user_id`    BIGINT        NOT NULL                COMMENT '关联账号 user_id（→sys_user.id）：每个节点都是一个人，故全部非空，与 sys_user.node_id 互为反向引用',
   `sort`           INT           NOT NULL DEFAULT 0      COMMENT '同级显示顺序（升序）',
   `status`         TINYINT       NOT NULL DEFAULT 0      COMMENT '节点状态：0正常 1停用（停用不改变树结构，仅禁止其账号登录与被分配）',
   `child_count`    INT           NOT NULL DEFAULT 0      COMMENT '直接子节点数（冗余计数，增删/移动子节点时同步维护；>0 时禁止删除本节点）',
@@ -352,7 +352,7 @@ CREATE TABLE `org_node` (
   KEY `idx_tenant_parent_sort` (`tenant_id`, `parent_id`, `sort`) COMMENT '【子树查询主路径】按父节点逐层展开：组织树懒加载、子树 BFS 遍历、机构内定位根节点（parent_id=0）；FIND_IN_SET 无法走索引，逐层查询是默认策略',
   KEY `idx_parent_type` (`parent_id`, `node_type`) COMMENT '某节点下按类型取人：管理员页"我下面的教师列表"、教师页"我名下的学员列表"（高频）',
   KEY `idx_ancestors` (`ancestors`(255)) COMMENT '【子树查询备选路径】ancestors 前缀 LIKE 一次性取全子树（LIKE ''0,100,101,%'' 可命中左前缀）；亦用于移动节点时按路径前缀批量重算子树 ancestors',
-  KEY `idx_tenant_type_status` (`tenant_id`, `node_type`, `status`) COMMENT '机构内按类型统计/分页（教师总数、学生总数、停用节点巡检）'
+  KEY `idx_tenant_type_status` (`tenant_id`, `node_type`, `status`) COMMENT '机构内按类型统计/分页（教师总数、学生总数、停用节点巡检）；登录时判定祖先链是否有 node_type=1 且 status=1 的管理员（分支冻结）亦用本索引'
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci COMMENT = '统一组织树表（机构/管理员/教师/学生同树，数据权限唯一依据）';
 
 -- ----------------------------------------------------------------------------
@@ -387,7 +387,7 @@ CREATE TABLE `org_teacher` (
 
 -- ----------------------------------------------------------------------------
 -- 13. org_student 学生档案表（与 org_node 节点 1:1、与 sys_user 1:1）
---     学生即一个 node_type=4 的叶子节点，归属完全由树的位置表达——
+--     学生即一个 node_type=3 的叶子节点，归属完全由树的位置表达——
 --     挂在管理员节点下 = 已归属该管理员但尚未分配导师；挂在教师节点下 = 该导师名下学员。
 --     本表没有 node_id 之外的第二个归属字段：
 --     "谁是我的导师" = 查 org_node.parent_id 且该父节点 node_type=3。
@@ -395,7 +395,7 @@ CREATE TABLE `org_teacher` (
 DROP TABLE IF EXISTS `org_student`;
 CREATE TABLE `org_student` (
   `id`             BIGINT       NOT NULL                COMMENT '学生ID（雪花算法）',
-  `node_id`        BIGINT       NOT NULL                COMMENT '学生节点ID（→org_node.id，node_type=4，1:1；父节点即当前归属的管理员或导师）',
+  `node_id`        BIGINT       NOT NULL                COMMENT '学生节点ID（→org_node.id，node_type=3，1:1；父节点即当前归属的管理员或导师）',
   `user_id`        BIGINT       NOT NULL                COMMENT '账号ID（→sys_user.id，1:1）',
   `student_no`     VARCHAR(50)  NULL DEFAULT NULL       COMMENT '学号（机构内编号）',
   `guardian_name`  VARCHAR(50)  NULL DEFAULT NULL       COMMENT '监护人姓名',
@@ -1234,103 +1234,87 @@ CREATE TABLE `stat_export_task` (
 SET FOREIGN_KEY_CHECKS = 1;
 
 -- ============================================================================
--- 最小初始化数据（体现完整四层组织树：平台根 → 机构 → 管理员 → 教师 → 学生）
+-- ============================================================================
+-- 最小初始化数据（四层组织树：平台超管 → 机构管理员 → 教师 → 学生）
 -- 说明：
---   1) 密码字段为 BCrypt 密文占位串，部署时必须替换为真实 BCrypt 哈希
---      （示例明文 Admin@123 → 用 BCryptPasswordEncoder/Sa-Token BCrypt 生成，
---      形如 $2a$10$ 开头的 60 位密文；以下占位串不可用于登录）。
---   2) 全部雪花 ID 为预生成示例值，与 JSON 文档中的字符串形式一一对应。
---   3) 角色表已删除 data_scope（契约 §3：操作权限由角色定、数据范围由树定），
---      内置角色由五个缩减为四个——"节点管理员"与"机构管理员"合并为 org_admin，
---      两者差别仅在树的位置，不再需要独立角色。
---   4) 契约 2.1：机构节点的 id 即该租户的 tenant_id，故 org_node(...590001)
---      与 sys_tenant(...590001) 使用同一个 id，sys_tenant.root_node_id 回填该值。
---   5) 平台根节点固定 id=0（契约 2.1）：node_type=1、tenant_id=0、parent_id=-1、
---      ancestors=''。平台超管 sys_user.node_id=0，其子树 = 全平台，
---      因此"可见范围 = 本节点子树"这条唯一规则对超管同样成立，无需特例分支。
---   6) 树形结构（ancestors 为根在前的逗号串，不含本节点）：
---        平台根 0（node_type=1, tenant_id=0, parent_id=-1, ancestors=''）
---          └─ 机构 590001（1, ancestors='0'）
---               └─ 管理员 590402（2, ancestors='0,...590001'）
---                    └─ 教师 590403（3, ancestors='0,...590001,...590402'）
---                         └─ 学生 590404（4, 叶子）
---      任一角色的可见范围 = 自身节点子树，无第二套规则。
+--   1) 每个节点都是一个人，node_type 与 sys_user.user_type 取值一致（0超管 1管理员 2教师 3学生）；
+--      不存在独立于人的组织单元节点，组织层级由管理员节点的嵌套表达。
+--   2) ref_user_id 非空，故落库顺序固定为「先插 sys_user → 再插 org_node → 回写 sys_user.node_id」。
+--   3) 密码为 BCrypt 占位串，部署时必须替换为真实哈希（示例明文 Admin@123）。
+--   4) 租户开通的三步同事务（契约 §2.1）：插租户行(root_node_id 暂空) → 插机构管理员节点 → 回写 root_node_id。
+--      机构最高管理员节点的 id 即该租户的 tenant_id。
+--
+--   树形：
+--     平台超管 0（node_type=0, ancestors=''）
+--       └─ 机构管理员 ...590001（1, ancestors='0'，id = tenant_id）
+--            └─ 教师 ...590403（2, ancestors='0,...590001'）
+--                 └─ 学生 ...590404（3, 叶子）
+--   任一角色的可见范围 = 自身节点子树，无第二套规则。
+--   停用语义：管理员节点 status=1 → 其整棵子树禁止登录；教师/学生节点 status=1 → 仅本人。
 -- ============================================================================
 
--- 平台根节点（全表唯一 id=0 / parent_id=-1 / ancestors='' 的虚拟根，tenant_id=0，不属于任何租户）
-INSERT INTO `org_node` (`id`, `parent_id`, `ancestors`, `node_name`, `node_type`, `ref_user_id`, `sort`, `status`, `child_count`, `student_count`, `tenant_id`, `create_by`, `create_time`, `update_time`, `deleted_at`, `remark`)
-VALUES (0, -1, '', 'EduMatrix 平台', 1, NULL, 0, 0, 1, 1, 0, NULL, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, '虚拟平台根节点，全系统唯一且不可删除；其直接子节点即一个机构=一个租户');
-
--- 平台超管账号（tenant_id=0，node_id=0 即平台根节点 → 子树=全平台，无需特例分支）
+-- 平台超管账号（tenant_id=0；node_id=0 即平台根 → 子树=全平台，无需特例分支）
 INSERT INTO `sys_user` (`id`, `username`, `password`, `user_type`, `real_name`, `phone`, `avatar`, `node_id`, `status`, `pwd_reset_flag`, `last_login_time`, `tenant_id`, `create_by`, `create_time`, `update_time`, `deleted_at`, `remark`)
-VALUES (1953827104412590101, 'superadmin', '$2a$10$BCRYPT_PLACEHOLDER_REPLACE_ON_DEPLOY_0000000000000000', 0, '平台超级管理员', NULL, NULL, 0, 0, 1, NULL, 0, NULL, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, '平台运营方超管，所在节点=平台根(0)，首次登录强制改密');
+VALUES (1953827104412590101, 'superadmin', '$2a$10$BCRYPT_PLACEHOLDER_REPLACE_ON_DEPLOY_0000000000000000', 0, '平台超级管理员', NULL, NULL, 0, 0, 1, NULL, 0, NULL, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, '平台运营方超管，部署后立即改密');
 
--- 平台根节点回填 ref_user_id（超管账号建号后回写，与 sys_user.node_id 互为反向引用）
-UPDATE `org_node` SET `ref_user_id` = 1953827104412590101 WHERE `id` = 0;
+-- 平台根节点（全表唯一 id=0 / parent_id=-1 / ancestors=''，tenant_id=0，不属于任何租户）
+INSERT INTO `org_node` (`id`, `parent_id`, `ancestors`, `node_name`, `node_type`, `ref_user_id`, `sort`, `status`, `child_count`, `student_count`, `tenant_id`, `create_by`, `create_time`, `update_time`, `deleted_at`, `remark`)
+VALUES (0, -1, '', 'EduMatrix 平台', 0, 1953827104412590101, 0, 0, 1, 1, 0, NULL, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, '平台根节点，全系统唯一');
 
--- 四个默认角色（平台内置，tenant_id=0，随租户开通引用；仅定义操作权限，不含数据范围）
+-- 四个默认角色（平台内置，tenant_id=0；仅定义操作权限，数据范围由所在节点子树决定）
 INSERT INTO `sys_role` (`id`, `role_name`, `role_key`, `status`, `sort`, `tenant_id`, `create_by`, `create_time`, `update_time`, `deleted_at`, `remark`)
 VALUES
-(1953827104412590201, '平台超管',  'super_admin', 0, 1, 0, 1953827104412590101, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, '操作权限：租户开通、平台配置；数据范围由树决定（平台根节点子树=全平台，跨租户）'),
-(1953827104412590202, '管理员',    'org_admin',   0, 2, 0, 1953827104412590101, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, '操作权限：建下级管理员/教师/学生、分配学员、资源下发、全模块管理；机构管理员与下级管理员共用此角色，差别仅在树的位置'),
-(1953827104412590203, '教师/导师', 'teacher',     0, 3, 0, 1953827104412590101, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, '操作权限：备课、组卷、给名下学员发课程与作业、批改、看名下看板'),
-(1953827104412590204, '学生',      'student',     0, 4, 0, 1953827104412590101, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, '操作权限：学习、作答、看本人档案（学生之间互不可见，契约 2.7）');
+(1953827104412590201, '平台超管',  'super_admin', 0, 1, 0, 1953827104412590101, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, '运营方，跨租户管理租户开通'),
+(1953827104412590202, '管理员',    'org_admin',   0, 2, 0, 1953827104412590101, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, '机构各级管理员，角色相同、差别仅在树的位置'),
+(1953827104412590203, '教师',      'teacher',     0, 3, 0, 1953827104412590101, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, '导师，其直接子节点即名下学员'),
+(1953827104412590204, '学生',      'student',     0, 4, 0, 1953827104412590101, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, '学员，叶子节点');
 
--- 平台超管绑定 super_admin 角色
 INSERT INTO `sys_user_role` (`id`, `user_id`, `role_id`, `tenant_id`, `create_by`, `create_time`, `update_time`, `deleted_at`, `remark`)
 VALUES (1953827104412590301, 1953827104412590101, 1953827104412590201, 0, 1953827104412590101, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, NULL);
 
--- 示例租户（机构）：开通租户的三步同事务落库（契约 2.1，解循环依赖）
+-- ---- 示例租户：开通三步同事务（契约 §2.1 解循环依赖）----
 -- 第 1 步：插租户行，root_node_id 暂空
 INSERT INTO `sys_tenant` (`id`, `root_node_id`, `name`, `contact_name`, `contact_phone`, `expire_time`, `status`, `max_student_count`, `create_by`, `create_time`, `update_time`, `deleted_at`, `remark`)
 VALUES (1953827104412590001, NULL, '示例教育机构（演示租户）', '张老师', '13800000000', '2027-08-12 00:00:00', 0, 500, 1953827104412590101, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, '开发联调用演示租户');
 
--- 第 2 步：插机构根节点（parent_id=0 即挂在平台根下；id = tenant_id = 自身；ancestors='0'）
+-- 第 2 步：机构最高管理员（账号 → 节点，节点 id = tenant_id，挂在平台根下）
+INSERT INTO `sys_user` (`id`, `username`, `password`, `user_type`, `real_name`, `phone`, `avatar`, `node_id`, `status`, `pwd_reset_flag`, `last_login_time`, `tenant_id`, `create_by`, `create_time`, `update_time`, `deleted_at`, `remark`)
+VALUES (1953827104412590102, '13800000001', '$2a$10$BCRYPT_PLACEHOLDER_REPLACE_ON_DEPLOY_0000000000000000', 1, '示例机构管理员', '13800000001', NULL, 1953827104412590001, 0, 1, NULL, 1953827104412590001, 1953827104412590101, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, '机构最高管理员，其子树 = 全机构');
+
 INSERT INTO `org_node` (`id`, `parent_id`, `ancestors`, `node_name`, `node_type`, `ref_user_id`, `sort`, `status`, `child_count`, `student_count`, `tenant_id`, `create_by`, `create_time`, `update_time`, `deleted_at`, `remark`)
-VALUES (1953827104412590001, 0, '0', '示例教育机构（演示租户）', 1, NULL, 0, 0, 1, 1, 1953827104412590001, 1953827104412590101, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, '机构根节点，随租户开通自动创建，不可删除；机构管理员的子树起点');
+VALUES (1953827104412590001, 0, '0', '示例教育机构（演示租户）', 1, 1953827104412590102, 0, 0, 1, 1, 1953827104412590001, 1953827104412590101, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, '机构最高管理员节点：id = tenant_id = sys_tenant.root_node_id');
 
 -- 第 3 步：回写 root_node_id（以上三步必须在同一事务内）
 UPDATE `sys_tenant` SET `root_node_id` = 1953827104412590001 WHERE `id` = 1953827104412590001;
 
--- 示例管理员：账号 + 节点（第 3 层，node_type=2）
-INSERT INTO `sys_user` (`id`, `username`, `password`, `user_type`, `real_name`, `phone`, `avatar`, `node_id`, `status`, `pwd_reset_flag`, `last_login_time`, `tenant_id`, `create_by`, `create_time`, `update_time`, `deleted_at`, `remark`)
-VALUES (1953827104412590102, 'demo_admin', '$2a$10$BCRYPT_PLACEHOLDER_REPLACE_ON_DEPLOY_0000000000000000', 1, '示例机构管理员', '13800000001', NULL, 1953827104412590402, 0, 1, NULL, 1953827104412590001, 1953827104412590101, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, '演示管理员，可见范围=其节点子树');
-
-INSERT INTO `org_node` (`id`, `parent_id`, `ancestors`, `node_name`, `node_type`, `ref_user_id`, `sort`, `status`, `child_count`, `student_count`, `tenant_id`, `create_by`, `create_time`, `update_time`, `deleted_at`, `remark`)
-VALUES (1953827104412590402, 1953827104412590001, '0,1953827104412590001', '示例机构管理员', 2, 1953827104412590102, 0, 0, 1, 1, 1953827104412590001, 1953827104412590101, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, '管理员节点，可挂下级管理员/教师/学生');
-
 INSERT INTO `sys_user_role` (`id`, `user_id`, `role_id`, `tenant_id`, `create_by`, `create_time`, `update_time`, `deleted_at`, `remark`)
 VALUES (1953827104412590302, 1953827104412590102, 1953827104412590202, 1953827104412590001, 1953827104412590101, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, NULL);
 
--- 示例教师：账号 + 节点（第 4 层，node_type=3，其子节点即名下学员）+ 档案
+-- ---- 示例教师（node_type=2，其子节点即名下学员）----
 INSERT INTO `sys_user` (`id`, `username`, `password`, `user_type`, `real_name`, `phone`, `avatar`, `node_id`, `status`, `pwd_reset_flag`, `last_login_time`, `tenant_id`, `create_by`, `create_time`, `update_time`, `deleted_at`, `remark`)
-VALUES (1953827104412590103, 'demo_teacher', '$2a$10$BCRYPT_PLACEHOLDER_REPLACE_ON_DEPLOY_0000000000000000', 2, '示例导师', '13800000002', NULL, 1953827104412590403, 0, 1, NULL, 1953827104412590001, 1953827104412590102, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, '演示导师，可见范围=名下学员');
+VALUES (1953827104412590103, '13800000002', '$2a$10$BCRYPT_PLACEHOLDER_REPLACE_ON_DEPLOY_0000000000000000', 2, '示例导师', '13800000002', NULL, 1953827104412590403, 0, 1, NULL, 1953827104412590001, 1953827104412590102, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, NULL);
 
 INSERT INTO `org_node` (`id`, `parent_id`, `ancestors`, `node_name`, `node_type`, `ref_user_id`, `sort`, `status`, `child_count`, `student_count`, `tenant_id`, `create_by`, `create_time`, `update_time`, `deleted_at`, `remark`)
-VALUES (1953827104412590403, 1953827104412590402, '0,1953827104412590001,1953827104412590402', '示例导师', 3, 1953827104412590103, 0, 0, 1, 1, 1953827104412590001, 1953827104412590102, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, '教师节点，其下只能挂学生节点');
+VALUES (1953827104412590403, 1953827104412590001, '0,1953827104412590001', '示例导师', 2, 1953827104412590103, 0, 0, 1, 1, 1953827104412590001, 1953827104412590102, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, NULL);
 
 INSERT INTO `sys_user_role` (`id`, `user_id`, `role_id`, `tenant_id`, `create_by`, `create_time`, `update_time`, `deleted_at`, `remark`)
 VALUES (1953827104412590303, 1953827104412590103, 1953827104412590203, 1953827104412590001, 1953827104412590102, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, NULL);
 
-INSERT INTO `org_teacher` (`id`, `node_id`, `user_id`, `teacher_no`, `subject`, `title`, `entry_date`, `student_count`, `tenant_id`, `create_by`, `create_time`, `update_time`, `deleted_at`, `remark`)
-VALUES (1953827104412590501, 1953827104412590403, 1953827104412590103, 'T0001', '数学', '高级教师', '2026-03-01', 1, 1953827104412590001, 1953827104412590102, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, '演示教师档案');
+INSERT INTO `org_teacher` (`id`, `node_id`, `user_id`, `teacher_no`, `subject`, `title`, `entry_date`, `tenant_id`, `create_by`, `create_time`, `update_time`, `deleted_at`, `remark`)
+VALUES (1953827104412590501, 1953827104412590403, 1953827104412590103, 'T0001', '数学', '高级教师', '2026-03-01', 1953827104412590001, 1953827104412590102, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, NULL);
 
--- 示例学生：账号 + 节点（第 5 层，node_type=4，叶子）+ 档案
+-- ---- 示例学生（node_type=3，叶子；挂在教师下即该导师名下学员）----
 INSERT INTO `sys_user` (`id`, `username`, `password`, `user_type`, `real_name`, `phone`, `avatar`, `node_id`, `status`, `pwd_reset_flag`, `last_login_time`, `tenant_id`, `create_by`, `create_time`, `update_time`, `deleted_at`, `remark`)
-VALUES (1953827104412590104, 'demo_student', '$2a$10$BCRYPT_PLACEHOLDER_REPLACE_ON_DEPLOY_0000000000000000', 3, '示例学员', '13800000003', NULL, 1953827104412590404, 0, 1, NULL, 1953827104412590001, 1953827104412590102, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, '演示学员，可见范围=仅本人');
+VALUES (1953827104412590104, '13800000003', '$2a$10$BCRYPT_PLACEHOLDER_REPLACE_ON_DEPLOY_0000000000000000', 3, '示例学员', '13800000003', NULL, 1953827104412590404, 0, 1, NULL, 1953827104412590001, 1953827104412590102, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, NULL);
 
 INSERT INTO `org_node` (`id`, `parent_id`, `ancestors`, `node_name`, `node_type`, `ref_user_id`, `sort`, `status`, `child_count`, `student_count`, `tenant_id`, `create_by`, `create_time`, `update_time`, `deleted_at`, `remark`)
-VALUES (1953827104412590404, 1953827104412590403, '0,1953827104412590001,1953827104412590402,1953827104412590403', '示例学员', 4, 1953827104412590104, 0, 0, 0, 0, 1953827104412590001, 1953827104412590102, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, '学生节点必须是叶子，child_count 恒为 0');
+VALUES (1953827104412590404, 1953827104412590403, '0,1953827104412590001,1953827104412590403', '示例学员', 3, 1953827104412590104, 0, 0, 0, 0, 1953827104412590001, 1953827104412590102, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, NULL);
 
 INSERT INTO `sys_user_role` (`id`, `user_id`, `role_id`, `tenant_id`, `create_by`, `create_time`, `update_time`, `deleted_at`, `remark`)
 VALUES (1953827104412590304, 1953827104412590104, 1953827104412590204, 1953827104412590001, 1953827104412590102, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, NULL);
 
 INSERT INTO `org_student` (`id`, `node_id`, `user_id`, `student_no`, `guardian_name`, `guardian_phone`, `status`, `quit_time`, `quit_reason`, `archive_time`, `tenant_id`, `create_by`, `create_time`, `update_time`, `deleted_at`, `remark`)
-VALUES (1953827104412590601, 1953827104412590404, 1953827104412590104, 'S0001', '示例家长', '13800000004', 0, NULL, NULL, NULL, 1953827104412590001, 1953827104412590102, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, '演示学员档案，已分配至示例导师名下');
-
--- 建档轨迹（change_type=1 建档；分配导师会再写一条 change_type=2）
-INSERT INTO `org_node_change_log` (`id`, `node_id`, `change_type`, `from_parent_id`, `to_parent_id`, `change_time`, `operator_id`, `reason`, `tenant_id`, `create_by`, `create_time`, `update_time`, `deleted_at`, `remark`)
-VALUES (1953827104412590701, 1953827104412590404, 1, NULL, 1953827104412590403, '2026-08-12 10:00:00', 1953827104412590102, '演示数据建档', 1953827104412590001, 1953827104412590102, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, NULL);
+VALUES (1953827104412590601, 1953827104412590404, 1953827104412590104, 'S0001', '示例家长', '13800000004', 0, NULL, NULL, NULL, 1953827104412590001, 1953827104412590102, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, NULL);
 
 -- ============================================================================
 -- DDL 结束（sys_ 10 + org_ 10 + crs_ 4 + vod_ 4 + qb_ 3 + hw_ 6 + stat_ 4，共 41 张，
