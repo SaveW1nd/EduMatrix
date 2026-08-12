@@ -11,7 +11,7 @@
 | [docs/01-PRD-产品需求文档.md](docs/01-PRD-产品需求文档.md) | 产品需求文档（角色与权限、五大模块功能详述、验收标准、页面清单、50 条边界场景） |
 | [docs/02-数据库设计.md](docs/02-数据库设计.md) | 数据库设计说明（ER 图、核心设计要点、逐表字段、索引、分区、容量估算） |
 | [docs/sql/edumatrix_ddl.sql](docs/sql/edumatrix_ddl.sql) | 可执行 DDL（MySQL 8.0，**41 张表**，已实测执行通过） |
-| [docs/03-API接口文档/](docs/03-API接口文档/) | API 接口文档（6 个分册，**244 个接口**，见 00-通用约定 内目录） |
+| [docs/03-API接口文档/](docs/03-API接口文档/) | API 接口文档（6 个分册，**159 个接口**，见 00-通用约定 内目录） |
 | [references/README.md](references/README.md) | 参考开源仓库导读（RuoYi-Vue-Plus / roncoo-education / xzs / DPlayer） |
 
 ## 核心设计决策速览
@@ -23,7 +23,7 @@
 - **视频防刷**：VOD 加密 HLS + 300s 播放凭证 + 禁快进（maxPosition 前可回看）+ 跑马灯水印 + 10s 心跳（≥8s 有效、单次封顶 15s；Redis 缓冲，60s 批量落盘并判定完播）
 - **题库版本防错乱**：题目雪花物理 ID 恒定，编辑即生成不可变版本快照 `qb_question_version`；作业发布时固化版本；错题本绑定做错时刻版本
 - **统计双快照上卷**：`stat_student_daily` 为唯一事实表，凭行内 `teacher_node_id` / `node_id` 快照分别上卷到导师维度与节点维度；历史归原导师、以自然日结算
-- **软删除**：核心业务数据一律 `is_deleted` 逻辑删除，禁止物理删除
+- **软删除**：核心业务数据一律 `deleted_at` 逻辑删除，禁止物理删除
 
 ## 三条不可违反的铁律
 

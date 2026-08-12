@@ -38,25 +38,16 @@ create_by     BIGINT       NULL      创建人 user_id
 create_time   DATETIME     NOT NULL  DEFAULT CURRENT_TIMESTAMP
 update_by     BIGINT       NULL      更新人 user_id
 update_time   DATETIME     NOT NULL  DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-is_deleted    TINYINT      NOT NULL  DEFAULT 0  逻辑删除 0否 1是
+deleted_at    BIGINT       NOT NULL  DEFAULT 0  逻辑删除：0=未删除，删除时写毫秒时间戳
 remark        VARCHAR(500) NULL      备注
 ```
 - 主键统一 `id BIGINT`（雪花，非自增）。
 - 第 4 节表清单的"关键字段"列为**要点摘录，非穷举**；字段全集以 DDL 为准，DDL 可增列但不得与契约已列字段冲突。
 - **所有 `creator_id` / `*_by` 类人员字段一律指向 `sys_user.id`**，不指向 `org_teacher.id`——因为管理员与教师都可能是创建者，而管理员没有 `org_teacher` 档案行。
-- 核心业务数据（课程/题目/作业/答卷）**禁止物理删除**，一律 `is_deleted=1`。
+- 核心业务数据（课程/题目/作业/答卷）**禁止物理删除**，一律写 `deleted_at = 当前毫秒时间戳`。
+- **软删除用时间戳而非 0/1 标志**：唯一索引末尾统一追加 `deleted_at`。若用 `deleted_at`，同一业务键**最多只能容纳一条已删除行**——"打标 → 去标 → 再打标 → 再去标"到第二次去标就撞唯一键，而这类反复增删在 `org_student_tag`、`sys_user_role`、`hw_answer_detail` 上都是常规操作。时间戳方案下每次删除值不同，可容纳任意多条，且白得一个删除时间用于审计。MyBatis-Plus 用 `@TableLogic(value="0", delval="UNIX_TIMESTAMP(NOW(3))*1000")` 原生支持。
 - 日志/心跳明细表可例外（允许归档清理；可不带 `update_by` / `remark`，登录与操作日志另可省略 `create_by` / `create_time`，改由 `login_time` / `oper_time` 承担业务时间）。
 
-**授权类高频增删表的唯一索引特例（`org_resource_grant` 必须遵守）**：
-全局约定是"唯一索引末尾追加 `is_deleted`"，该方案下同一业务键**最多只能容纳一条已删除行**。而资源授权是反复授予 / 撤销的高频对象，"授权→撤销→再授权→再撤销"到第二次撤销就会撞唯一键。
-因此**重新授权必须走 UPSERT 复活原行，而非插入新行**：
-```sql
-INSERT INTO org_resource_grant (...) VALUES (...)
-ON DUPLICATE KEY UPDATE is_deleted = 0, valid_start = VALUES(valid_start),
-  valid_end = VALUES(valid_end), grant_source = VALUES(grant_source),
-  grant_by = VALUES(grant_by), grant_time = VALUES(grant_time);
-```
-唯一键的存在使这条语句成为唯一可行写法，从而把正确行为固化进约束本身，不依赖实现方自觉。所有授权入口（手动、批量、模板套用）必须收敛到同一方法。
 
 ### 2.3 统一组织树
 
@@ -100,7 +91,7 @@ ON DUPLICATE KEY UPDATE is_deleted = 0, valid_start = VALUES(valid_start),
 | 角色 / 场景 | 执行写法 | 命中索引 |
 | --- | --- | --- |
 | **教师（最高频）** | 子树 ≡ 直接子节点，退化为 `WHERE parent_id = #{myNodeId} AND node_type = 4` | `idx_parent_type` |
-| **管理员：取整棵子树** | 先用前缀 LIKE 解析出子树节点 ID 集合（`ancestors = P OR ancestors LIKE CONCAT(P,',%')`，`P = CONCAT(ancestors,',',id)`），再对业务表 `WHERE node_id IN (...)`；结果集可缓存至 Redis，节点移动时失效 | `idx_ancestors(255)` |
+| **管理员：取整棵子树** | 先用前缀 LIKE 解析出子树节点 ID 集合（`ancestors = P OR ancestors LIKE CONCAT(P,',%')`，`P = (ancestors = '' ? CAST(id AS CHAR) : CONCAT(ancestors,',',id))`——**空串分支不可省**：平台根 `ancestors=''`、`id=0`，若直接 CONCAT 得 `',0'`，而机构节点 `ancestors='0'` 既不等于 `',0'` 也不 LIKE `',0,%'`，超管取全平台会静默返回空集），再对业务表 `WHERE node_id IN (...)`；结果集可缓存至 Redis，节点移动时失效 | `idx_ancestors(255)` |
 | **管理员：逐层浏览** | 按 `parent_id` 逐层展开（树懒加载、面包屑） | `idx_tenant_parent_sort` |
 | **离线巡检 / 已被 tenant_id 收敛的小结果集** | 可直接用 `FIND_IN_SET` | 无（可接受） |
 
@@ -138,7 +129,10 @@ ON DUPLICATE KEY UPDATE is_deleted = 0, valid_start = VALUES(valid_start),
 4. **查询语义**：判定"某节点能否使用某资源"只需一条 `org_resource_grant` 命中（`target_node_id = 我 AND resource_id = X AND 有效期内`），**不回溯祖先链**——比继承模型更快，且不存在祖先链断裂导致的判定歧义。
 5. **级联回收（必须实现）**：撤销对某节点的资源授权时，**必须级联撤销该资源在目标节点整个子树内的全部授权**。否则会出现"父级已无权、子级仍持有"的悬挂授权，逐级收缩被破坏。
    - 已产生的学习记录（`vod_watch_progress`、`hw_answer_sheet`、`hw_wrong_book`）**一律保留不删**，仅失去继续访问权。
-6. **一致性巡检**：建议定时任务扫描悬挂授权（子节点持有但父节点已无权的资源），发现即告警——作为级联回收的兜底防线。
+6. **一致性巡检**：定时任务扫描授权异常，结果**必须分两类计数**：
+   - `danglingCount` **真悬挂**（级联回收失效导致）→ 指标目标值 **0**
+   - `crossScopeCount` **跨管辖**（节点移动导致，合法保留且已降级只读）→ 仅作待办提示，**不计入一致性指标**
+   若合并计数，则任何一次教师调岗或学员转交都会使指标永久非 0，持续产生假警报，最终结果是运维关掉告警、真悬挂也没人看。
 
 7. **有效期不得超过上级（防时间维度悬挂）**：下级授权的 `valid_end` **自动截断为不晚于授权人自身对该资源的 `valid_end`**。若不约束，会出现"上级授权已到期、下级仍有效"的悬挂授权，而级联回收只在显式撤销时触发、管不到时间维度。授权人自身为 `owner_node_id` 时不受此限。
 
@@ -147,6 +141,12 @@ ON DUPLICATE KEY UPDATE is_deleted = 0, valid_start = VALUES(valid_start),
 9. **节点移动与已有授权的关系（正交，互不自动联动）**：学员/教师被移动到其他上级下时，其名下已持有的 `org_resource_grant` **默认既不自动撤销、也不自动新增**——否则每次转移都会静默中断学员正在学的课程。
    - 但移动接口**必须在响应中返回受影响的授权清单**（由原上级授予、现已跨出其管辖范围的授权），并支持可选参数 `revokeOutOfScopeGrants`（默认 `false`）由操作者决定是否一并回收。
    - 该类授权在一致性巡检中标记为"跨管辖授权"，只告警不自动处理。
+   - **跨管辖授权降级为只读**：目标节点被移出授权人子树后，其持有的该授权**仅保留"使用"能力（学习、备课、组卷），丧失"再下发"能力**。
+     不加这条会形成资产穿透：教师 T 持有校区 A 的课程 K1~K10，调岗到校区 B 后仍"拥有"这些课程，可以合法地授给 B 的新学员——只要促成一次调岗，A 的课程资产就进入 B 的分支并可无限复制。
+     判定：授权行的 `target_node_id` 当前祖先链**不再包含**该资源 `owner_node_id` 或其有效授权链时，该行只读。
+
+11. **受管资源的授权目标类型限制**：`resource_type` 为 2（题目）或 3（视频）时**不得授权给学生节点**（`node_type=4`）。
+    学生侧没有题目/视频的直接使用入口——作答走 `hw_homework_target` + 固化版本，播放走课程授权，错题本走 `question_version` 快照，三条路径都与题目/视频授权解耦。授给学生的行永远不会被任何鉴权路径读到，只会放大授权表规模并制造"悬挂授权"误报。
 
 10. **撤销授权与已分发作业解耦**：撤销课程授权**不影响已分发的作业**（作业是已下达的任务，不是资源）。学员仍可作答、教师仍可批改、成绩仍计入统计；仅失去课程内容的继续访问权。否则会出现作业中途消失、成绩缺失的严重业务事故。
 
@@ -169,8 +169,8 @@ ON DUPLICATE KEY UPDATE is_deleted = 0, valid_start = VALUES(valid_start),
 
 | 数据 | 归属锚点 | 规则 |
 | --- | --- | --- |
-| 日学习汇总 | `stat_student_daily.teacher_node_id`（结算时刻快照） | 每日凌晨结算时写入当时的父节点（若父为教师）；**已结算行永不重算** |
-| 答卷 | `hw_answer_sheet.teacher_node_id`（导师节点快照） | **建卷时写入初值，提交时最终固化，此后永不回改**；逾期未交的答卷在截止置 `status=4` 时固化（保证每张答卷都有确定的归属时点） |
+| 日学习汇总 | `stat_student_daily.teacher_node_id`（结算时刻快照） | 每日凌晨结算时写入当时的父节点（若父为教师）；**归属快照（teacher_node_id/node_id）永不重算；指标列可由补数任务重跑覆盖** |
+| 答卷 | `hw_answer_sheet.teacher_node_id`（导师节点快照） | **发布时为每个目标学生预建 status=0 答卷并写入初值** → 提交时最终固化 → 逾期未交在截止置 status=4 时固化，此后永不回改。<br>**必须发布时预建、而非首次进入时创建**：否则从未打开作业的学生根本没有答卷行，「截止时把 0/1 置 4」无行可置，「逾期未交」整个统计口径落空 |
 | 转导师当日 | 归**新导师** | 当日尚未结算，凌晨按结算时刻的归属计算（与"分母对齐"一致：学员已不在原导师名下，数据留在原导师会造成有数据无学员的错配） |
 
 **两个口径必须分开**：
@@ -235,7 +235,7 @@ ON DUPLICATE KEY UPDATE is_deleted = 0, valid_start = VALUES(valid_start),
 | `org_teacher` | 教师档案（1:1 节点） | node_id UK, user_id UK, teacher_no, subject, title, entry_date, student_count(冗余) |
 | `org_student` | 学生档案（1:1 节点） | node_id UK, user_id UK, student_no, guardian_name, guardian_phone, **status**(0在读1已退课2毕业归档), **quit_time**, **quit_reason**, archive_time |
 | **`org_node_change_log`** | 节点异动轨迹（移动/分配/转交/归档） | node_id, change_type(1建档2分配导师3转交管理员4教师调岗5毕业归档6归档恢复7退课**8节点移动**), from_parent_id, to_parent_id, change_time, operator_id, reason |
-| **`org_resource_grant`** | **资源逐级下发授权（无继承，每级显式）** | **resource_type**(1课程2题目3视频), resource_id, **target_node_id**, valid_start, valid_end(可空=永久), **grant_source**(1手动选择2按节点批量3按标签批量4按名下全体5按模板), source_ref_id(可空,模板ID等), grant_by, grant_time；**UK(resource_type, resource_id, target_node_id) —— 唯一不追加 `is_deleted` 的唯一索引**（见 §2.2 特例：必须靠它使 UPSERT 复活成为唯一写法） |
+| **`org_resource_grant`** | **资源逐级下发授权（无继承，每级显式）** | **resource_type**(1课程2题目3视频), resource_id, **target_node_id**, valid_start, valid_end(可空=永久), **grant_source**(1手动选择2按节点批量3按标签批量4按名下全体5按模板), source_ref_id(可空,模板ID等), grant_by, grant_time；UK(resource_type, resource_id, target_node_id, deleted_at) |
 | **`org_perm_template`** | **权限模板**（抵消逐级显式授权的操作成本） | template_name, owner_node_id(归属节点,可见范围=其子树), description, item_count(冗余), status(**0启用 1停用**，方向与 sys_user/sys_tenant/org_node 一致) |
 | **`org_perm_template_item`** | 模板资源明细 | template_id, resource_type(1课程2题目3视频), resource_id；UK(template_id,resource_type,resource_id) |
 | **`org_tag`** | 标签定义（**仅用于筛选与批量操作，不参与任何权限判断**） | tag_name, tag_group, color, sort |
@@ -345,7 +345,7 @@ ON DUPLICATE KEY UPDATE is_deleted = 0, valid_start = VALUES(valid_start),
 - 分页请求：`pageNum`(默认1), `pageSize`(默认10, 最大100)；分页响应 `data: {"total": 100, "list": [...]}`，允许附加可选 `summary`
 - 所有 bigint ID 序列化为**字符串**
 - 时间格式：`yyyy-MM-dd HH:mm:ss`（东八区）
-- 逻辑删除统一用 `DELETE` 方法（后端执行 is_deleted=1）
+- 逻辑删除统一用 `DELETE` 方法（后端执行 deleted_at=1）
 
 ### 6.2 模块路由前缀（权威）
 | 前缀 | 模块 | 文档归属 |

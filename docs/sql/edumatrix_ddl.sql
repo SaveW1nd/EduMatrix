@@ -37,19 +37,19 @@
 --               vod_heartbeat_log 为满足分区键约束采用 (id, created_time) 联合主键）；
 --               唯一索引 uk_ 前缀，普通索引 idx_ 前缀。
 -- 通用字段    : 所有业务表表尾统一携带 tenant_id / create_by / create_time /
---               update_by / update_time / is_deleted / remark（契约 2.2）；
+--               update_by / update_time / deleted_at / remark（契约 2.2）；
 --               sys_tenant / sys_menu 为平台级表不带 tenant_id；
 --               日志/心跳明细表（sys_login_log / sys_oper_log / vod_play_auth_log /
 --               vod_heartbeat_log）按契约 2.2 例外精简 create_by / update_by / remark，
 --               允许按时间/分区物理归档清理；其中 sys_login_log / sys_oper_log 另以业务
 --               时间列（login_time / oper_time）取代 create_time，vod_play_auth_log /
 --               vod_heartbeat_log 保留 create_time / created_time 作为业务时间；
---               仅 vod_heartbeat_log 按契约第 4 节标注不带 is_deleted，
---               其余日志表仍携带 is_deleted（业务上恒为 0，清理走物理归档）。
--- 逻辑删除与唯一索引冲突处理（本文件统一采用【方案A：唯一索引末尾追加 is_deleted】）:
---   业务表禁止物理删除，仅置 is_deleted=1。若唯一索引不含 is_deleted，
---   软删后再新建同键记录会触发唯一冲突。故本文件所有含 is_deleted 表的唯一索引
---   一律在末尾追加 is_deleted 列。局限：同一业务键最多容纳一条已删除记录，
+--               仅 vod_heartbeat_log 按契约第 4 节标注不带 deleted_at，
+--               其余日志表仍携带 deleted_at（业务上恒为 0，清理走物理归档）。
+-- 逻辑删除与唯一索引冲突处理（本文件统一采用【方案A：唯一索引末尾追加 deleted_at】）:
+--   业务表禁止物理删除，仅置 deleted_at=1。若唯一索引不含 deleted_at，
+--   软删后再新建同键记录会触发唯一冲突。故本文件所有含 deleted_at 表的唯一索引
+--   一律在末尾追加 deleted_at 列。局限：同一业务键最多容纳一条已删除记录，
 --   若需再次删除同键记录，应用层须先将旧的已删除记录归档转移（或恢复复用原记录）。
 --   该约束由服务层统一封装，DDL 不再额外处理。
 -- vod_heartbeat_log 分区维护策略:
@@ -90,10 +90,10 @@ CREATE TABLE `sys_tenant` (
   `create_time`       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_by`         BIGINT       NULL DEFAULT NULL       COMMENT '更新人 user_id',
   `update_time`       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `is_deleted`        TINYINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是',
+  `deleted_at`        BIGINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除标记：0=未删除；删除时写入毫秒时间戳。用时间戳而非 0/1，使同一业务键可容纳任意多条已删除行（唯一索引末尾追加本列）',
   `remark`            VARCHAR(500) NULL DEFAULT NULL       COMMENT '备注',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_name` (`name`, `is_deleted`) COMMENT '机构名称唯一（追加 is_deleted 兼容逻辑删除）',
+  UNIQUE KEY `uk_name` (`name`, `deleted_at`) COMMENT '机构名称唯一（追加 deleted_at 兼容逻辑删除）',
   KEY `idx_status_expire` (`status`, `expire_time`) COMMENT '平台超管租户列表按状态/到期时间筛选',
   KEY `idx_root_node_id` (`root_node_id`) COMMENT '由机构根节点反查租户（组织树自上而下渲染时定位租户信息）'
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci COMMENT = '机构（租户）表';
@@ -110,7 +110,7 @@ CREATE TABLE `sys_user` (
   `real_name`       VARCHAR(50)  NOT NULL                COMMENT '真实姓名',
   `phone`           VARCHAR(20)  NULL DEFAULT NULL       COMMENT '手机号（视频跑马灯水印展示用）',
   `avatar`          VARCHAR(500) NULL DEFAULT NULL       COMMENT '头像 URL',
-  `node_id`         BIGINT       NULL DEFAULT NULL       COMMENT '所在节点ID（→org_node.id，与 org_node.ref_user_id 互为反向引用）：契约 2.4 数据权限唯一起点——可见范围 = 本节点子树；每个人（含平台超管）都在树上，建号即建节点',
+  `node_id`         BIGINT       NOT NULL                COMMENT '所在节点ID（→org_node.id，与 org_node.ref_user_id 互为反向引用）：契约 2.4 数据权限唯一起点——可见范围 = 本节点子树；每个人（含平台超管）都在树上，建号即建节点',
   `status`          TINYINT      NOT NULL DEFAULT 0      COMMENT '账号状态：0正常 1停用',
   `pwd_reset_flag`  TINYINT      NOT NULL DEFAULT 0      COMMENT '是否需强制修改密码：0否 1是（管理员重置密码/批量导入初始密码后置 1，登录后强制改密）',
   `last_login_time` DATETIME     NULL DEFAULT NULL       COMMENT '最后登录时间',
@@ -119,13 +119,13 @@ CREATE TABLE `sys_user` (
   `create_time`     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_by`       BIGINT       NULL DEFAULT NULL       COMMENT '更新人 user_id',
   `update_time`     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `is_deleted`      TINYINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是',
+  `deleted_at`      BIGINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除标记：0=未删除；删除时写入毫秒时间戳。用时间戳而非 0/1，使同一业务键可容纳任意多条已删除行（唯一索引末尾追加本列）',
   `remark`          VARCHAR(500) NULL DEFAULT NULL       COMMENT '备注',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_username` (`username`, `is_deleted`) COMMENT '登录账号全平台唯一（错误码 10001 依据）',
+  UNIQUE KEY `uk_username` (`username`, `deleted_at`) COMMENT '登录账号全平台唯一（错误码 10001 依据）',
   KEY `idx_tenant_type_status` (`tenant_id`, `user_type`, `status`) COMMENT '机构内按用户类型分页列表',
   KEY `idx_node_id` (`node_id`) COMMENT '按节点反查账号（节点删除/移动前校验、登录时装配数据权限起点）',
-  KEY `idx_phone` (`phone`) COMMENT '按手机号检索用户'
+  UNIQUE KEY `uk_tenant_phone` (`tenant_id`, `phone`, `deleted_at`) COMMENT '手机号租户内唯一（错误码 10013 依据）。phone 可为 NULL（管理员可不填），MySQL 唯一索引不约束 NULL，正好符合需求；缺此约束时并发创建必产生重复手机号，而学生 username 默认取手机号会导致后插者撞 uk_username 报 10001，提示与实际原因不符'
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci COMMENT = '统一账号表（管理员/教师/学生共用登录体系）';
 
 -- ----------------------------------------------------------------------------
@@ -145,10 +145,10 @@ CREATE TABLE `sys_role` (
   `create_time` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_by`   BIGINT       NULL DEFAULT NULL       COMMENT '更新人 user_id',
   `update_time` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `is_deleted`  TINYINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是',
+  `deleted_at`  BIGINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除标记：0=未删除；删除时写入毫秒时间戳。用时间戳而非 0/1，使同一业务键可容纳任意多条已删除行（唯一索引末尾追加本列）',
   `remark`      VARCHAR(500) NULL DEFAULT NULL       COMMENT '备注',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_tenant_role_key` (`tenant_id`, `role_key`, `is_deleted`) COMMENT '同租户内角色标识唯一（追加 is_deleted 兼容逻辑删除）'
+  UNIQUE KEY `uk_tenant_role_key` (`tenant_id`, `role_key`, `deleted_at`) COMMENT '同租户内角色标识唯一（追加 deleted_at 兼容逻辑删除）'
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci COMMENT = '角色表（RBAC）';
 
 -- ----------------------------------------------------------------------------
@@ -164,10 +164,10 @@ CREATE TABLE `sys_user_role` (
   `create_time` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_by`   BIGINT       NULL DEFAULT NULL       COMMENT '更新人 user_id',
   `update_time` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `is_deleted`  TINYINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是',
+  `deleted_at`  BIGINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除标记：0=未删除；删除时写入毫秒时间戳。用时间戳而非 0/1，使同一业务键可容纳任意多条已删除行（唯一索引末尾追加本列）',
   `remark`      VARCHAR(500) NULL DEFAULT NULL       COMMENT '备注',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_user_role` (`user_id`, `role_id`, `is_deleted`) COMMENT '同一用户不可重复绑定同一角色（追加 is_deleted 兼容逻辑删除）',
+  UNIQUE KEY `uk_user_role` (`user_id`, `role_id`, `deleted_at`) COMMENT '同一用户不可重复绑定同一角色（追加 deleted_at 兼容逻辑删除）',
   KEY `idx_role_id` (`role_id`) COMMENT '按角色反查用户列表'
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci COMMENT = '用户-角色关联表';
 
@@ -190,7 +190,7 @@ CREATE TABLE `sys_menu` (
   `create_time` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_by`   BIGINT       NULL DEFAULT NULL       COMMENT '更新人 user_id',
   `update_time` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `is_deleted`  TINYINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是',
+  `deleted_at`  BIGINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除标记：0=未删除；删除时写入毫秒时间戳。用时间戳而非 0/1，使同一业务键可容纳任意多条已删除行（唯一索引末尾追加本列）',
   `remark`      VARCHAR(500) NULL DEFAULT NULL       COMMENT '备注',
   PRIMARY KEY (`id`),
   KEY `idx_parent_id` (`parent_id`, `sort`) COMMENT '构建菜单树按父节点取子节点'
@@ -209,10 +209,10 @@ CREATE TABLE `sys_role_menu` (
   `create_time` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_by`   BIGINT       NULL DEFAULT NULL       COMMENT '更新人 user_id',
   `update_time` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `is_deleted`  TINYINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是',
+  `deleted_at`  BIGINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除标记：0=未删除；删除时写入毫秒时间戳。用时间戳而非 0/1，使同一业务键可容纳任意多条已删除行（唯一索引末尾追加本列）',
   `remark`      VARCHAR(500) NULL DEFAULT NULL       COMMENT '备注',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_role_menu` (`role_id`, `menu_id`, `is_deleted`) COMMENT '同一角色不可重复绑定同一菜单（追加 is_deleted 兼容逻辑删除）',
+  UNIQUE KEY `uk_role_menu` (`role_id`, `menu_id`, `deleted_at`) COMMENT '同一角色不可重复绑定同一菜单（追加 deleted_at 兼容逻辑删除）',
   KEY `idx_menu_id` (`menu_id`) COMMENT '按菜单反查授权角色'
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci COMMENT = '角色-菜单关联表';
 
@@ -233,7 +233,7 @@ CREATE TABLE `sys_file` (
   `create_time` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_by`   BIGINT       NULL DEFAULT NULL       COMMENT '更新人 user_id',
   `update_time` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `is_deleted`  TINYINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是',
+  `deleted_at`  BIGINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除标记：0=未删除；删除时写入毫秒时间戳。用时间戳而非 0/1，使同一业务键可容纳任意多条已删除行（唯一索引末尾追加本列）',
   `remark`      VARCHAR(500) NULL DEFAULT NULL       COMMENT '备注',
   PRIMARY KEY (`id`),
   KEY `idx_tenant_biz` (`tenant_id`, `biz_type`, `create_time`) COMMENT '机构内按业务类型检索文件'
@@ -254,7 +254,7 @@ CREATE TABLE `sys_login_log` (
   `login_time`  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '登录时间',
   `tenant_id`   BIGINT       NOT NULL DEFAULT 0      COMMENT '租户（机构）ID',
   `update_time` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `is_deleted`  TINYINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是（日志业务恒为 0，清理走物理归档）',
+  `deleted_at`  BIGINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是（日志业务恒为 0，清理走物理归档）',
   PRIMARY KEY (`id`),
   KEY `idx_user_time` (`user_id`, `login_time`) COMMENT '查询某用户登录轨迹',
   KEY `idx_tenant_time` (`tenant_id`, `login_time`) COMMENT '机构维度登录日志分页与按时间归档清理'
@@ -278,7 +278,7 @@ CREATE TABLE `sys_oper_log` (
   `oper_time`   DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '操作时间',
   `tenant_id`   BIGINT        NOT NULL DEFAULT 0      COMMENT '租户（机构）ID',
   `update_time` DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `is_deleted`  TINYINT       NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是（日志业务恒为 0，清理走物理归档）',
+  `deleted_at`  BIGINT       NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是（日志业务恒为 0，清理走物理归档）',
   PRIMARY KEY (`id`),
   KEY `idx_user_time` (`user_id`, `oper_time`) COMMENT '查询某用户操作轨迹',
   KEY `idx_tenant_module_time` (`tenant_id`, `module`, `oper_time`) COMMENT '机构维度按模块/时间检索操作日志'
@@ -298,10 +298,10 @@ CREATE TABLE `sys_tenant_config` (
   `create_time`  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_by`    BIGINT       NULL DEFAULT NULL       COMMENT '更新人 user_id',
   `update_time`  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `is_deleted`   TINYINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是',
+  `deleted_at`   BIGINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除标记：0=未删除；删除时写入毫秒时间戳。用时间戳而非 0/1，使同一业务键可容纳任意多条已删除行（唯一索引末尾追加本列）',
   `remark`       VARCHAR(500) NULL DEFAULT NULL       COMMENT '备注',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_tenant_config_key` (`tenant_id`, `config_key`, `is_deleted`) COMMENT '同租户同配置键唯一（配置读写按此点查/UPSERT，追加 is_deleted 兼容逻辑删除）'
+  UNIQUE KEY `uk_tenant_config_key` (`tenant_id`, `config_key`, `deleted_at`) COMMENT '同租户同配置键唯一（配置读写按此点查/UPSERT，追加 deleted_at 兼容逻辑删除）'
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci COMMENT = '租户配置表（租户级可配业务参数）';
 
 -- ============================================================================
@@ -345,10 +345,10 @@ CREATE TABLE `org_node` (
   `create_time`    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_by`      BIGINT        NULL DEFAULT NULL       COMMENT '更新人 user_id',
   `update_time`    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `is_deleted`     TINYINT       NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是（child_count>0 时禁止删除，须先移走子节点）',
+  `deleted_at`     BIGINT       NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是（child_count>0 时禁止删除，须先移走子节点）',
   `remark`         VARCHAR(500)  NULL DEFAULT NULL       COMMENT '备注',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_ref_user_id` (`ref_user_id`, `is_deleted`) COMMENT '一个账号在树上仅占一个节点（用户→节点反查亦走此索引最左前缀；机构节点 ref_user_id 为 NULL，MySQL 唯一索引不约束 NULL 故可多条并存）',
+  UNIQUE KEY `uk_ref_user_id` (`ref_user_id`, `deleted_at`) COMMENT '一个账号在树上仅占一个节点（用户→节点反查亦走此索引最左前缀；机构节点 ref_user_id 为 NULL，MySQL 唯一索引不约束 NULL 故可多条并存）',
   KEY `idx_tenant_parent_sort` (`tenant_id`, `parent_id`, `sort`) COMMENT '【子树查询主路径】按父节点逐层展开：组织树懒加载、子树 BFS 遍历、机构内定位根节点（parent_id=0）；FIND_IN_SET 无法走索引，逐层查询是默认策略',
   KEY `idx_parent_type` (`parent_id`, `node_type`) COMMENT '某节点下按类型取人：管理员页"我下面的教师列表"、教师页"我名下的学员列表"（高频）',
   KEY `idx_ancestors` (`ancestors`(255)) COMMENT '【子树查询备选路径】ancestors 前缀 LIKE 一次性取全子树（LIKE ''0,100,101,%'' 可命中左前缀）；亦用于移动节点时按路径前缀批量重算子树 ancestors',
@@ -376,11 +376,11 @@ CREATE TABLE `org_teacher` (
   `create_time`   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_by`     BIGINT       NULL DEFAULT NULL       COMMENT '更新人 user_id',
   `update_time`   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `is_deleted`    TINYINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是（节点仍有子节点即名下仍有学员时禁止删除，须先移走学员）',
+  `deleted_at`    BIGINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是（节点仍有子节点即名下仍有学员时禁止删除，须先移走学员）',
   `remark`        VARCHAR(500) NULL DEFAULT NULL       COMMENT '备注',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_node_id` (`node_id`, `is_deleted`) COMMENT '契约 UK(node_id)：一个教师节点仅一份档案（追加 is_deleted 兼容逻辑删除）',
-  UNIQUE KEY `uk_user_id` (`user_id`, `is_deleted`) COMMENT '契约 UK(user_id)：一个账号仅对应一份教师档案（追加 is_deleted 兼容逻辑删除）',
+  UNIQUE KEY `uk_node_id` (`node_id`, `deleted_at`) COMMENT '契约 UK(node_id)：一个教师节点仅一份档案（追加 deleted_at 兼容逻辑删除）',
+  UNIQUE KEY `uk_user_id` (`user_id`, `deleted_at`) COMMENT '契约 UK(user_id)：一个账号仅对应一份教师档案（追加 deleted_at 兼容逻辑删除）',
   KEY `idx_tenant_teacher_no` (`tenant_id`, `teacher_no`) COMMENT '机构内按工号检索教师',
   KEY `idx_tenant_subject` (`tenant_id`, `subject`) COMMENT '机构内按任教科目筛选教师（分配学员时的候选导师列表）'
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci COMMENT = '教师档案表（1:1 org_node 教师节点 / 1:1 sys_user）';
@@ -409,11 +409,11 @@ CREATE TABLE `org_student` (
   `create_time`    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_by`      BIGINT       NULL DEFAULT NULL       COMMENT '更新人 user_id',
   `update_time`    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `is_deleted`     TINYINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是（学习记录禁止随之删除）',
+  `deleted_at`     BIGINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是（学习记录禁止随之删除）',
   `remark`         VARCHAR(500) NULL DEFAULT NULL       COMMENT '备注',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_node_id` (`node_id`, `is_deleted`) COMMENT '契约 UK(node_id)：一个学生节点仅一份档案（组织树 → 学员档案的点查入口，追加 is_deleted 兼容逻辑删除）',
-  UNIQUE KEY `uk_user_id` (`user_id`, `is_deleted`) COMMENT '契约 UK(user_id)：一个账号仅对应一份学生档案（追加 is_deleted 兼容逻辑删除）',
+  UNIQUE KEY `uk_node_id` (`node_id`, `deleted_at`) COMMENT '契约 UK(node_id)：一个学生节点仅一份档案（组织树 → 学员档案的点查入口，追加 deleted_at 兼容逻辑删除）',
+  UNIQUE KEY `uk_user_id` (`user_id`, `deleted_at`) COMMENT '契约 UK(user_id)：一个账号仅对应一份学生档案（追加 deleted_at 兼容逻辑删除）',
   KEY `idx_tenant_status` (`tenant_id`, `status`) COMMENT '机构内按学籍状态分页（在读/已退课/已毕业统计与列表）',
   KEY `idx_tenant_student_no` (`tenant_id`, `student_no`) COMMENT '机构内按学号检索学生'
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci COMMENT = '学生档案表（1:1 org_node 学生节点 / 1:1 sys_user，归属由树表达）';
@@ -438,7 +438,7 @@ CREATE TABLE `org_node_change_log` (
   `create_time`    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_by`      BIGINT       NULL DEFAULT NULL       COMMENT '更新人 user_id',
   `update_time`    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `is_deleted`     TINYINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是（轨迹业务上禁止删除，恒为 0）',
+  `deleted_at`     BIGINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是（轨迹业务上禁止删除，恒为 0）',
   `remark`         VARCHAR(500) NULL DEFAULT NULL       COMMENT '备注',
   PRIMARY KEY (`id`),
   KEY `idx_node_time` (`node_id`, `change_time`) COMMENT '学员/教师档案页展示异动时间线（高频）',
@@ -453,7 +453,7 @@ CREATE TABLE `org_node_change_log` (
 --     判定"某节点能否使用某资源"只需一条命中、不回溯祖先链：
 --       SELECT 1 FROM org_resource_grant
 --        WHERE target_node_id = #{myNodeId} AND resource_type = 1 AND resource_id = #{id}
---          AND is_deleted = 0
+--          AND deleted_at = 0
 --          AND (valid_start IS NULL OR valid_start <= NOW())
 --          AND (valid_end   IS NULL OR valid_end   >= NOW())
 --     该查询由 idx_target_type_valid 单索引命中（无回表回溯、无递归）。
@@ -481,11 +481,11 @@ CREATE TABLE `org_resource_grant` (
   `create_time`    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_by`      BIGINT       NULL DEFAULT NULL       COMMENT '更新人 user_id',
   `update_time`    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `is_deleted`     TINYINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是（撤销授权=置 1，级联回收对子树内同资源行批量置 1）',
+  `deleted_at`     BIGINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是（撤销授权=置 1，级联回收对子树内同资源行批量置 1）',
   `remark`         VARCHAR(500) NULL DEFAULT NULL       COMMENT '备注',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_resource_target` (`resource_type`, `resource_id`, `target_node_id`) COMMENT '同一资源对同一节点仅一行。**全库唯一不追加 is_deleted 的唯一索引**（契约 §2.2 特例）：授权是反复授予/撤销的高频对象，若追加 is_deleted 则第二次撤销即撞唯一键。去掉后重新授权只能走 INSERT ... ON DUPLICATE KEY UPDATE is_deleted=0 复活原行，正确行为被固化进约束本身',
-  KEY `idx_target_type_valid` (`target_node_id`, `resource_type`, `valid_end`) COMMENT '【全系统最高频鉴权查询】"我能用哪些课程/题目/视频" + "我能否用资源X"：按目标节点 + 资源类型 + 有效期单索引命中，不回溯祖先链',
+  UNIQUE KEY `uk_resource_target` (`resource_type`, `resource_id`, `target_node_id`, `deleted_at`) COMMENT '同一资源对同一节点仅一条有效授权。deleted_at 方案下反复授予/撤销不会撞键；重新授权仍建议 UPSERT 复活未删行以免脏行累积',
+  KEY `idx_target_resource` (`target_node_id`, `resource_type`, `resource_id`, `deleted_at`, `valid_end`) COMMENT '【全系统最高频鉴权索引】点查（节点X对资源R有权吗）走前四列精确匹配+valid_end范围，1行命中；列表查（我能用哪些课程）走前三列前缀。原索引缺 resource_id，点查需扫该节点全部授权行才能回答一个布尔',
   KEY `idx_resource_type_id` (`resource_type`, `resource_id`) COMMENT '按资源反查全部被授权节点：级联回收（撤销时定位子树内同资源授权）、悬挂授权巡检、资源删除前影响面评估',
   KEY `idx_source` (`grant_source`, `source_ref_id`) COMMENT '按来源整批撤销/追溯（模板应用批次回滚、按标签批量授权回收）',
   KEY `idx_tenant_grant_time` (`tenant_id`, `grant_time`) COMMENT '机构内授权流水按时间倒序分页（授权审计）'
@@ -509,10 +509,10 @@ CREATE TABLE `org_perm_template` (
   `create_time`    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_by`      BIGINT        NULL DEFAULT NULL       COMMENT '更新人 user_id',
   `update_time`    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `is_deleted`     TINYINT       NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是（删除模板不影响已生成的授权行）',
+  `deleted_at`     BIGINT       NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是（删除模板不影响已生成的授权行）',
   `remark`         VARCHAR(500)  NULL DEFAULT NULL       COMMENT '备注',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_tenant_template_name` (`tenant_id`, `template_name`, `is_deleted`) COMMENT '机构内模板名唯一（追加 is_deleted 兼容逻辑删除）',
+  UNIQUE KEY `uk_tenant_template_name` (`tenant_id`, `template_name`, `deleted_at`) COMMENT '机构内模板名唯一（追加 deleted_at 兼容逻辑删除）',
   KEY `idx_owner_status` (`owner_node_id`, `status`) COMMENT '模板可见性：按归属节点取模板（配合子树条件判断下级是否可用）'
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci COMMENT = '权限模板表（资源清单，应用时取交集不放大权限）';
 
@@ -530,10 +530,10 @@ CREATE TABLE `org_perm_template_item` (
   `create_time`   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_by`     BIGINT       NULL DEFAULT NULL       COMMENT '更新人 user_id',
   `update_time`   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `is_deleted`    TINYINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是',
+  `deleted_at`    BIGINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除标记：0=未删除；删除时写入毫秒时间戳。用时间戳而非 0/1，使同一业务键可容纳任意多条已删除行（唯一索引末尾追加本列）',
   `remark`        VARCHAR(500) NULL DEFAULT NULL       COMMENT '备注',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_template_resource` (`template_id`, `resource_type`, `resource_id`, `is_deleted`) COMMENT '契约 UK(template_id,resource_type,resource_id)：同一模板不可重复收录同一资源（追加 is_deleted 兼容逻辑删除）',
+  UNIQUE KEY `uk_template_resource` (`template_id`, `resource_type`, `resource_id`, `deleted_at`) COMMENT '契约 UK(template_id,resource_type,resource_id)：同一模板不可重复收录同一资源（追加 deleted_at 兼容逻辑删除）',
   KEY `idx_resource_type_id` (`resource_type`, `resource_id`) COMMENT '按资源反查引用它的模板（资源下架前提示受影响模板）'
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci COMMENT = '权限模板资源明细表';
 
@@ -555,10 +555,10 @@ CREATE TABLE `org_tag` (
   `create_time` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_by`   BIGINT       NULL DEFAULT NULL       COMMENT '更新人 user_id',
   `update_time` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `is_deleted`  TINYINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是',
+  `deleted_at`  BIGINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除标记：0=未删除；删除时写入毫秒时间戳。用时间戳而非 0/1，使同一业务键可容纳任意多条已删除行（唯一索引末尾追加本列）',
   `remark`      VARCHAR(500) NULL DEFAULT NULL       COMMENT '备注',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_tenant_tag_name` (`tenant_id`, `tag_name`, `is_deleted`) COMMENT '同机构内标签名唯一（追加 is_deleted 兼容逻辑删除）',
+  UNIQUE KEY `uk_tenant_tag_name` (`tenant_id`, `tag_name`, `deleted_at`) COMMENT '同机构内标签名唯一（追加 deleted_at 兼容逻辑删除）',
   KEY `idx_tenant_group_sort` (`tenant_id`, `tag_group`, `sort`) COMMENT '标签选择器按分组分区展示'
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci COMMENT = '标签定义表（横切属性）';
 
@@ -575,10 +575,10 @@ CREATE TABLE `org_student_tag` (
   `create_time` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_by`   BIGINT       NULL DEFAULT NULL       COMMENT '更新人 user_id',
   `update_time` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `is_deleted`  TINYINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是',
+  `deleted_at`  BIGINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除标记：0=未删除；删除时写入毫秒时间戳。用时间戳而非 0/1，使同一业务键可容纳任意多条已删除行（唯一索引末尾追加本列）',
   `remark`      VARCHAR(500) NULL DEFAULT NULL       COMMENT '备注',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_student_tag` (`student_id`, `tag_id`, `is_deleted`) COMMENT '契约 UK(student_id,tag_id)：同一学生同一标签仅一条（追加 is_deleted 兼容逻辑删除）',
+  UNIQUE KEY `uk_student_tag` (`student_id`, `tag_id`, `deleted_at`) COMMENT '契约 UK(student_id,tag_id)：同一学生同一标签仅一条（追加 deleted_at 兼容逻辑删除）',
   KEY `idx_tag_id` (`tag_id`) COMMENT '按标签批量拉取学员（grant_source=3 按标签批量授权/分发依据，高频）'
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci COMMENT = '学生-标签关联表（M:N）';
 
@@ -594,17 +594,21 @@ CREATE TABLE `org_import_task` (
   `success_count`       INT          NOT NULL DEFAULT 0      COMMENT '成功行数',
   `fail_count`          INT          NOT NULL DEFAULT 0      COMMENT '失败行数',
   `status`              TINYINT      NOT NULL DEFAULT 0      COMMENT '任务状态：0处理中 1成功 2部分失败 3失败',
+  `target_node_id`      BIGINT       NOT NULL                COMMENT '导入目标父节点ID（→org_node.id）：后台 Worker 的全部输入就是本行，据此决定学员挂在哪个节点下。缺此列则导入任务根本无法执行',
+  `template_id`         BIGINT       NULL DEFAULT NULL       COMMENT '套用的权限模板ID（→org_perm_template.id，可空；套用时取交集，见契约 §2.5）',
+  `credential_file_id`  BIGINT       NULL DEFAULT NULL       COMMENT '账号密码表文件ID（→sys_file.id，biz_type=credential_sheet）：仅当本次导入存在服务端随机生成初始密码的行时有值，保留 7 天后物理清理',
   `fail_report_file_id` BIGINT       NULL DEFAULT NULL       COMMENT '失败明细报告文件ID（→sys_file.id，status=2/3 时生成）',
   `tenant_id`           BIGINT       NOT NULL                COMMENT '租户（机构）ID',
   `create_by`           BIGINT       NULL DEFAULT NULL       COMMENT '创建人（发起导入者）user_id',
   `create_time`         DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_by`           BIGINT       NULL DEFAULT NULL       COMMENT '更新人 user_id',
   `update_time`         DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `is_deleted`          TINYINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是',
+  `deleted_at`          BIGINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除标记：0=未删除；删除时写入毫秒时间戳。用时间戳而非 0/1，使同一业务键可容纳任意多条已删除行（唯一索引末尾追加本列）',
   `remark`              VARCHAR(500) NULL DEFAULT NULL       COMMENT '备注',
   PRIMARY KEY (`id`),
   KEY `idx_tenant_time` (`tenant_id`, `create_time`) COMMENT '机构内导入任务列表按时间倒序分页',
-  KEY `idx_status` (`status`) COMMENT '异步 Worker 扫描处理中任务'
+  KEY `idx_status` (`status`) COMMENT '异步 Worker 扫描处理中任务',
+  KEY `idx_target_node` (`target_node_id`) COMMENT '按导入目标节点追溯历史导入批次'
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci COMMENT = 'Excel 导入任务表';
 
 -- ============================================================================
@@ -623,7 +627,7 @@ CREATE TABLE `crs_course` (
   `owner_node_id`  BIGINT       NOT NULL                COMMENT '归属节点ID（→org_node.id，创建时写入创建者所在节点）：契约 2.5 授权前提——只有 owner 或被显式授权者才能再向下授权',
   `cover_file_id`  BIGINT       NULL DEFAULT NULL       COMMENT '封面文件ID（→sys_file.id）',
   `subject`        VARCHAR(50)  NULL DEFAULT NULL       COMMENT '所属科目（如 数学/英语）',
-  `description`    VARCHAR(1000) NULL DEFAULT NULL      COMMENT '课程简介',
+  `description`    VARCHAR(2000) NULL DEFAULT NULL      COMMENT '课程简介（与 03-03 §1.3 接口声明的 2000 字符对齐）',
   `status`         TINYINT      NOT NULL DEFAULT 0      COMMENT '课程状态：0草稿 1已上架 2已下架',
   `lesson_count`   INT          NOT NULL DEFAULT 0      COMMENT '课时总数（冗余计数，课时增删时同步维护）',
   `total_duration` INT          NOT NULL DEFAULT 0      COMMENT '视频总时长（冗余，秒）',
@@ -632,7 +636,7 @@ CREATE TABLE `crs_course` (
   `create_time`    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_by`      BIGINT       NULL DEFAULT NULL       COMMENT '更新人 user_id',
   `update_time`    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `is_deleted`     TINYINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是（课程禁止物理删除）',
+  `deleted_at`     BIGINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是（课程禁止物理删除）',
   `remark`         VARCHAR(500) NULL DEFAULT NULL       COMMENT '备注',
   PRIMARY KEY (`id`),
   KEY `idx_tenant_status` (`tenant_id`, `status`) COMMENT '机构内课程列表按上架状态筛选',
@@ -654,7 +658,7 @@ CREATE TABLE `crs_chapter` (
   `create_time`  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_by`    BIGINT       NULL DEFAULT NULL       COMMENT '更新人 user_id',
   `update_time`  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `is_deleted`   TINYINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是',
+  `deleted_at`   BIGINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除标记：0=未删除；删除时写入毫秒时间戳。用时间戳而非 0/1，使同一业务键可容纳任意多条已删除行（唯一索引末尾追加本列）',
   `remark`       VARCHAR(500) NULL DEFAULT NULL       COMMENT '备注',
   PRIMARY KEY (`id`),
   KEY `idx_course_parent_sort` (`course_id`, `parent_id`, `sort`) COMMENT '加载课程目录树（章→节按序展开）'
@@ -681,7 +685,7 @@ CREATE TABLE `crs_lesson` (
   `create_time`     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_by`       BIGINT       NULL DEFAULT NULL       COMMENT '更新人 user_id',
   `update_time`     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `is_deleted`      TINYINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是（课时禁止物理删除）',
+  `deleted_at`      BIGINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是（课时禁止物理删除）',
   `remark`          VARCHAR(500) NULL DEFAULT NULL       COMMENT '备注',
   PRIMARY KEY (`id`),
   KEY `idx_chapter_sort` (`chapter_id`, `sort`) COMMENT '加载节下课时列表',
@@ -695,6 +699,7 @@ CREATE TABLE `crs_lesson` (
 DROP TABLE IF EXISTS `crs_material`;
 CREATE TABLE `crs_material` (
   `id`                  BIGINT       NOT NULL           COMMENT '图文资料ID（雪花算法）',
+  `owner_node_id`       BIGINT       NOT NULL                COMMENT '归属节点ID（→org_node.id，创建时写入创建者所在节点）：管理端可见性按本列做子树过滤，此后不随创建人调岗漂移。学生端可见性走所属课时→课程→课程授权',
   `title`               VARCHAR(200) NOT NULL           COMMENT '资料标题',
   `content`             LONGTEXT     NULL               COMMENT '富文本正文（HTML）',
   `attachment_file_ids` JSON         NULL               COMMENT '附件文件ID数组（JSON，如 ["1953827104412590081"]，元素→sys_file.id）',
@@ -703,7 +708,7 @@ CREATE TABLE `crs_material` (
   `create_time`         DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_by`           BIGINT       NULL DEFAULT NULL  COMMENT '更新人 user_id',
   `update_time`         DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `is_deleted`          TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除：0否 1是',
+  `deleted_at`          BIGINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除标记：0=未删除；删除时写入毫秒时间戳。用时间戳而非 0/1，使同一业务键可容纳任意多条已删除行（唯一索引末尾追加本列）',
   `remark`              VARCHAR(500) NULL DEFAULT NULL  COMMENT '备注',
   PRIMARY KEY (`id`),
   KEY `idx_tenant_time` (`tenant_id`, `create_time`) COMMENT '机构内图文资料库列表分页'
@@ -734,10 +739,10 @@ CREATE TABLE `vod_video` (
   `create_time`    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_by`      BIGINT       NULL DEFAULT NULL       COMMENT '更新人 user_id',
   `update_time`    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `is_deleted`     TINYINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是',
+  `deleted_at`     BIGINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除标记：0=未删除；删除时写入毫秒时间戳。用时间戳而非 0/1，使同一业务键可容纳任意多条已删除行（唯一索引末尾追加本列）',
   `remark`         VARCHAR(500) NULL DEFAULT NULL       COMMENT '备注',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_provider_file` (`provider`, `vod_file_id`, `is_deleted`) COMMENT '同一云厂商媒资ID唯一（转码回调幂等定位，追加 is_deleted 兼容逻辑删除；vod_file_id 为 NULL 的上传中记录不参与唯一冲突，可多条并存）',
+  UNIQUE KEY `uk_provider_file` (`provider`, `vod_file_id`, `deleted_at`) COMMENT '同一云厂商媒资ID唯一（转码回调幂等定位，追加 deleted_at 兼容逻辑删除；vod_file_id 为 NULL 的上传中记录不参与唯一冲突，可多条并存）',
   KEY `idx_tenant_status` (`tenant_id`, `status`) COMMENT '机构媒资库按转码状态筛选',
   KEY `idx_owner_node_status` (`owner_node_id`, `status`) COMMENT '"我上传的媒资"列表 / 授权校验时确认自己是否为 owner'
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci COMMENT = '云端媒资表（腾讯云/阿里云 VOD；授权见 org_resource_grant，resource_type=3）';
@@ -757,7 +762,7 @@ CREATE TABLE `vod_play_auth_log` (
   `create_time` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '发放时间',
   `tenant_id`   BIGINT       NOT NULL                COMMENT '租户（机构）ID',
   `update_time` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `is_deleted`  TINYINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是（日志业务恒为 0，清理走物理归档）',
+  `deleted_at`  BIGINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是（日志业务恒为 0，清理走物理归档）',
   PRIMARY KEY (`id`),
   KEY `idx_student_time` (`student_id`, `create_time`) COMMENT '审计某学生取证频次（防刷排查）',
   KEY `idx_lesson_time` (`lesson_id`, `create_time`) COMMENT '按课时统计取证量'
@@ -782,10 +787,10 @@ CREATE TABLE `vod_watch_progress` (
   `create_time`         DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_by`           BIGINT       NULL DEFAULT NULL  COMMENT '更新人 user_id',
   `update_time`         DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `is_deleted`          TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除：0否 1是',
+  `deleted_at`          BIGINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除标记：0=未删除；删除时写入毫秒时间戳。用时间戳而非 0/1，使同一业务键可容纳任意多条已删除行（唯一索引末尾追加本列）',
   `remark`              VARCHAR(500) NULL DEFAULT NULL  COMMENT '备注',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_student_lesson` (`student_id`, `lesson_id`, `is_deleted`) COMMENT '契约 UK(student_id,lesson_id)：一名学生一个课时仅一条进度（心跳落盘 UPSERT 依据，追加 is_deleted 兼容逻辑删除）',
+  UNIQUE KEY `uk_student_lesson` (`student_id`, `lesson_id`, `deleted_at`) COMMENT '契约 UK(student_id,lesson_id)：一名学生一个课时仅一条进度（心跳落盘 UPSERT 依据，追加 deleted_at 兼容逻辑删除）',
   KEY `idx_lesson_id` (`lesson_id`) COMMENT '教师端查看某课时下名下学员的观看进度（高频）',
   KEY `idx_course_student` (`course_id`, `student_id`) COMMENT '学生课程进度百分比计算/个人档案',
   KEY `idx_lesson_status` (`lesson_id`, `watch_status`) COMMENT '课时完播率统计（完成人数/总人数）'
@@ -802,7 +807,7 @@ CREATE TABLE `vod_heartbeat_log` (
   `lesson_id`        BIGINT        NOT NULL                COMMENT '课时ID（→crs_lesson.id）',
   `video_id`         BIGINT        NOT NULL                COMMENT '媒资ID（→vod_video.id）',
   `current_time_sec` DECIMAL(10,1) NOT NULL DEFAULT 0.0    COMMENT '心跳上报时的播放位置（秒，对应请求体 currentTime；命名已避开保留字）',
-  `interval_sec`     SMALLINT      NOT NULL DEFAULT 0      COMMENT '与上次心跳的实际间隔（秒，>=8s 视为有效，单次计入 min(实际间隔,15)）',
+  `interval_sec`     INT           NOT NULL DEFAULT 0      COMMENT '与上次心跳的实际间隔（秒，>=8s 视为有效，单次计入 min(实际间隔,15)）',
   `client_ip`        VARCHAR(64)   NULL DEFAULT NULL       COMMENT '客户端 IP',
   `device`           VARCHAR(200)  NULL DEFAULT NULL       COMMENT '设备/浏览器标识（UA 摘要）',
   `created_time`     DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '心跳时间（分区键）',
@@ -839,7 +844,7 @@ CREATE TABLE `qb_category` (
   `create_time`   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_by`     BIGINT       NULL DEFAULT NULL       COMMENT '更新人 user_id',
   `update_time`   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `is_deleted`    TINYINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是',
+  `deleted_at`    BIGINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除标记：0=未删除；删除时写入毫秒时间戳。用时间戳而非 0/1，使同一业务键可容纳任意多条已删除行（唯一索引末尾追加本列）',
   `remark`        VARCHAR(500) NULL DEFAULT NULL       COMMENT '备注',
   PRIMARY KEY (`id`),
   KEY `idx_tenant_parent_sort` (`tenant_id`, `parent_id`, `sort`) COMMENT '构建机构题库分类树'
@@ -858,14 +863,13 @@ CREATE TABLE `qb_question` (
   `difficulty`      TINYINT      NOT NULL DEFAULT 3      COMMENT '难度：1-5（1最易 5最难）',
   `current_version` INT          NOT NULL DEFAULT 1      COMMENT '当前版本号（从1起，每次编辑内容+1，历史版本存 qb_question_version）',
   `stem_preview`    VARCHAR(500) NULL DEFAULT NULL       COMMENT '题干纯文本摘要（列表页展示/检索，随当前版本更新）',
-  `creator_id`      BIGINT       NOT NULL                COMMENT '出题人 user_id',
   `status`          TINYINT      NOT NULL DEFAULT 0      COMMENT '题目状态：0草稿 1启用 2停用（被作业引用不可停用，错误码 30001）',
   `tenant_id`       BIGINT       NOT NULL                COMMENT '租户（机构）ID',
   `create_by`       BIGINT       NULL DEFAULT NULL       COMMENT '创建人 user_id',
   `create_time`     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_by`       BIGINT       NULL DEFAULT NULL       COMMENT '更新人 user_id',
   `update_time`     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `is_deleted`      TINYINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是（题目禁止物理删除）',
+  `deleted_at`      BIGINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是（题目禁止物理删除）',
   `remark`          VARCHAR(500) NULL DEFAULT NULL       COMMENT '备注',
   PRIMARY KEY (`id`),
   KEY `idx_category_status` (`category_id`, `status`) COMMENT '教师选题：按分类筛启用题目（高频）',
@@ -891,10 +895,10 @@ CREATE TABLE `qb_question_version` (
   `create_time`    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_by`      BIGINT        NULL DEFAULT NULL       COMMENT '更新人 user_id',
   `update_time`    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `is_deleted`     TINYINT       NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是（版本快照业务上禁止删除，恒为0）',
+  `deleted_at`     BIGINT       NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是（版本快照业务上禁止删除，恒为0）',
   `remark`         VARCHAR(500)  NULL DEFAULT NULL       COMMENT '备注',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_question_version` (`question_id`, `version`, `is_deleted`) COMMENT '契约 UK(question_id,version)：同一题目版本号唯一（追加 is_deleted 保持全库统一方案）'
+  UNIQUE KEY `uk_question_version` (`question_id`, `version`, `deleted_at`) COMMENT '契约 UK(question_id,version)：同一题目版本号唯一（追加 deleted_at 保持全库统一方案）'
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci COMMENT = '题目版本快照表（内容不可变）';
 
 -- ============================================================================
@@ -911,7 +915,6 @@ CREATE TABLE `hw_homework` (
   `homework_type`       TINYINT      NOT NULL DEFAULT 1      COMMENT '类型：1作业 2考试',
   `owner_node_id`       BIGINT       NOT NULL                COMMENT '归属节点ID（→org_node.id，创建时写入创建者所在节点）：作业本身不是受管资源，此列用于"谁建的作业归谁管"的数据范围过滤（子树可见）',
   `course_id`           BIGINT       NULL DEFAULT NULL       COMMENT '关联课程ID（→crs_course.id，可空）',
-  `creator_id`          BIGINT       NOT NULL                COMMENT '创建人 user_id（→sys_user.id；教师与管理员均可创建作业，故不指向 org_teacher）',
   `total_score`         DECIMAL(6,2) NOT NULL DEFAULT 0.00   COMMENT '总分（冗余=Σ 普通题行与材料题父题行的 hw_homework_question.score，子题行不重复计入）',
   `question_count`      INT          NOT NULL DEFAULT 0      COMMENT '可作答题目数量（冗余计数：普通题各计1，材料题按子题计数、父题不计）',
   `deadline`            DATETIME     NULL DEFAULT NULL       COMMENT '完成截止时间（过期未交置答卷状态4，错误码 30002 依据）',
@@ -924,10 +927,10 @@ CREATE TABLE `hw_homework` (
   `create_time`         DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_by`           BIGINT       NULL DEFAULT NULL       COMMENT '更新人 user_id',
   `update_time`         DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `is_deleted`          TINYINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是（作业禁止物理删除）',
+  `deleted_at`          BIGINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是（作业禁止物理删除）',
   `remark`              VARCHAR(500) NULL DEFAULT NULL       COMMENT '备注',
   PRIMARY KEY (`id`),
-  KEY `idx_creator_status` (`creator_id`, `status`) COMMENT '"我创建的作业"列表按状态筛选（创建人可为教师或管理员）',
+  KEY `idx_creator_status` (`create_by`, `status`) COMMENT '"我创建的作业"列表按状态筛选（创建人可为教师或管理员）',
   KEY `idx_course_id` (`course_id`) COMMENT '按课程聚合关联作业',
   KEY `idx_status_deadline` (`status`, `deadline`) COMMENT '定时任务扫描已发布且过期作业自动置已截止',
   KEY `idx_owner_node_status` (`owner_node_id`, `status`) COMMENT '管理端按节点子树查看下级布置的作业（数据权限过滤后的作业列表）'
@@ -949,10 +952,10 @@ CREATE TABLE `hw_homework_question` (
   `create_time`      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_by`        BIGINT       NULL DEFAULT NULL       COMMENT '更新人 user_id',
   `update_time`      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `is_deleted`       TINYINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是',
+  `deleted_at`       BIGINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除标记：0=未删除；删除时写入毫秒时间戳。用时间戳而非 0/1，使同一业务键可容纳任意多条已删除行（唯一索引末尾追加本列）',
   `remark`           VARCHAR(500) NULL DEFAULT NULL       COMMENT '备注',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_homework_question` (`homework_id`, `question_id`, `is_deleted`) COMMENT '契约 UK(homework_id,question_id)：同一作业不可重复选同一题（追加 is_deleted 兼容逻辑删除）',
+  UNIQUE KEY `uk_homework_question` (`homework_id`, `question_id`, `deleted_at`) COMMENT '契约 UK(homework_id,question_id)：同一作业不可重复选同一题（追加 deleted_at 兼容逻辑删除）',
   KEY `idx_question_id` (`question_id`) COMMENT '按题目反查被哪些作业引用（停用校验，错误码 30001）'
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci COMMENT = '作业-题目表（发布时固化版本）';
 
@@ -974,10 +977,10 @@ CREATE TABLE `hw_homework_target` (
   `create_time`   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_by`     BIGINT       NULL DEFAULT NULL       COMMENT '更新人 user_id',
   `update_time`   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `is_deleted`    TINYINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是（撤回分发走逻辑删除）',
+  `deleted_at`    BIGINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是（撤回分发走逻辑删除）',
   `remark`        VARCHAR(500) NULL DEFAULT NULL       COMMENT '备注',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_homework_student` (`homework_id`, `student_id`, `is_deleted`) COMMENT '契约 UK(homework_id,student_id)：同一学员不可重复分发同一作业（追加 is_deleted 兼容逻辑删除）',
+  UNIQUE KEY `uk_homework_student` (`homework_id`, `student_id`, `deleted_at`) COMMENT '契约 UK(homework_id,student_id)：同一学员不可重复分发同一作业（追加 deleted_at 兼容逻辑删除）',
   KEY `idx_student_homework` (`student_id`, `homework_id`) COMMENT '学生端拉取本人待办作业列表（最高频）',
   KEY `idx_source` (`grant_source`, `source_ref_id`) COMMENT '按批量来源整批撤回分发 / 追溯分发由来'
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci COMMENT = '作业分发对象表（全量精确到学生）';
@@ -1006,10 +1009,10 @@ CREATE TABLE `hw_answer_sheet` (
   `create_time`      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_by`        BIGINT       NULL DEFAULT NULL       COMMENT '更新人 user_id',
   `update_time`      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `is_deleted`       TINYINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是（答卷禁止物理删除）',
+  `deleted_at`       BIGINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是（答卷禁止物理删除）',
   `remark`           VARCHAR(500) NULL DEFAULT NULL       COMMENT '备注',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_homework_student` (`homework_id`, `student_id`, `is_deleted`) COMMENT '契约 UK(homework_id,student_id)：一名学生一份作业仅一份答卷（追加 is_deleted 兼容逻辑删除）',
+  UNIQUE KEY `uk_homework_student` (`homework_id`, `student_id`, `deleted_at`) COMMENT '契约 UK(homework_id,student_id)：一名学生一份作业仅一份答卷（追加 deleted_at 兼容逻辑删除）',
   KEY `idx_homework_status` (`homework_id`, `status`) COMMENT '教师批改流水线拉取待批改答卷/提交率统计（高频）',
   KEY `idx_student_submit` (`student_id`, `submit_time`) COMMENT '学生个人档案历史成绩曲线按时间排序',
   KEY `idx_teacher_node_homework` (`teacher_node_id`, `homework_id`) COMMENT '导师维度上卷：作业按时提交率/成绩导出按作答时刻节点快照统计（历史归原导师，转导师后原导师看板不变）'
@@ -1035,10 +1038,10 @@ CREATE TABLE `hw_answer_detail` (
   `create_time`      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_by`        BIGINT       NULL DEFAULT NULL       COMMENT '更新人 user_id',
   `update_time`      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `is_deleted`       TINYINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是（答卷明细禁止物理删除）',
+  `deleted_at`       BIGINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是（答卷明细禁止物理删除）',
   `remark`           VARCHAR(500) NULL DEFAULT NULL       COMMENT '备注',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_sheet_question` (`answer_sheet_id`, `question_id`, `is_deleted`) COMMENT '同一答卷同一题仅一条作答记录（追加 is_deleted 兼容逻辑删除）',
+  UNIQUE KEY `uk_sheet_question` (`answer_sheet_id`, `question_id`, `deleted_at`) COMMENT '同一答卷同一题仅一条作答记录（追加 deleted_at 兼容逻辑删除）',
   KEY `idx_question_correct` (`question_id`, `is_correct`) COMMENT '高频错题排行榜：按题目聚合错误数（高频）'
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci COMMENT = '逐题作答明细表';
 
@@ -1063,10 +1066,10 @@ CREATE TABLE `hw_wrong_book` (
   `create_time`             DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_by`               BIGINT       NULL DEFAULT NULL  COMMENT '更新人 user_id',
   `update_time`             DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `is_deleted`              TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除：0否 1是',
+  `deleted_at`              BIGINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除标记：0=未删除；删除时写入毫秒时间戳。用时间戳而非 0/1，使同一业务键可容纳任意多条已删除行（唯一索引末尾追加本列）',
   `remark`                  VARCHAR(500) NULL DEFAULT NULL  COMMENT '备注',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_student_question` (`student_id`, `question_id`, `is_deleted`) COMMENT '契约 UK(student_id,question_id)：一名学生一道题仅一条错题记录（重复做错走计数，追加 is_deleted 兼容逻辑删除）',
+  UNIQUE KEY `uk_student_question` (`student_id`, `question_id`, `deleted_at`) COMMENT '契约 UK(student_id,question_id)：一名学生一道题仅一条错题记录（重复做错走计数，追加 deleted_at 兼容逻辑删除）',
   KEY `idx_student_master` (`student_id`, `master_status`, `last_wrong_time`) COMMENT '学生端错题本按掌握状态筛选并按最近错时间排序（高频）'
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci COMMENT = '动态错题本表';
 
@@ -1124,10 +1127,10 @@ CREATE TABLE `stat_student_daily` (
   `create_time`              DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_by`                BIGINT       NULL DEFAULT NULL  COMMENT '更新人 user_id',
   `update_time`              DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `is_deleted`               TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除：0否 1是',
+  `deleted_at`               BIGINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除标记：0=未删除；删除时写入毫秒时间戳。用时间戳而非 0/1，使同一业务键可容纳任意多条已删除行（唯一索引末尾追加本列）',
   `remark`                   VARCHAR(500) NULL DEFAULT NULL  COMMENT '备注',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_student_date` (`student_id`, `stat_date`, `is_deleted`) COMMENT '契约 UK(student_id,stat_date)：一名学生一天一条汇总（定时任务 UPSERT 依据，追加 is_deleted 兼容逻辑删除）',
+  UNIQUE KEY `uk_student_date` (`student_id`, `stat_date`, `deleted_at`) COMMENT '契约 UK(student_id,stat_date)：一名学生一天一条汇总（定时任务 UPSERT 依据，追加 deleted_at 兼容逻辑删除）',
   KEY `idx_teacher_node_date` (`teacher_node_id`, `stat_date`) COMMENT '【上卷维度①】导师维度：生成 stat_teacher_daily / 导师看板历史趋势（按结算快照读取，历史归原导师）',
   KEY `idx_node_date` (`node_id`, `stat_date`) COMMENT '【上卷维度②】节点维度：结算任务按 node_id 取数生成 stat_node_daily（写入侧按 ancestors 展开子树后 IN 查询）；大屏查询侧读 stat_node_daily 单行命中，不经本索引',
   KEY `idx_tenant_date` (`tenant_id`, `stat_date`) COMMENT '机构全量按日扫描（结算任务分片、全机构趋势）'
@@ -1146,6 +1149,8 @@ CREATE TABLE `stat_teacher_daily` (
   `teacher_node_id`       BIGINT       NOT NULL              COMMENT '导师节点ID（→org_node.id，node_type=3）',
   `stat_date`             DATE         NOT NULL              COMMENT '统计日期（自然日）',
   `student_count`         INT          NOT NULL DEFAULT 0    COMMENT '当日名下学员数（结算时刻 teacher_node_id 指向本节点的在读学员数）',
+  `watch_seconds`         BIGINT       NOT NULL DEFAULT 0    COMMENT '【当日流量型】当日名下学员观看总秒数；区间取值为跨天求和。缺此列时导师看板的学习时长需回事实表全量求和',
+  `late_submit_count`     INT          NOT NULL DEFAULT 0    COMMENT '【当日流量型】当日到期作业中逾期提交的份数；区间取值为跨天求和',
   `finished_lesson_count` INT          NOT NULL DEFAULT 0    COMMENT '【累计状态型】【完播率分子】名下学员累计快照合计：截至本日已完播课时数；区间取值取末日行，严禁跨天求和',
   `should_lesson_count`   INT          NOT NULL DEFAULT 0    COMMENT '【累计状态型】【完播率分母】名下学员累计快照合计：截至本日应学课时数；区间取值取末日行，严禁跨天求和',
   `ontime_submit_count`   INT          NOT NULL DEFAULT 0    COMMENT '【当日流量型】【按时提交率分子】名下学员当日按时提交份数合计；当日新增；区间取值为跨天求和',
@@ -1158,10 +1163,10 @@ CREATE TABLE `stat_teacher_daily` (
   `create_time`          DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_by`            BIGINT       NULL DEFAULT NULL     COMMENT '更新人 user_id',
   `update_time`          DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `is_deleted`           TINYINT      NOT NULL DEFAULT 0    COMMENT '逻辑删除：0否 1是',
+  `deleted_at`           BIGINT      NOT NULL DEFAULT 0    COMMENT '逻辑删除标记：0=未删除；删除时写入毫秒时间戳。用时间戳而非 0/1，使同一业务键可容纳任意多条已删除行（唯一索引末尾追加本列）',
   `remark`               VARCHAR(500) NULL DEFAULT NULL     COMMENT '备注',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_teacher_node_date` (`teacher_node_id`, `stat_date`, `is_deleted`) COMMENT '契约 UK(teacher_node_id,stat_date)：一位导师一天一条汇总（追加 is_deleted 兼容逻辑删除）',
+  UNIQUE KEY `uk_teacher_node_date` (`teacher_node_id`, `stat_date`, `deleted_at`) COMMENT '契约 UK(teacher_node_id,stat_date)：一位导师一天一条汇总（追加 deleted_at 兼容逻辑删除）',
   KEY `idx_tenant_date` (`tenant_id`, `stat_date`) COMMENT '机构管理端导师排行榜按日期聚合全部导师'
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci COMMENT = '导师日汇总表（定时任务由 stat_student_daily 上卷生成）';
 
@@ -1182,6 +1187,7 @@ CREATE TABLE `stat_node_daily` (
   `node_id`               BIGINT       NOT NULL              COMMENT '组织节点ID（→org_node.id）；本行为【该节点整棵子树】的聚合，非直属汇总，父子行不可相加',
   `stat_date`             DATE         NOT NULL              COMMENT '统计日期（自然日）',
   `student_count`         INT          NOT NULL DEFAULT 0    COMMENT '当日该节点子树内在读学员总数',
+  `watch_seconds`         BIGINT       NOT NULL DEFAULT 0    COMMENT '【当日流量型】子树内学员当日观看总秒数；区间取值为跨天求和。大屏总学习时长 KPI 直读本列，避免回事实表全子树求和（那会废掉本表读大屏1行命中的设计初衷）',
   `finished_lesson_count` INT          NOT NULL DEFAULT 0    COMMENT '【累计状态型】【完播率分子】子树内学员累计快照合计：截至本日已完播课时数；区间取值取末日行，严禁跨天求和',
   `should_lesson_count`   INT          NOT NULL DEFAULT 0    COMMENT '【累计状态型】【完播率分母】子树内学员累计快照合计：截至本日应学课时数；区间取值取末日行，严禁跨天求和',
   `ontime_submit_count`   INT          NOT NULL DEFAULT 0    COMMENT '【当日流量型】【按时提交率分子】子树内学员当日按时提交份数合计；当日新增；区间取值为跨天求和',
@@ -1194,10 +1200,10 @@ CREATE TABLE `stat_node_daily` (
   `create_time`          DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_by`            BIGINT       NULL DEFAULT NULL     COMMENT '更新人 user_id',
   `update_time`          DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `is_deleted`           TINYINT      NOT NULL DEFAULT 0    COMMENT '逻辑删除：0否 1是',
+  `deleted_at`           BIGINT      NOT NULL DEFAULT 0    COMMENT '逻辑删除标记：0=未删除；删除时写入毫秒时间戳。用时间戳而非 0/1，使同一业务键可容纳任意多条已删除行（唯一索引末尾追加本列）',
   `remark`               VARCHAR(500) NULL DEFAULT NULL     COMMENT '备注',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_node_date` (`node_id`, `stat_date`, `is_deleted`) COMMENT '契约 UK(node_id,stat_date)：一个节点一天一条汇总（追加 is_deleted 兼容逻辑删除）',
+  UNIQUE KEY `uk_node_date` (`node_id`, `stat_date`, `deleted_at`) COMMENT '契约 UK(node_id,stat_date)：一个节点一天一条汇总（追加 deleted_at 兼容逻辑删除）',
   KEY `idx_tenant_date` (`tenant_id`, `stat_date`) COMMENT '机构大屏按日期批量取数（结算任务写入分片）'
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci COMMENT = '节点日汇总表（定时任务由 stat_student_daily 上卷生成）';
 
@@ -1218,7 +1224,7 @@ CREATE TABLE `stat_export_task` (
   `create_time`  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_by`    BIGINT       NULL DEFAULT NULL       COMMENT '更新人 user_id',
   `update_time`  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `is_deleted`   TINYINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除：0否 1是',
+  `deleted_at`   BIGINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除标记：0=未删除；删除时写入毫秒时间戳。用时间戳而非 0/1，使同一业务键可容纳任意多条已删除行（唯一索引末尾追加本列）',
   `remark`       VARCHAR(500) NULL DEFAULT NULL       COMMENT '备注',
   PRIMARY KEY (`id`),
   KEY `idx_applicant_time` (`applicant_id`, `create_time`) COMMENT '我的导出任务列表按时间倒序',
@@ -1252,18 +1258,18 @@ SET FOREIGN_KEY_CHECKS = 1;
 -- ============================================================================
 
 -- 平台根节点（全表唯一 id=0 / parent_id=-1 / ancestors='' 的虚拟根，tenant_id=0，不属于任何租户）
-INSERT INTO `org_node` (`id`, `parent_id`, `ancestors`, `node_name`, `node_type`, `ref_user_id`, `sort`, `status`, `child_count`, `student_count`, `tenant_id`, `create_by`, `create_time`, `update_time`, `is_deleted`, `remark`)
+INSERT INTO `org_node` (`id`, `parent_id`, `ancestors`, `node_name`, `node_type`, `ref_user_id`, `sort`, `status`, `child_count`, `student_count`, `tenant_id`, `create_by`, `create_time`, `update_time`, `deleted_at`, `remark`)
 VALUES (0, -1, '', 'EduMatrix 平台', 1, NULL, 0, 0, 1, 1, 0, NULL, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, '虚拟平台根节点，全系统唯一且不可删除；其直接子节点即一个机构=一个租户');
 
 -- 平台超管账号（tenant_id=0，node_id=0 即平台根节点 → 子树=全平台，无需特例分支）
-INSERT INTO `sys_user` (`id`, `username`, `password`, `user_type`, `real_name`, `phone`, `avatar`, `node_id`, `status`, `pwd_reset_flag`, `last_login_time`, `tenant_id`, `create_by`, `create_time`, `update_time`, `is_deleted`, `remark`)
+INSERT INTO `sys_user` (`id`, `username`, `password`, `user_type`, `real_name`, `phone`, `avatar`, `node_id`, `status`, `pwd_reset_flag`, `last_login_time`, `tenant_id`, `create_by`, `create_time`, `update_time`, `deleted_at`, `remark`)
 VALUES (1953827104412590101, 'superadmin', '$2a$10$BCRYPT_PLACEHOLDER_REPLACE_ON_DEPLOY_0000000000000000', 0, '平台超级管理员', NULL, NULL, 0, 0, 1, NULL, 0, NULL, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, '平台运营方超管，所在节点=平台根(0)，首次登录强制改密');
 
 -- 平台根节点回填 ref_user_id（超管账号建号后回写，与 sys_user.node_id 互为反向引用）
 UPDATE `org_node` SET `ref_user_id` = 1953827104412590101 WHERE `id` = 0;
 
 -- 四个默认角色（平台内置，tenant_id=0，随租户开通引用；仅定义操作权限，不含数据范围）
-INSERT INTO `sys_role` (`id`, `role_name`, `role_key`, `status`, `sort`, `tenant_id`, `create_by`, `create_time`, `update_time`, `is_deleted`, `remark`)
+INSERT INTO `sys_role` (`id`, `role_name`, `role_key`, `status`, `sort`, `tenant_id`, `create_by`, `create_time`, `update_time`, `deleted_at`, `remark`)
 VALUES
 (1953827104412590201, '平台超管',  'super_admin', 0, 1, 0, 1953827104412590101, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, '操作权限：租户开通、平台配置；数据范围由树决定（平台根节点子树=全平台，跨租户）'),
 (1953827104412590202, '管理员',    'org_admin',   0, 2, 0, 1953827104412590101, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, '操作权限：建下级管理员/教师/学生、分配学员、资源下发、全模块管理；机构管理员与下级管理员共用此角色，差别仅在树的位置'),
@@ -1271,59 +1277,59 @@ VALUES
 (1953827104412590204, '学生',      'student',     0, 4, 0, 1953827104412590101, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, '操作权限：学习、作答、看本人档案（学生之间互不可见，契约 2.7）');
 
 -- 平台超管绑定 super_admin 角色
-INSERT INTO `sys_user_role` (`id`, `user_id`, `role_id`, `tenant_id`, `create_by`, `create_time`, `update_time`, `is_deleted`, `remark`)
+INSERT INTO `sys_user_role` (`id`, `user_id`, `role_id`, `tenant_id`, `create_by`, `create_time`, `update_time`, `deleted_at`, `remark`)
 VALUES (1953827104412590301, 1953827104412590101, 1953827104412590201, 0, 1953827104412590101, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, NULL);
 
 -- 示例租户（机构）：开通租户的三步同事务落库（契约 2.1，解循环依赖）
 -- 第 1 步：插租户行，root_node_id 暂空
-INSERT INTO `sys_tenant` (`id`, `root_node_id`, `name`, `contact_name`, `contact_phone`, `expire_time`, `status`, `max_student_count`, `create_by`, `create_time`, `update_time`, `is_deleted`, `remark`)
+INSERT INTO `sys_tenant` (`id`, `root_node_id`, `name`, `contact_name`, `contact_phone`, `expire_time`, `status`, `max_student_count`, `create_by`, `create_time`, `update_time`, `deleted_at`, `remark`)
 VALUES (1953827104412590001, NULL, '示例教育机构（演示租户）', '张老师', '13800000000', '2027-08-12 00:00:00', 0, 500, 1953827104412590101, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, '开发联调用演示租户');
 
 -- 第 2 步：插机构根节点（parent_id=0 即挂在平台根下；id = tenant_id = 自身；ancestors='0'）
-INSERT INTO `org_node` (`id`, `parent_id`, `ancestors`, `node_name`, `node_type`, `ref_user_id`, `sort`, `status`, `child_count`, `student_count`, `tenant_id`, `create_by`, `create_time`, `update_time`, `is_deleted`, `remark`)
+INSERT INTO `org_node` (`id`, `parent_id`, `ancestors`, `node_name`, `node_type`, `ref_user_id`, `sort`, `status`, `child_count`, `student_count`, `tenant_id`, `create_by`, `create_time`, `update_time`, `deleted_at`, `remark`)
 VALUES (1953827104412590001, 0, '0', '示例教育机构（演示租户）', 1, NULL, 0, 0, 1, 1, 1953827104412590001, 1953827104412590101, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, '机构根节点，随租户开通自动创建，不可删除；机构管理员的子树起点');
 
 -- 第 3 步：回写 root_node_id（以上三步必须在同一事务内）
 UPDATE `sys_tenant` SET `root_node_id` = 1953827104412590001 WHERE `id` = 1953827104412590001;
 
 -- 示例管理员：账号 + 节点（第 3 层，node_type=2）
-INSERT INTO `sys_user` (`id`, `username`, `password`, `user_type`, `real_name`, `phone`, `avatar`, `node_id`, `status`, `pwd_reset_flag`, `last_login_time`, `tenant_id`, `create_by`, `create_time`, `update_time`, `is_deleted`, `remark`)
+INSERT INTO `sys_user` (`id`, `username`, `password`, `user_type`, `real_name`, `phone`, `avatar`, `node_id`, `status`, `pwd_reset_flag`, `last_login_time`, `tenant_id`, `create_by`, `create_time`, `update_time`, `deleted_at`, `remark`)
 VALUES (1953827104412590102, 'demo_admin', '$2a$10$BCRYPT_PLACEHOLDER_REPLACE_ON_DEPLOY_0000000000000000', 1, '示例机构管理员', '13800000001', NULL, 1953827104412590402, 0, 1, NULL, 1953827104412590001, 1953827104412590101, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, '演示管理员，可见范围=其节点子树');
 
-INSERT INTO `org_node` (`id`, `parent_id`, `ancestors`, `node_name`, `node_type`, `ref_user_id`, `sort`, `status`, `child_count`, `student_count`, `tenant_id`, `create_by`, `create_time`, `update_time`, `is_deleted`, `remark`)
+INSERT INTO `org_node` (`id`, `parent_id`, `ancestors`, `node_name`, `node_type`, `ref_user_id`, `sort`, `status`, `child_count`, `student_count`, `tenant_id`, `create_by`, `create_time`, `update_time`, `deleted_at`, `remark`)
 VALUES (1953827104412590402, 1953827104412590001, '0,1953827104412590001', '示例机构管理员', 2, 1953827104412590102, 0, 0, 1, 1, 1953827104412590001, 1953827104412590101, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, '管理员节点，可挂下级管理员/教师/学生');
 
-INSERT INTO `sys_user_role` (`id`, `user_id`, `role_id`, `tenant_id`, `create_by`, `create_time`, `update_time`, `is_deleted`, `remark`)
+INSERT INTO `sys_user_role` (`id`, `user_id`, `role_id`, `tenant_id`, `create_by`, `create_time`, `update_time`, `deleted_at`, `remark`)
 VALUES (1953827104412590302, 1953827104412590102, 1953827104412590202, 1953827104412590001, 1953827104412590101, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, NULL);
 
 -- 示例教师：账号 + 节点（第 4 层，node_type=3，其子节点即名下学员）+ 档案
-INSERT INTO `sys_user` (`id`, `username`, `password`, `user_type`, `real_name`, `phone`, `avatar`, `node_id`, `status`, `pwd_reset_flag`, `last_login_time`, `tenant_id`, `create_by`, `create_time`, `update_time`, `is_deleted`, `remark`)
+INSERT INTO `sys_user` (`id`, `username`, `password`, `user_type`, `real_name`, `phone`, `avatar`, `node_id`, `status`, `pwd_reset_flag`, `last_login_time`, `tenant_id`, `create_by`, `create_time`, `update_time`, `deleted_at`, `remark`)
 VALUES (1953827104412590103, 'demo_teacher', '$2a$10$BCRYPT_PLACEHOLDER_REPLACE_ON_DEPLOY_0000000000000000', 2, '示例导师', '13800000002', NULL, 1953827104412590403, 0, 1, NULL, 1953827104412590001, 1953827104412590102, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, '演示导师，可见范围=名下学员');
 
-INSERT INTO `org_node` (`id`, `parent_id`, `ancestors`, `node_name`, `node_type`, `ref_user_id`, `sort`, `status`, `child_count`, `student_count`, `tenant_id`, `create_by`, `create_time`, `update_time`, `is_deleted`, `remark`)
+INSERT INTO `org_node` (`id`, `parent_id`, `ancestors`, `node_name`, `node_type`, `ref_user_id`, `sort`, `status`, `child_count`, `student_count`, `tenant_id`, `create_by`, `create_time`, `update_time`, `deleted_at`, `remark`)
 VALUES (1953827104412590403, 1953827104412590402, '0,1953827104412590001,1953827104412590402', '示例导师', 3, 1953827104412590103, 0, 0, 1, 1, 1953827104412590001, 1953827104412590102, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, '教师节点，其下只能挂学生节点');
 
-INSERT INTO `sys_user_role` (`id`, `user_id`, `role_id`, `tenant_id`, `create_by`, `create_time`, `update_time`, `is_deleted`, `remark`)
+INSERT INTO `sys_user_role` (`id`, `user_id`, `role_id`, `tenant_id`, `create_by`, `create_time`, `update_time`, `deleted_at`, `remark`)
 VALUES (1953827104412590303, 1953827104412590103, 1953827104412590203, 1953827104412590001, 1953827104412590102, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, NULL);
 
-INSERT INTO `org_teacher` (`id`, `node_id`, `user_id`, `teacher_no`, `subject`, `title`, `entry_date`, `student_count`, `tenant_id`, `create_by`, `create_time`, `update_time`, `is_deleted`, `remark`)
+INSERT INTO `org_teacher` (`id`, `node_id`, `user_id`, `teacher_no`, `subject`, `title`, `entry_date`, `student_count`, `tenant_id`, `create_by`, `create_time`, `update_time`, `deleted_at`, `remark`)
 VALUES (1953827104412590501, 1953827104412590403, 1953827104412590103, 'T0001', '数学', '高级教师', '2026-03-01', 1, 1953827104412590001, 1953827104412590102, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, '演示教师档案');
 
 -- 示例学生：账号 + 节点（第 5 层，node_type=4，叶子）+ 档案
-INSERT INTO `sys_user` (`id`, `username`, `password`, `user_type`, `real_name`, `phone`, `avatar`, `node_id`, `status`, `pwd_reset_flag`, `last_login_time`, `tenant_id`, `create_by`, `create_time`, `update_time`, `is_deleted`, `remark`)
+INSERT INTO `sys_user` (`id`, `username`, `password`, `user_type`, `real_name`, `phone`, `avatar`, `node_id`, `status`, `pwd_reset_flag`, `last_login_time`, `tenant_id`, `create_by`, `create_time`, `update_time`, `deleted_at`, `remark`)
 VALUES (1953827104412590104, 'demo_student', '$2a$10$BCRYPT_PLACEHOLDER_REPLACE_ON_DEPLOY_0000000000000000', 3, '示例学员', '13800000003', NULL, 1953827104412590404, 0, 1, NULL, 1953827104412590001, 1953827104412590102, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, '演示学员，可见范围=仅本人');
 
-INSERT INTO `org_node` (`id`, `parent_id`, `ancestors`, `node_name`, `node_type`, `ref_user_id`, `sort`, `status`, `child_count`, `student_count`, `tenant_id`, `create_by`, `create_time`, `update_time`, `is_deleted`, `remark`)
+INSERT INTO `org_node` (`id`, `parent_id`, `ancestors`, `node_name`, `node_type`, `ref_user_id`, `sort`, `status`, `child_count`, `student_count`, `tenant_id`, `create_by`, `create_time`, `update_time`, `deleted_at`, `remark`)
 VALUES (1953827104412590404, 1953827104412590403, '0,1953827104412590001,1953827104412590402,1953827104412590403', '示例学员', 4, 1953827104412590104, 0, 0, 0, 0, 1953827104412590001, 1953827104412590102, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, '学生节点必须是叶子，child_count 恒为 0');
 
-INSERT INTO `sys_user_role` (`id`, `user_id`, `role_id`, `tenant_id`, `create_by`, `create_time`, `update_time`, `is_deleted`, `remark`)
+INSERT INTO `sys_user_role` (`id`, `user_id`, `role_id`, `tenant_id`, `create_by`, `create_time`, `update_time`, `deleted_at`, `remark`)
 VALUES (1953827104412590304, 1953827104412590104, 1953827104412590204, 1953827104412590001, 1953827104412590102, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, NULL);
 
-INSERT INTO `org_student` (`id`, `node_id`, `user_id`, `student_no`, `guardian_name`, `guardian_phone`, `status`, `quit_time`, `quit_reason`, `archive_time`, `tenant_id`, `create_by`, `create_time`, `update_time`, `is_deleted`, `remark`)
+INSERT INTO `org_student` (`id`, `node_id`, `user_id`, `student_no`, `guardian_name`, `guardian_phone`, `status`, `quit_time`, `quit_reason`, `archive_time`, `tenant_id`, `create_by`, `create_time`, `update_time`, `deleted_at`, `remark`)
 VALUES (1953827104412590601, 1953827104412590404, 1953827104412590104, 'S0001', '示例家长', '13800000004', 0, NULL, NULL, NULL, 1953827104412590001, 1953827104412590102, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, '演示学员档案，已分配至示例导师名下');
 
 -- 建档轨迹（change_type=1 建档；分配导师会再写一条 change_type=2）
-INSERT INTO `org_node_change_log` (`id`, `node_id`, `change_type`, `from_parent_id`, `to_parent_id`, `change_time`, `operator_id`, `reason`, `tenant_id`, `create_by`, `create_time`, `update_time`, `is_deleted`, `remark`)
+INSERT INTO `org_node_change_log` (`id`, `node_id`, `change_type`, `from_parent_id`, `to_parent_id`, `change_time`, `operator_id`, `reason`, `tenant_id`, `create_by`, `create_time`, `update_time`, `deleted_at`, `remark`)
 VALUES (1953827104412590701, 1953827104412590404, 1, NULL, 1953827104412590403, '2026-08-12 10:00:00', 1953827104412590102, '演示数据建档', 1953827104412590001, 1953827104412590102, '2026-08-12 10:00:00', '2026-08-12 10:00:00', 0, NULL);
 
 -- ============================================================================
