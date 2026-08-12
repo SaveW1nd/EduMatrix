@@ -74,7 +74,7 @@ ON DUPLICATE KEY UPDATE is_deleted = 0, valid_start = VALUES(valid_start),
 1. **教师节点下只能挂学生**；学生节点必须是叶子。教师尚无学员时其自身即为叶子。
 2. **树不允许成环**。移动节点时，目标父节点不得是自身或自身的任何后代：
    `targetParentId != movingNodeId AND FIND_IN_SET(#{movingNodeId}, targetParent.ancestors) = 0`
-3. `org_node.ancestors` 冗余祖级路径（逗号串，如 `0,100,101,205`），子树查询用 `FIND_IN_SET(#{nodeId}, ancestors)` 单条件命中，不走递归 CTE。
+3. `org_node.ancestors` 冗余祖级路径（逗号串，如 `0,100,101,205`），子树查询据此判定，**不走递归 CTE**。注意 `FIND_IN_SET` 是**语义定义而非执行写法**——它是列上的函数，无法走索引，实际实现见 §2.4 的三条路径。
 4. **移动节点后必须递归重算整棵子树的 `ancestors`**（含被移动节点自身），且该操作与移动本身在同一事务内。
 5. 树深度**不设上限**。
 
@@ -91,9 +91,20 @@ ON DUPLICATE KEY UPDATE is_deleted = 0, valid_start = VALUES(valid_start),
 | 角色 | 看到的范围 | 判定 |
 | --- | --- | --- |
 | 平台超管 | 全平台 | 跨租户 |
-| 机构管理员 / 下级管理员 | 其子树全部（下级管理员、教师、学生） | `node.id = #{myNodeId} OR FIND_IN_SET(#{myNodeId}, node.ancestors)` |
-| 教师 | 其子树 = 名下学员 | 同上（教师的子树即其直接学生） |
-| 学生 | 仅自身 | 同上（学生无子节点） |
+| 机构管理员 / 下级管理员 | 其子树全部（下级管理员、教师、学生） | 子树判定（语义式 `node.id = #{myNodeId} OR FIND_IN_SET(#{myNodeId}, node.ancestors)`） |
+| 教师 | 其子树 = 名下学员 | 同上；因教师节点下只能挂学生，其子树**恰好等于直接子节点** |
+| 学生 | 仅自身 | 同上（学生无子节点，子树即自身） |
+
+**上表的 `FIND_IN_SET` 是语义定义，不是执行写法。** 它是作用在列上的函数，**无法走索引，直接内联会导致每次带数据权限的查询都全表扫描 `org_node`**——而这是全系统执行频率最高的条件。实现必须按下表选路（索引已在 DDL 中就位）：
+
+| 角色 / 场景 | 执行写法 | 命中索引 |
+| --- | --- | --- |
+| **教师（最高频）** | 子树 ≡ 直接子节点，退化为 `WHERE parent_id = #{myNodeId} AND node_type = 4` | `idx_parent_type` |
+| **管理员：取整棵子树** | 先用前缀 LIKE 解析出子树节点 ID 集合（`ancestors = P OR ancestors LIKE CONCAT(P,',%')`，`P = CONCAT(ancestors,',',id)`），再对业务表 `WHERE node_id IN (...)`；结果集可缓存至 Redis，节点移动时失效 | `idx_ancestors(255)` |
+| **管理员：逐层浏览** | 按 `parent_id` 逐层展开（树懒加载、面包屑） | `idx_tenant_parent_sort` |
+| **离线巡检 / 已被 tenant_id 收敛的小结果集** | 可直接用 `FIND_IN_SET` | 无（可接受） |
+
+> 详细推导与 SQL 模板见 02-数据库设计 §3.1.2「子树查询的三条路径」。**分册文档中出现的 `FIND_IN_SET` 一律理解为语义表达**，实现方不得逐字照抄进高频查询。
 
 - **全系统只有这一条数据权限规则**，所有角色适用，不存在第二套过滤逻辑。
 - 学员被移走后，原上级**立即失去对其全部数据（含历史明细）**的访问权；历史统计归属另见 2.6。
