@@ -11,20 +11,20 @@
 | [docs/01-PRD-产品需求文档.md](docs/01-PRD-产品需求文档.md) | 产品需求文档（角色与权限、五大模块功能详述、验收标准、页面清单、50 条边界场景） |
 | [docs/02-数据库设计.md](docs/02-数据库设计.md) | 数据库设计说明（ER 图、核心设计要点、逐表字段、索引、分区、容量估算） |
 | [docs/sql/edumatrix_ddl.sql](docs/sql/edumatrix_ddl.sql) | 可执行 DDL（MySQL 8.0，**41 张表**，已实测执行通过） |
-| [docs/03-API接口文档/](docs/03-API接口文档/) | API 接口文档（6 个分册，**159 个接口**，见 00-通用约定 内目录） |
-| [scripts/check_consistency.py](scripts/check_consistency.py) | 文档一致性检查（8 项，无依赖）：`python3 scripts/check_consistency.py`，说明见 [scripts/README.md](scripts/README.md) |
+| [docs/03-API接口文档/](docs/03-API接口文档/) | API 接口文档（6 个分册，**157 个接口**，见 00-通用约定 内目录） |
+| [scripts/check_consistency.py](scripts/check_consistency.py) | 文档一致性检查（12 项，无依赖）：`python3 scripts/check_consistency.py`，说明见 [scripts/README.md](scripts/README.md) |
 | [references/README.md](references/README.md) | 参考开源仓库导读（RuoYi-Vue-Plus / roncoo-education / xzs / DPlayer） |
 
 ## 核心设计决策速览
 
-- **统一组织树**：机构、管理员、教师、学生**全部是 `org_node` 上的节点**（`node_type` 1/2/3/4），一棵树到底。师生关系由树的父子结构表达——学生挂在教师节点下即该导师名下学员
-- **数据权限只有一条规则**：**你能看到的数据 = 你所在节点的子树**（`id = #{myNodeId} OR FIND_IN_SET(#{myNodeId}, ancestors)`）。全部角色适用，无第二套逻辑
+- **统一组织树**：平台超管、管理员、教师、学生**全部是 `org_node` 上的节点**（`node_type` 0/1/2/3，取值与 `sys_user.user_type` 完全一致），一棵树到底。**每个节点都是一个人**——不设"校区/年级/部门"这类不绑账号的空节点，要表达组织层级就建一个管理员节点、节点名叫「华东校区」、`ref_user_id` 指向该片区负责人。师生关系由树的父子结构表达——学生挂在教师节点下即该导师名下学员
+- **数据权限只有一条规则**：**你能看到的数据 = 你所在节点的子树**（语义式写法 `id = #{myNodeId} OR FIND_IN_SET(#{myNodeId}, ancestors)`；`FIND_IN_SET` 无法走索引，执行选路见契约 §2.4）。全部角色适用，无第二套逻辑
 - **资源逐级下发**：课程 / 题目 / 视频经 `org_resource_grant` **每级显式授权、不向下继承**，只能授权自己拥有的、只能授给自己子树内的；撤销级联到子树；权限模板套用时取交集，绝不放大权限
 - **机构 = 租户**：`tenant_id` 硬隔离，与子树权限是两道独立防线
 - **视频防刷**：VOD 加密 HLS + 300s 播放凭证 + 禁快进（maxPosition 前可回看）+ 跑马灯水印 + 10s 心跳（≥8s 有效、单次封顶 15s；Redis 缓冲，60s 批量落盘并判定完播）
 - **题库版本防错乱**：题目雪花物理 ID 恒定，编辑即生成不可变版本快照 `qb_question_version`；作业发布时固化版本；错题本绑定做错时刻版本
 - **统计双快照上卷**：`stat_student_daily` 为唯一事实表，凭行内 `teacher_node_id` / `node_id` 快照分别上卷到导师维度与节点维度；历史归原导师、以自然日结算
-- **软删除**：核心业务数据一律 `deleted_at` 逻辑删除，禁止物理删除
+- **软删除**：核心业务数据一律逻辑删除，禁止物理删除。`deleted_at` 是**毫秒时间戳而非 0/1 标志**——0/1 方案下同一业务键最多只能容纳一条已删除行，反复增删到第二次就撞唯一键
 
 ## 三条不可违反的铁律
 

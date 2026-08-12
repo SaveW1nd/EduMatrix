@@ -324,9 +324,16 @@ def check_c7_markdown():
 # ============================================== C8 禁用词 / 陈旧内容残留
 
 BANNED = {
-    'is_deleted': '软删除已统一为 deleted_at 时间戳',
     'node_type=4': 'node_type 已收敛为 0/1/2/3 四类',
+    'nodeType=4': 'node_type 已收敛为 0/1/2/3 四类',
     '机构/管理单元': '已去掉独立于人的组织单元节点类型',
+    '管理单元': '已去掉独立于人的组织单元节点类型，组织层级由管理员节点的嵌套表达',
+    '纯组织容器': '树上不存在不绑账号的节点',
+    'creator_id': '专用创建人列已废除，署名统一用公共字段 create_by',
+    'deleted_at=1': 'deleted_at 是毫秒时间戳，不是 0/1 标志',
+    'deleted_at = 1': 'deleted_at 是毫秒时间戳，不是 0/1 标志',
+    '机构或管理员节点': '机构根节点本身就是管理员节点，不是并列的两类',
+    '机构 / 管理员节点': '机构根节点本身就是管理员节点，不是并列的两类',
     'org_class': '班级模型已废弃',
     'org_teacher_class': '班级模型已废弃',
     'crs_course_class': '已并入 org_resource_grant',
@@ -337,15 +344,221 @@ BANNED = {
 }
 
 
+# 少数位置需要"点名旧方案以说明为什么不用它"，逐条豁免而不是整行放行
+ALLOW = [
+    ('is_deleted', '若用 `is_deleted` 这类 0/1 标志'),      # 契约 §2.2 论证前提
+    ('is_deleted', '`is_deleted TINYINT(0/1)`'),            # 02-数据库设计 §7 对照表
+    ('creator_id', '不设 `creator_id` 这类专用创建人列'),   # 契约 §2.2 禁用声明
+    ('creator_id', 'creatorId'),                            # DTO 字段名说明中提及列名
+]
+
+
 def check_c8_banned():
     """C8 禁用词扫描：陈旧概念、已废弃表名、版本演进措辞"""
+    banned = dict(BANNED)
+    banned['is_deleted'] = '软删除已统一为 deleted_at 时间戳'
     for path in MD_FILES + [DDL_PATH]:
         if path.endswith('00-原始需求.md'):
             continue     # 需求基线允许出现"不采用班级制"这类对照表述
         for i, line in enumerate(read(path).split('\n'), 1):
-            for word, why in BANNED.items():
-                if word in line:
-                    report('ERROR', 'C8', path, f'第 {i} 行出现 `{word}`（{why}）')
+            for word, why in banned.items():
+                if word not in line:
+                    continue
+                if any(w == word and ctx in line for w, ctx in ALLOW):
+                    continue
+                report('ERROR', 'C8', path, f'第 {i} 行出现 `{word}`（{why}）')
+
+
+# ====================================== C9 概念 ↔ 编号绑定（node_type / user_type）
+
+# 权威映射取自契约第 5 节；同义词一并登记，避免"导师"写成 3 之类的漏网
+TYPE_MAP = {
+    '平台超管': 0, '超管': 0, '平台超级管理员': 0,
+    '管理员': 1, '机构管理员': 1, '下级管理员': 1, '机构最高管理员': 1,
+    '教师': 2, '导师': 2,
+    '学生': 3, '学员': 3,
+}
+_FIELD = r'(?:node_?[Tt]ype|user_?[Tt]ype)'
+# ① 概念紧跟编号：「教师（node_type=2）」——先剥掉 markdown 的 ** 与反引号再匹配
+_PAT_NAME_FIRST = re.compile(r'([一-龥]{2,6})[（(](?:→[^（）]*，)?' + _FIELD + r'\s*[=＝]\s*(\d)')
+# ② 编号紧跟概念：「node_type=2（教师）」
+_PAT_NUM_FIRST = re.compile(_FIELD + r'\s*[=＝]\s*(\d)\s*[（(]([一-龥]{2,6})[）)]')
+# ③ 整串枚举：「node_type：0平台超管 1管理员 2教师 3学生」/「(1机构 2管理员 3教师 4学生)」
+_PAT_ENUM_HEAD = re.compile(_FIELD + r'[^\n]{0,24}?[（(：:]')
+_PAT_ENUM_PAIR = re.compile(r'(\d)\s*([一-龥]{2,5})')
+# ④ DDL 列注释：「导师节点ID（→org_node.id，node_type=2）」——概念在注释开头
+_PAT_DDL_COMMENT = re.compile(r"COMMENT\s+'([一-龥]{2,6})节点ID[^']*?" + _FIELD + r'\s*[=＝]\s*(\d)')
+
+
+def _lookup(name):
+    """名字可能带前缀（如「作答时刻导师」），取最长后缀匹配"""
+    for key in sorted(TYPE_MAP, key=len, reverse=True):
+        if name.endswith(key):
+            return key, TYPE_MAP[key]
+    return None, None
+
+
+def check_c9_type_binding():
+    """C9 中文概念与 node_type / user_type 数值的绑定必须处处一致
+
+    真实缺陷：node_type 从 {1机构,2管理员,3教师,4学生} 收敛为 {0超管,1管理员,2教师,3学生}
+    后，契约停用语义表把教师写成 1（与管理员撞号）、学生写成 2；DDL 有 7 处
+    teacher_node_id 注释仍写 node_type=3（新编号里 3 是学生）；PRD F1-3 整列是旧编号；
+    契约 §4 表清单整条枚举没改。这类错误不改变任何标识符名称，全文搜索 node_type
+    能找到全部位置，但每一处该改成什么必须逐个读语义——机械替换必然出错，而改错了
+    不会报编译错误，只会在运行时表现为"教师被当成学生"。
+
+    四种句式全查：概念在前、编号在前、整串枚举、DDL 列注释。
+    """
+    for path in MD_FILES + [DDL_PATH]:
+        for i, raw in enumerate(read(path).split('\n'), 1):
+            line = raw.replace('**', '').replace('`', '')
+
+            for m in _PAT_NAME_FIRST.finditer(line):
+                # 只认完整概念词。「某位导师的名下学员（node_type = 2）」里的注解属于
+                # 导师而非学员，后缀匹配会误判——这类归属歧义机械上无法消解，宁可漏
+                want = TYPE_MAP.get(m.group(1))
+                key = m.group(1) if want is not None else None
+                if key and want != int(m.group(2)):
+                    report('ERROR', 'C9', path,
+                           f'第 {i} 行「{m.group(1)}」写作 {m.group(0).split("(")[-1]}，应为 {want}')
+
+            for m in _PAT_NUM_FIRST.finditer(line):
+                want = TYPE_MAP.get(m.group(2))
+                key = m.group(2) if want is not None else None
+                if key and want != int(m.group(1)):
+                    report('ERROR', 'C9', path,
+                           f'第 {i} 行 node_type={m.group(1)} 标注为「{m.group(2)}」，应为 {want}')
+
+            # 整串枚举：从 node_type 后的第一个括号/冒号起，取连续的「数字+概念」对
+            for h in _PAT_ENUM_HEAD.finditer(line):
+                seg = line[h.end():h.end() + 60]
+                pairs = _PAT_ENUM_PAIR.findall(seg)
+                if len(pairs) < 3:
+                    continue                      # 少于 3 对不视为枚举串，避免误报
+                for num, name in pairs:
+                    key, want = _lookup(name)
+                    if key and want != int(num):
+                        report('ERROR', 'C9', path,
+                               f'第 {i} 行枚举串把 {num} 标为「{name}」，应为 {want}')
+
+            for m in _PAT_DDL_COMMENT.finditer(raw):
+                key, want = _lookup(m.group(1))
+                if key and want != int(m.group(2)):
+                    report('ERROR', 'C9', path,
+                           f'第 {i} 行注释「{m.group(1)}节点ID」却写 node_type={m.group(2)}，'
+                           f'应为 {want}')
+
+
+# ============ C12 承重论证的锚句必须存在（防"全局替换把前提也替换了"）
+
+# 这些句子是某个设计决策的**理由**所在。理由被改坏时文档读起来依然通顺，
+# 机械检查也查不出矛盾——只能反过来断言"这句话必须在"。
+ANCHORS = [
+    (os.path.join(DOCS, 'DESIGN-CONTRACT.md'),
+     '若用 `is_deleted` 这类 0/1 标志',
+     '软删除用时间戳的论证前提。曾被全局替换写成「若用 `deleted_at`」，'
+     '变成先说本方案有此缺陷、再说本方案解决了它，整段论证自毁'),
+    (os.path.join(DOCS, 'DESIGN-CONTRACT.md'),
+     "`P = (ancestors = '' ? CAST(id AS CHAR) : CONCAT(ancestors,',',id))`",
+     '前缀 LIKE 的空串分支。省掉它超管取全平台会静默返回空集'),
+    (os.path.join(DOCS, 'DESIGN-CONTRACT.md'),
+     '`ref_user_id` **全部节点非空**',
+     '「每个节点都是一个人」的落库形式，删掉它组织单元节点就会复活'),
+    (os.path.join(DOCS, '02-数据库设计.md'),
+     '绝不可写成',
+     '移动节点维护 student_count 时的反面写法警示，防后人改回 FIND_IN_SET(列, 常量串)'),
+]
+
+
+def check_c12_anchors():
+    """C12 承重论证的锚句必须逐字存在"""
+    for path, anchor, why in ANCHORS:
+        if anchor not in read(path):
+            report('ERROR', 'C12', path, f'缺失承重锚句 `{anchor[:40]}`——{why}')
+
+
+# ============================== C10 列类型与注释语义一致（DDL）
+
+_COL_DEF = re.compile(
+    r"^\s+`(?P<col>\w+)`\s+(?P<type>[A-Z]+(?:\(\d+(?:,\d+)?\))?)"
+    r"(?P<rest>.*?)(?:COMMENT\s+'(?P<comment>(?:[^']|'')*)')?\s*,?\s*$")
+
+BOOL_WORDS = ('0否 1是', '0否1是', '0=否', '0 否 1 是')
+
+
+def check_c10_type_semantics(tables):
+    """C10 DDL 列的数据类型必须与其注释描述的语义相符
+
+    真实缺陷：deleted_at 从 TINYINT(0/1) 改为 BIGINT 毫秒时间戳后，22 张表的列注释
+    仍写「0否 1是」，另外 23 张写了新语义——几乎对半开。按字面注释实现就是写 1 而
+    不是时间戳，整个改造的收益（同一业务键容纳多条已删除行）完全落空，还退化成一个
+    更难读的 0/1。类型改了、注释没跟上，是重构里最不容易被发现的一类残留。
+    """
+    for tname, t in tables.items():
+        seen_deleted_at = False
+        for n, line in t['lines']:
+            m = _COL_DEF.match(line)
+            if not m:
+                continue
+            col, typ = m.group('col'), m.group('type').upper()
+            comment = m.group('comment') or ''
+            if typ.startswith('BIGINT') and any(w in comment for w in BOOL_WORDS):
+                report('ERROR', 'C10', DDL_PATH,
+                       f'{tname}.{col} 第 {n} 行类型 {typ}，注释却是布尔语义「{comment[:26]}」')
+            if typ.startswith('TINYINT') and ('毫秒时间戳' in comment):
+                report('ERROR', 'C10', DDL_PATH,
+                       f'{tname}.{col} 第 {n} 行类型 {typ}，注释却称其为毫秒时间戳')
+            if col == 'deleted_at':
+                seen_deleted_at = True
+                if not typ.startswith('BIGINT'):
+                    report('ERROR', 'C10', DDL_PATH,
+                           f'{tname}.deleted_at 第 {n} 行类型为 {typ}，'
+                           f'契约 §2.2 要求 BIGINT 毫秒时间戳')
+                elif '时间戳' not in comment:
+                    report('WARN', 'C10', DDL_PATH,
+                           f'{tname}.deleted_at 第 {n} 行注释未说明其为时间戳：「{comment[:26]}」')
+        del seen_deleted_at
+
+
+# ================== C11 接口编号交叉引用完整性（分册内 + 跨分册）
+
+_TOC_ROW = re.compile(r'^\| (\d+) \| ([^|]+?) \| (GET|POST|PUT|DELETE|PATCH) \| `([^`]+)`', re.M)
+
+
+def check_c11_interface_refs():
+    """C11 正文里的「接口 N」必须指向本分册目录表中真实存在的编号
+
+    真实缺陷：删除失效的"新建节点""删除节点"两个接口后，02 分册全部 48 个接口
+    要重新编号，而正文里有 80 处「接口 N」交叉引用、还有 30 行错误码登记表用
+    **不带"接口"前缀的裸编号列**（`9 / 10 / 13 / 14 / 18`）记录触发接口——后者极易
+    整块漏掉。编号错了不会有任何症状，只会把读文档的人指到另一个接口上。
+    """
+    for path in API_FILES:
+        text = read(path)
+        toc = {int(m.group(1)): m.group(2).strip() for m in _TOC_ROW.finditer(text)}
+        if not toc:
+            continue                       # 00-通用约定 无接口目录
+        if sorted(toc) != list(range(1, len(toc) + 1)):
+            report('ERROR', 'C11', path,
+                   f'目录表编号不连续：{sorted(toc)[:12]}… 共 {len(toc)} 项')
+        for i, line in enumerate(text.split('\n'), 1):
+            for m in re.finditer(r'接口\s*(\d+)', line):
+                n = int(m.group(1))
+                # 跨分册引用形如「03-课程与视频接口 26」，不按本册目录校验
+                if re.search(r'0\d-[^\s]{0,10}接口\s*$', line[:m.start() + 2]):
+                    continue
+                if n not in toc:
+                    report('ERROR', 'C11', path,
+                           f'第 {i} 行引用「接口 {n}」，本分册目录只有 1~{len(toc)}')
+            # 带名称注解的引用，顺带核对名称是否对得上
+            for m in re.finditer(r'接口\s*(\d+)（([^）]{2,20})）', line):
+                n, label = int(m.group(1)), m.group(2)
+                if n in toc:
+                    a, b = label.replace(' ', ''), toc[n].replace(' ', '')
+                    if a not in b and b not in a:
+                        report('WARN', 'C11', path,
+                               f'第 {i} 行「接口 {n}（{label}）」与目录名「{toc[n]}」不符')
 
 
 # ==================================================================== main
@@ -365,6 +578,10 @@ def main():
         ('C6', lambda: check_c6_table_count(tables)),
         ('C7', check_c7_markdown),
         ('C8', check_c8_banned),
+        ('C9', check_c9_type_binding),
+        ('C10', lambda: check_c10_type_semantics(tables)),
+        ('C11', check_c11_interface_refs),
+        ('C12', check_c12_anchors),
     ]
     for code, fn in checks:
         if only and code != only:
@@ -380,6 +597,10 @@ def main():
         'C6': '表清单 DDL = 契约',
         'C7': 'Markdown 健康度（JSON / 表格 / 围栏）',
         'C8': '禁用词与陈旧内容',
+        'C9': '概念 ↔ node_type/user_type 编号绑定',
+        'C10': 'DDL 列类型与注释语义相符',
+        'C11': '接口编号交叉引用完整性',
+        'C12': '承重论证锚句存在性',
     }
     errors = [r for r in results if r[0] == 'ERROR']
     warns = [r for r in results if r[0] == 'WARN']

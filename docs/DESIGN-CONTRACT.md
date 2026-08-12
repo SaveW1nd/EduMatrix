@@ -43,15 +43,15 @@ remark        VARCHAR(500) NULL      备注
 ```
 - 主键统一 `id BIGINT`（雪花，非自增）。
 - 第 4 节表清单的"关键字段"列为**要点摘录，非穷举**；字段全集以 DDL 为准，DDL 可增列但不得与契约已列字段冲突。
-- **所有 `creator_id` / `*_by` 类人员字段一律指向 `sys_user.id`**，不指向 `org_teacher.id`——因为管理员与教师都可能是创建者，而管理员没有 `org_teacher` 档案行。
+- **所有 `*_by` 类人员字段一律指向 `sys_user.id`**，不指向 `org_teacher.id`——因为管理员与教师都可能是创建者，而管理员没有 `org_teacher` 档案行。**不设 `creator_id` 这类专用创建人列**：署名一律用公共字段 `create_by`，归属一律用 `owner_node_id`（见 §4 资源归属唯一化）。
 - 核心业务数据（课程/题目/作业/答卷）**禁止物理删除**，一律写 `deleted_at = 当前毫秒时间戳`。
-- **软删除用时间戳而非 0/1 标志**：唯一索引末尾统一追加 `deleted_at`。若用 `deleted_at`，同一业务键**最多只能容纳一条已删除行**——"打标 → 去标 → 再打标 → 再去标"到第二次去标就撞唯一键，而这类反复增删在 `org_student_tag`、`sys_user_role`、`hw_answer_detail` 上都是常规操作。时间戳方案下每次删除值不同，可容纳任意多条，且白得一个删除时间用于审计。MyBatis-Plus 用 `@TableLogic(value="0", delval="UNIX_TIMESTAMP(NOW(3))*1000")` 原生支持。
+- **软删除用时间戳而非 0/1 标志**：唯一索引末尾统一追加 `deleted_at`。若用 `is_deleted` 这类 0/1 标志，同一业务键**最多只能容纳一条已删除行**——"打标 → 去标 → 再打标 → 再去标"到第二次去标就撞唯一键，而这类反复增删在 `org_student_tag`、`sys_user_role`、`hw_answer_detail` 上都是常规操作。时间戳方案下每次删除值不同，可容纳任意多条，且白得一个删除时间用于审计。MyBatis-Plus 用 `@TableLogic(value="0", delval="UNIX_TIMESTAMP(NOW(3))*1000")` 原生支持。
 - 日志/心跳明细表可例外（允许归档清理；可不带 `update_by` / `remark`，登录与操作日志另可省略 `create_by` / `create_time`，改由 `login_time` / `oper_time` 承担业务时间）。
 
 
 ### 2.3 统一组织树
 
-**系统中的每一个组织单元与人员都是同一棵树上的节点**，从平台超管一路到学生，一棵树到底。表：`org_node`。
+**系统中的每一个人都是同一棵树上的节点**，从平台超管一路到学生，一棵树到底。表：`org_node`。
 
 **每个节点都是一个人**，不存在独立于人的"组织单元"节点。`node_type` 与 `user_type` 取值**完全一致**，一一对应：
 
@@ -79,8 +79,8 @@ remark        VARCHAR(500) NULL      备注
 | 停用对象 | 效果 | 理由 |
 | --- | --- | --- |
 | **管理员**（`node_type=1`） | **本人及其整棵子树全部禁止登录**（分支冻结） | 停用一个管理员就是停掉他管的这一片——分部关停、欠费停服、合规冻结都是这个意图 |
-| **教师**（`node_type=1`） | **仅本人**；名下学员照常登录学习 | 教师离职/停职/请假时，学员的课程授权仍在，必须能继续学。级联会让整批学员突然登不进去，是业务事故 |
-| **学生**（`node_type=2`） | 仅本人 | 无子树 |
+| **教师**（`node_type=2`） | **仅本人**；名下学员照常登录学习 | 教师离职/停职/请假时，学员的课程授权仍在，必须能继续学。级联会让整批学员突然登不进去，是业务事故 |
+| **学生**（`node_type=3`） | 仅本人 | 无子树 |
 
 **实现必须走"登录时查祖先链"，不做级联写库**：
 
@@ -119,7 +119,7 @@ SELECT 1 FROM org_node
 | 角色 / 场景 | 执行写法 | 命中索引 |
 | --- | --- | --- |
 | **教师（最高频）** | 子树 ≡ 直接子节点，退化为 `WHERE parent_id = #{myNodeId} AND node_type = 3` | `idx_parent_type` |
-| **管理员：取整棵子树** | 先用前缀 LIKE 解析出子树节点 ID 集合（`ancestors = P OR ancestors LIKE CONCAT(P,',%')`，`P = (ancestors = '' ? CAST(id AS CHAR) : CONCAT(ancestors,',',id))`——**空串分支不可省**：平台根 `ancestors=''`、`id=0`，若直接 CONCAT 得 `',0'`，而机构节点 `ancestors='0'` 既不等于 `',0'` 也不 LIKE `',0,%'`，超管取全平台会静默返回空集），再对业务表 `WHERE node_id IN (...)`；结果集可缓存至 Redis，节点移动时失效 | `idx_ancestors(255)` |
+| **管理员：取整棵子树** | 先用前缀 LIKE 解析出子树节点 ID 集合（`ancestors = P OR ancestors LIKE CONCAT(P,',%')`，`P = (ancestors = '' ? CAST(id AS CHAR) : CONCAT(ancestors,',',id))`——**空串分支不可省**：平台根 `ancestors=''`、`id=0`，若直接 CONCAT 得 `',0'`，而机构根节点 `ancestors='0'` 既不等于 `',0'` 也不 LIKE `',0,%'`，超管取全平台会静默返回空集），再对业务表 `WHERE node_id IN (...)`；结果集可缓存至 Redis，节点移动时失效 | `idx_ancestors(255)` |
 | **管理员：逐层浏览** | 按 `parent_id` 逐层展开（树懒加载、面包屑） | `idx_tenant_parent_sort` |
 | **离线巡检 / 已被 tenant_id 收敛的小结果集** | 可直接用 `FIND_IN_SET` | 无（可接受） |
 
@@ -173,10 +173,16 @@ SELECT 1 FROM org_node
      不加这条会形成资产穿透：教师 T 持有校区 A 的课程 K1~K10，调岗到校区 B 后仍"拥有"这些课程，可以合法地授给 B 的新学员——只要促成一次调岗，A 的课程资产就进入 B 的分支并可无限复制。
      判定：授权行的 `target_node_id` 当前祖先链**不再包含**该资源 `owner_node_id` 或其有效授权链时，该行只读。
 
+10. **撤销授权与已分发作业解耦**：撤销课程授权**不影响已分发的作业**（作业是已下达的任务，不是资源）。学员仍可作答、教师仍可批改、成绩仍计入统计；仅失去课程内容的继续访问权。否则会出现作业中途消失、成绩缺失的严重业务事故。
+
 11. **受管资源的授权目标类型限制**：`resource_type` 为 2（题目）或 3（视频）时**不得授权给学生节点**（`node_type=3`）。
     学生侧没有题目/视频的直接使用入口——作答走 `hw_homework_target` + 固化版本，播放走课程授权，错题本走 `question_version` 快照，三条路径都与题目/视频授权解耦。授给学生的行永远不会被任何鉴权路径读到，只会放大授权表规模并制造"悬挂授权"误报。
 
-10. **撤销授权与已分发作业解耦**：撤销课程授权**不影响已分发的作业**（作业是已下达的任务，不是资源）。学员仍可作答、教师仍可批改、成绩仍计入统计；仅失去课程内容的继续访问权。否则会出现作业中途消失、成绩缺失的严重业务事故。
+12. **资源被删除/停用时，授权行一律保留，不做级联撤销**（与规则 5 的边界，务必分清）：
+    - 规则 5 的级联，触发条件是**撤销某个节点对某资源的授权**——沿目标节点子树级联，解决的是"父级已无权、子级仍持有"。
+    - 本条针对的是**资源自身被逻辑删除或停用**（课程下架、视频禁用 `status=9`、题目停用、题目/课程逻辑删除）。此时 `org_resource_grant` 的行**原样保留**，可用性由**资源状态**在使用侧拒绝（课程 `20013`、题目与视频按可见性 404）。
+    - 理由：资源状态是可逆的（下架可再上架、停用可再启用、软删可恢复），而级联撤销不可逆——一次误下架就会清空全机构成百上千条授权，恢复上架后所有人依然无权，只能逐级重授。保留授权行则资源恢复后授权自动重新生效。
+    - 因此**任何"删除资源"接口都不得写"级联撤销其全部授权行"**；巡检时指向已删除/已停用资源的授权行**不计为悬挂授权**（见规则 6 的分类计数）。
 
 **权限模板（解决逐级显式授权的操作成本）**：
 
@@ -231,7 +237,7 @@ SELECT 1 FROM org_node
 | 角色 | role_key | user_type | 绑定节点类型 | 可执行的关键操作 |
 | --- | --- | --- | --- | --- |
 | 平台超管 | `super_admin` | 0 | 平台（树根） | 租户开通、平台配置 |
-| 管理员 | `org_admin` | 1 | 机构 / 管理员节点 | 建下级管理员、建教师、建学生、分配学员、资源下发、全模块管理 |
+| 管理员 | `org_admin` | 1 | 管理员节点（机构根节点即机构最高管理员） | 建下级管理员、建教师、建学生、分配学员、资源下发、全模块管理 |
 | 教师 / 导师 | `teacher` | 2 | 教师节点 | 备课、组卷、给名下学员发课程与作业、批改、看名下看板 |
 | 学生 | `student` | 3 | 学生节点 | 学习、作答、看本人档案 |
 
@@ -259,7 +265,7 @@ SELECT 1 FROM org_node
 ### org_（10）
 | 表名 | 说明 | 关键字段 |
 | --- | --- | --- |
-| **`org_node`** | **统一组织树（所有节点：机构/管理员/教师/学生）** | parent_id(根为0), **ancestors**(逗号祖级串), node_name, **node_type**(1机构2管理员3教师4学生), **ref_user_id**(管理员/教师/学生节点指向 sys_user，机构节点为空), sort, status(0正常1停用), child_count/student_count(冗余) |
+| **`org_node`** | **统一组织树（所有节点都是人：平台超管/管理员/教师/学生）** | parent_id(根为0), **ancestors**(逗号祖级串), node_name, **node_type**(0平台超管 1管理员 2教师 3学生，取值同 sys_user.user_type), **ref_user_id**(NOT NULL，每个节点都是一个人，指向 sys_user.id), sort, status(0正常1停用), child_count/student_count(冗余) |
 | `org_teacher` | 教师档案（1:1 节点） | node_id UK, user_id UK, teacher_no, subject, title, entry_date, student_count(冗余) |
 | `org_student` | 学生档案（1:1 节点） | node_id UK, user_id UK, student_no, guardian_name, guardian_phone, **status**(0在读1已退课2毕业归档), **quit_time**, **quit_reason**, archive_time |
 | **`org_node_change_log`** | 节点异动轨迹（移动/分配/转交/归档） | node_id, change_type(1建档2分配导师3转交管理员4教师调岗5毕业归档6归档恢复7退课**8节点移动**), from_parent_id, to_parent_id, change_time, operator_id, reason |
@@ -294,7 +300,7 @@ SELECT 1 FROM org_node
 | 表名 | 说明 | 关键字段 |
 | --- | --- | --- |
 | `qb_category` | 题库分类树（科目/知识点） | parent_id, category_name, sort |
-| `qb_question` | 题目主表（物理 ID 恒定） | id(雪花,永不复用), **owner_node_id**(归属节点), category_id, question_type(1单选2多选3判断4填空5简答6材料题), parent_id(子题→父题id), difficulty(1-5), current_version, stem_preview, creator_id, status(0草稿1启用2停用) |
+| `qb_question` | 题目主表（物理 ID 恒定） | id(雪花,永不复用), **owner_node_id**(归属节点), category_id, question_type(1单选2多选3判断4填空5简答6材料题), parent_id(子题→父题id), difficulty(1-5), current_version, stem_preview, status(0草稿1启用2停用)（创建人取公共字段 `create_by`） |
 | `qb_question_version` | 题目版本快照（不可变） | question_id, version, content(JSON), correct_answer(JSON), analysis, score_default, created_by, created_time；UK(question_id,version) |
 
 **版本规则**：编辑题目 = 写入新 `qb_question_version`（version+1）并更新 `current_version`；历史版本不可修改、不可删除。
@@ -302,7 +308,7 @@ SELECT 1 FROM org_node
 ### hw_（6）
 | 表名 | 说明 | 关键字段 |
 | --- | --- | --- |
-| `hw_homework` | 作业/试卷定义（**注：作业不是"受管资源"**，不可经 `org_resource_grant` 下发；`owner_node_id` 仅作归属锚点与数据权限依据） | homework_name, homework_type(1作业2考试), **owner_node_id**, course_id(可空), creator_id, total_score, question_count(冗余), deadline, publish_time, allow_late_submit, answer_visible_type(1提交后2截止后), status(0草稿1已发布2已截止3已撤回) |
+| `hw_homework` | 作业/试卷定义（**注：作业不是"受管资源"**，不可经 `org_resource_grant` 下发；`owner_node_id` 仅作归属锚点与数据权限依据） | homework_name, homework_type(1作业2考试), **owner_node_id**, course_id(可空), total_score, question_count(冗余), deadline, publish_time, allow_late_submit, answer_visible_type(1提交后2截止后), status(0草稿1已发布2已截止3已撤回) |
 | `hw_homework_question` | 作业-题目（**发布时固化版本**） | homework_id, question_id, question_version(锁定), score, sort；UK(homework_id,question_id) |
 | **`hw_homework_target`** | **分发对象（全量精确到学生）** | homework_id, **student_id**（原 target_type/target_id 废弃）, **grant_source**(1手动选择2按节点批量3按标签批量4按名下全体), source_ref_id(可空)；UK(homework_id,student_id) |
 | **`hw_answer_sheet`** | 学生答卷 | homework_id, student_id, **teacher_node_id**(作答时导师节点快照，取代 class_id), status(0未开始1作答中2已提交待批改3已批改4逾期未交), objective_score, subjective_score, total_score, submit_time, is_late, grade_teacher_id, grade_time；UK(homework_id,student_id) |
@@ -341,7 +347,7 @@ SELECT 1 FROM org_node
 | user_type | 0平台超管 1管理员 2教师 3学生 |
 | **node_type 节点类型** | **0平台超管 1管理员 2教师 3学生**（与 `user_type` 取值完全一致，一一对应） |
 | **student_status 学籍状态** | **0在读 1已退课(流失) 2毕业归档** |
-| **change_type 节点异动类型** | **1建档 2分配导师 3转交管理员 4教师调岗 5毕业归档 6归档恢复 7退课 8节点移动(机构/管理员节点自身改父)** |
+| **change_type 节点异动类型** | **1建档 2分配导师 3转交管理员 4教师调岗 5毕业归档 6归档恢复 7退课 8节点移动(管理员节点自身改父)** |
 | **resource_type 受管资源类型** | **1课程 2题目 3视频** |
 | **grant_source 授权/分发来源** | **1手动选择 2按节点批量 3按标签批量 4按名下全体 5按权限模板** |
 | watch_status 完播状态 | 0未开始 1学习中 2已完成 |
@@ -373,7 +379,7 @@ SELECT 1 FROM org_node
 - 分页请求：`pageNum`(默认1), `pageSize`(默认10, 最大100)；分页响应 `data: {"total": 100, "list": [...]}`，允许附加可选 `summary`
 - 所有 bigint ID 序列化为**字符串**
 - 时间格式：`yyyy-MM-dd HH:mm:ss`（东八区）
-- 逻辑删除统一用 `DELETE` 方法（后端执行 deleted_at=1）
+- 逻辑删除统一用 `DELETE` 方法（后端将 `deleted_at` 由 0 置为**当前毫秒时间戳**，非 0/1 标志，见 §2.2）
 
 ### 6.2 模块路由前缀（权威）
 | 前缀 | 模块 | 文档归属 |
