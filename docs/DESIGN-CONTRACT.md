@@ -306,7 +306,7 @@ SELECT 1 FROM org_node
 | `hw_homework_question` | 作业-题目（**发布时固化版本**） | homework_id, question_id, question_version(锁定), score, sort；UK(homework_id,question_id) |
 | **`hw_homework_target`** | **分发对象（全量精确到学生）** | homework_id, **student_id**（原 target_type/target_id 废弃）, **grant_source**(1手动选择2按节点批量3按标签批量4按名下全体), source_ref_id(可空)；UK(homework_id,student_id) |
 | **`hw_answer_sheet`** | 学生答卷 | homework_id, student_id, **teacher_node_id**(作答时导师节点快照，取代 class_id), status(0未开始1作答中2已提交待批改3已批改4逾期未交), objective_score, subjective_score, total_score, submit_time, is_late, grade_teacher_id, grade_time；UK(homework_id,student_id) |
-| `hw_answer_detail` | 逐题作答明细 | answer_sheet_id, question_id, question_version(快照), student_answer(JSON), is_correct(0错1对2半对,待批改NULL), score, auto_graded, comment, grade_time |
+| `hw_answer_detail` | 逐题作答明细 | answer_sheet_id, question_id, question_version(快照), student_answer(JSON), is_correct(0错误 1正确 2半对，待批改 NULL；取值定义见第 5 节), score, auto_graded, comment, grade_time |
 | `hw_wrong_book` | 动态错题本 | student_id, question_id, question_version(**首次做错时刻的版本**), source_homework_id, source_answer_detail_id, wrong_count, first_wrong_time, last_wrong_time, master_status, master_time；UK(student_id,question_id) |
 
 ### stat_（4）
