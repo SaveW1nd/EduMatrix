@@ -10,7 +10,7 @@
 - 借鉴模块 → EduMatrix 对应：`sys_*` 全部表、登录认证、RBAC、多租户、数据权限
 - 重点阅读路径：
   - `ruoyi-common/ruoyi-common-tenant/` — 多租户插件（MyBatis-Plus TenantLineHandler），对应契约 §2.1
-  - `ruoyi-common/ruoyi-common-mybatis/.../DataPermissionHelper` 与 `@DataPermission` 注解 — 数据权限（DataScope），对应"教师仅看自己班级"
+  - `ruoyi-common/ruoyi-common-mybatis/.../DataPermissionHelper` — 数据权限的**注入位置**可借鉴，但**判定规则一律不抄**：本系统不设 DataScope 分档、`sys_role` 无 `data_scope` 字段，只有"你能看到的数据 = 你所在节点的子树"一条规则（契约 §2.4 / §3）；也没有"班级"这个概念——教师的直接子节点即名下学员
   - `ruoyi-common/ruoyi-common-satoken/` — Sa-Token 登录与权限校验
   - `ruoyi-modules/ruoyi-system/` — 用户/角色/菜单 CRUD 的 Controller-Service-Mapper 分层范式
 
@@ -43,7 +43,7 @@
 
 ### 5. 云端 VOD（无仓库，文档参考）
 - 阿里云 VOD：https://help.aliyun.com/product/29932.html （PlayAuth 播放凭证模式）
-- 对应契约表：`vod_video`（provider 字段区分厂商），接口 `POST /api/v1/vod/upload-token`、`POST /api/v1/vod/play-auth`、`POST /api/v1/vod/callback/{provider}`
+- 对应契约表：`vod_video`；接口 `POST /api/v1/vod/videos/upload-token`、`POST /api/v1/vod/play-auth`、`GET /api/v1/vod/decrypt-key`；转码事件经 XXL-Job 拉取 SMQ 消费（03-课程与视频 §7.2），**无 HTTP 回调端点**
 
 ## 克隆维护
 

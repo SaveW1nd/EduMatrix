@@ -29,8 +29,12 @@ DOCS = os.path.join(ROOT, 'docs')
 DDL_PATH = os.path.join(DOCS, 'sql', 'edumatrix_ddl.sql')
 REGISTRY = os.path.join(DOCS, '03-API接口文档', '00-通用约定.md')
 
+# 扫描范围。注意 scripts/README.md 故意不在列内：它的失败模式表大量点名已废弃的
+# 写法（"把教师写成 node_type=1"、"退回旧枚举 1机构 2管理员 3教师 4学生"等）作为
+# 反例，纳入后 C8/C9 会把这些引用整片报成误报——而那些引用正是该文件的内容本身。
 MD_FILES = [
     os.path.join(ROOT, 'README.md'),
+    os.path.join(ROOT, 'references', 'README.md'),
     os.path.join(DOCS, 'DESIGN-CONTRACT.md'),
     os.path.join(DOCS, '00-原始需求.md'),
     os.path.join(DOCS, '01-PRD-产品需求文档.md'),
