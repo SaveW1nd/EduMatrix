@@ -234,7 +234,11 @@ public final class TenantHelper {
     }
 
     /**
-     * 仅供测试与容器关闭时使用：把三处 ThreadLocal 全部复位。
+     * 仅供测试与容器关闭时使用：把本类的<b>两处</b> ThreadLocal
+     * （{@code EXPLICIT_TENANT_ID} 与 {@code IGNORE_DEPTH}）全部复位。
+     *
+     * <p>另外两条取值路径（超管会话、会话租户）来自 {@link CurrentContextProvider}，
+     * 不是 ThreadLocal，不由本方法负责 —— 测试里要复位它们，换一个 provider 即可。
      *
      * <p>不要在业务代码里调它 —— 它会连同外层的上下文一起清掉。
      */

@@ -26,6 +26,18 @@ import java.util.function.Supplier;
  * TraceIdSupport.runWithNewTrace(schedulerTraceId, () -&gt;
  *     TenantHelper.runWithTenant(tenantId, () -&gt; settleService.settle(tenantId, date)));
  * </pre>
+ *
+ * <h2>已知边界：嵌套调用会丢外层的 parentTraceId（当前不触发，记录以免将来踩）</h2>
+ * <p>{@link #runWithNewTrace(String, Supplier)} 的 {@code finally} 里先
+ * {@code TraceIdHolder.clear()}（<b>同时移除 traceId 与 parentTraceId</b>），
+ * 再只恢复 {@code previous} 这一个 traceId。因此若<b>外层也是</b>一次
+ * {@code runWithNewTrace} 且设过 parentTraceId，内层退出后外层的 parentTraceId
+ * 恢复不回来 —— 外层剩下的日志会少一个 parent 字段。
+ *
+ * <p><b>当前只有单层使用</b>（Job / Worker / 消息消费各自是链路起点，不会互相嵌套），
+ * 所以不影响任何已有行为，故本次不改。真要嵌套时，把 {@code previous} 扩成
+ * 「traceId + parentTraceId 两个值的快照」再整体恢复即可，与
+ * {@code TenantHelper#runWithTenant} 的「恢复而非清空」是同一个套路。
  */
 public final class TraceIdSupport {
 

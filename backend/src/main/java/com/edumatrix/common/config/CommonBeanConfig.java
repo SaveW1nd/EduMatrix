@@ -5,6 +5,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
+import com.edumatrix.common.entity.AuditFieldHandler;
 import com.edumatrix.common.idempotent.IdempotentAspect;
 import com.edumatrix.common.subtree.NodeAncestorCache;
 import com.edumatrix.common.subtree.SubtreeScopeHelper;
@@ -21,6 +22,17 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  */
 @Configuration
 public class CommonBeanConfig {
+
+    /**
+     * 署名字段自动填充（{@code create_by} / {@code update_by}）。
+     *
+     * <p>注册在这里而不是 {@code MybatisPlusConfig}，是为了不去动那个文件 ——
+     * 租户拦截器的装配在那里，它是全系统最敏感的一处，改动面越小越好。
+     */
+    @Bean
+    public AuditFieldHandler auditFieldHandler() {
+        return new AuditFieldHandler();
+    }
 
     @Bean
     public NodeAncestorCache nodeAncestorCache(StringRedisTemplate redisTemplate,

@@ -24,11 +24,18 @@ spring:
   # --------------------------------------------------------------------------
   # 数据源
   #
-  # 【库名钉死为 edumatrix】Flyway 初始基线 V202608120000__baseline.sql 内含
-  #   CREATE DATABASE IF NOT EXISTS `edumatrix` 与 USE `edumatrix`（基线内容一字未改，
-  #   契约 §7.3 + 05-工程结构.md §B）。若数据源连的库不叫 edumatrix，41 张表会建到
-  #   edumatrix 里、而 flyway_schema_history 落在连接指定的那个库里 —— 两边分家且不报错。
-  #   因此 MYSQL_URL 必须指向 edumatrix，且 flyway.schemas 同名，两处不得分叉。
+  # 【MYSQL_URL 必须指向 edumatrix，且与 flyway.schemas 不得分叉】
+  #   Flyway 初始基线 V202608120000__baseline.sql 内含 CREATE DATABASE IF NOT EXISTS
+  #   `edumatrix` 与 USE `edumatrix`（基线内容一字未改，契约 §7.3 + 05-工程结构.md §B）。
+  #
+  #   实测（数据源指向 edumatrix_wrong、flyway.schemas=edumatrix）：业务表与
+  #   flyway_schema_history 【都】落在 edumatrix，两者不分家；migrate() 成功完成、
+  #   无任何报错；而 edumatrix_wrong 是空库。真正的后果是应用连接池此后连的是
+  #   URL 指定的那个空库 —— 迁移报成功、应用启动成功、业务查询全打在空库上。
+  #
+  # 【不要加 allowMultiQueries=true】Flyway 自己逐条执行迁移脚本，不需要它
+  #   （空库实测：41 表 / 7 分区 / 3 脚本全 success）。它是整个连接池全程生效的开关，
+  #   会把任何一处 SQL 拼接注入点从"读一行"放大成"追加 ; DROP TABLE ..."。
   # --------------------------------------------------------------------------
   datasource:
     url: ${MYSQL_URL}
@@ -54,7 +61,6 @@ spring:
     schemas: edumatrix
     baseline-on-migrate: false
     validate-on-migrate: true
-    # 基线脚本自带 CREATE DATABASE / USE，必须整段按原样送给 MySQL 执行
     encoding: UTF-8
 
   data:

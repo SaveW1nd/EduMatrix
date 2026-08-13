@@ -3,7 +3,9 @@ package com.edumatrix.common.entity;
 import java.io.Serializable;
 import java.time.LocalDateTime;
 
+import com.baomidou.mybatisplus.annotation.FieldFill;
 import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableLogic;
 
@@ -83,19 +85,32 @@ public abstract class BaseEntity implements Serializable {
     private Long id;
 
     /**
-     * 创建人 {@code user_id}。
+     * 创建人 {@code user_id}。由 {@link AuditFieldHandler} 在插入时自动填充。
      *
      * <p><b>一律指向 {@code sys_user.id}，不指向 {@code org_teacher.id}</b>（契约 §2.2）——
      * 管理员与教师都可能是创建者，而管理员没有 {@code org_teacher} 档案行。
      * <b>不设 {@code creator_id} 这类专用创建人列</b>：署名一律用本字段，
      * 归属一律用 {@code owner_node_id}，避免归属有两个真相源。
+     *
+     * <p><b>无会话入口下保持 {@code null}，不填 0</b> —— 理由见 {@link AuditFieldHandler}。
      */
+    @TableField(fill = FieldFill.INSERT)
     private Long createBy;
 
+    /**
+     * 创建时间。<b>不做 Java 侧填充</b>：DDL 已是 {@code DEFAULT CURRENT_TIMESTAMP}，
+     * 由数据库这一个时钟赋值（理由见 {@link AuditFieldHandler}）。
+     */
     private LocalDateTime createTime;
 
+    /** 更新人 {@code user_id}。由 {@link AuditFieldHandler} 在插入与更新时自动填充。 */
+    @TableField(fill = FieldFill.INSERT_UPDATE)
     private Long updateBy;
 
+    /**
+     * 更新时间。<b>不做 Java 侧填充</b>：DDL 已是
+     * {@code ON UPDATE CURRENT_TIMESTAMP}。
+     */
     private LocalDateTime updateTime;
 
     /**
