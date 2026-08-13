@@ -720,8 +720,13 @@ def check_c17_json_examples():
       1. 同一对象内 userType 与 nodeType 并存 → 必须相等（契约 §5 恒等）
       2. nodeType == 3（学生）→ childCount 必须为 0（学生是叶子）
       3. nodeType >= 4 → 一律错误（现编号只到 3）
+
+    扫描范围原为 `API_FILES`，于是 `04-实施计划.md` 与 `05-工程结构.md` 进了
+    `MD_FILES` 之后本项对它们**结构上仍然看不见**——与 C3 当年那次是同一物种
+    （见 README「扫描范围 ≠ 覆盖」）。改为 `MD_FILES` 后全库 0 条新增报错，
+    零代价；注入 `userType=2` 配 `nodeType=3` 可正常报出。
     """
-    for path in API_FILES:
+    for path in MD_FILES:
         text = read(path)
         for m in re.finditer(r'```json\n(.*?)```', text, re.S):
             body = '\n'.join(l for l in m.group(1).split('\n')
