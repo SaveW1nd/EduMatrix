@@ -819,6 +819,7 @@ CREATE TABLE `vod_heartbeat_log` (
   `current_time_sec` DECIMAL(10,1) NOT NULL DEFAULT 0.0    COMMENT '心跳上报时的播放位置（秒，对应请求体 currentTime；命名已避开保留字）',
   `interval_sec`     INT           NOT NULL DEFAULT 0      COMMENT '与上次心跳的实际间隔（秒，>=8s 视为有效，单次计入 min(实际间隔,15)）',
   `seeked`           TINYINT       NOT NULL DEFAULT 0      COMMENT '本次心跳前是否发生 seek 或暂停恢复：0否 1是（对应请求体 seeked）。必须落库——它决定本次是否执行推进一致性校验（03-课程与视频 8.2.1 规则 6），不记录就无法回放这条心跳当时为什么被采纳或丢弃，而本表是防刷审计与进度争议回溯的唯一依据；同时供风控统计 seeked 频次：连续 >2 次或单课时每小时 >20 次即判异常，防脚本恒置 true 关闭规则 6',
+  `reject_rule`      TINYINT       NOT NULL DEFAULT 0      COMMENT '本条心跳的判定结果：0=采纳并计时；1~9=被 8.2.1 第 N 条规则拒绝（2 间隔、3 拖拽、5 参数非法、6 推进一致性、7 并发课时、8 时长封顶、9 会话冲突）。本表是防刷审计与进度争议回溯的唯一依据，而此前没有任何一列记录"这条到底算没算、为什么没算"——只能从 interval_sec<8 反推规则 2，规则 3/6/7/8/9 的拒绝完全不可追溯。1 字节换全链路可回放。不记 sessionId 是权衡结果：CHAR(32) 在常驻 0.95 亿行上多占约 3GB（+25%），而排查真正需要的是"为什么被拒"而非"哪个会话"',
   `client_ip`        VARCHAR(64)   NULL DEFAULT NULL       COMMENT '客户端 IP',
   `device`           VARCHAR(200)  NULL DEFAULT NULL       COMMENT '设备/浏览器标识（UA 摘要）',
   `created_time`     DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '心跳时间（分区键）',

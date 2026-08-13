@@ -559,6 +559,53 @@ def check_c14_column_sets(tables):
                    f'`{name}`：文档字段表有而 DDL 缺 {only_doc}')
 
 
+# ============ C15 心跳请求体签名三处一致（契约 §6.4 / PRD F2-7 / 03-03）
+
+def check_c15_heartbeat_signature():
+    """C15 心跳请求体的字段集与字段序，三处必须逐字一致
+
+    契约把心跳称作"最高频接口，签名固定"，正因为固定，改动只在实现前便宜——
+    而它已经改过两次（补 seeked 解 seek 复看被误判、补 sessionId 解多端并发永久归零）。
+    每改一次就要同步三个文件，漏一处就是前后端对不上，且这类不一致直到联调才暴露。
+
+    契约与 PRD 里是一行 `Body: {...}` 字面量，03-03 里是参数表，形态不同故分别解析。
+    """
+    got = {}
+
+    for label, path in [('契约 §6.4', os.path.join(DOCS, 'DESIGN-CONTRACT.md')),
+                        ('PRD F2-7', os.path.join(DOCS, '01-PRD-产品需求文档.md'))]:
+        for line in read(path).split('\n'):
+            if line.startswith('Body: {"lessonId"'):
+                got[label] = re.findall(r'"(\w+)":', line)
+                break
+
+    vol = os.path.join(DOCS, '03-API接口文档', '03-课程与视频.md')
+    text = read(vol)
+    anchor = '**请求参数（Body，契约 6.4 固定签名）**'
+    if anchor in text:
+        seg = text[text.index(anchor):][:2500]
+        got['03-03 参数表'] = re.findall(r'^\| (\w+) \| \w+ \| 是 \|', seg, re.M)
+
+    if len(got) < 3:
+        report('ERROR', 'C15', os.path.join(DOCS, 'DESIGN-CONTRACT.md'),
+               f'只解析到 {sorted(got)} 三处中的 {len(got)} 处心跳签名，检查锚点格式')
+        return
+
+    base_label, base = next(iter(got.items()))
+    for label, fields in got.items():
+        if fields == base:
+            continue
+        missing = [f for f in base if f not in fields]
+        extra = [f for f in fields if f not in base]
+        if missing or extra:
+            report('ERROR', 'C15', os.path.join(DOCS, 'DESIGN-CONTRACT.md'),
+                   f'心跳签名字段集不一致：{label} vs {base_label}，'
+                   f'缺 {missing}、多 {extra}')
+        else:
+            report('WARN', 'C15', os.path.join(DOCS, 'DESIGN-CONTRACT.md'),
+                   f'心跳签名字段序不一致：{label} 为 {fields}，{base_label} 为 {base}')
+
+
 # ============================== C10 列类型与注释语义一致（DDL）
 
 _COL_DEF = re.compile(
@@ -681,6 +728,7 @@ def main():
         ('C12', check_c12_anchors),
         ('C13', lambda: check_c13_platform_rows(tables)),
         ('C14', lambda: check_c14_column_sets(tables)),
+        ('C15', check_c15_heartbeat_signature),
     ]
     for code, fn in checks:
         if only and code != only:
@@ -702,6 +750,7 @@ def main():
         'C12': '承重论证锚句存在性',
         'C13': '平台级行（tenant_id=0）已逐表定案',
         'C14': 'DDL 列集合 = 02-数据库设计字段表',
+        'C15': '心跳签名三处一致',
     }
     errors = [r for r in results if r[0] == 'ERROR']
     warns = [r for r in results if r[0] == 'WARN']
