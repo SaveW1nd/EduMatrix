@@ -413,6 +413,8 @@ CREATE TABLE `org_student` (
   `quit_time`      DATETIME     NULL DEFAULT NULL       COMMENT '退课时间（status=1 时写入）',
   `quit_reason`    VARCHAR(500) NULL DEFAULT NULL       COMMENT '退课原因（status=1 时写入，流失分析依据）',
   `archive_time`   DATETIME     NULL DEFAULT NULL       COMMENT '毕业归档时间（status=2 时写入）',
+  `archive_reason` TINYINT      NULL DEFAULT NULL      COMMENT '归档原因：1 正常毕业归档 2 因监护人删除请求归档。决定是否启动脱敏倒计时——契约 7.2 第 3 条承诺"删除请求走归档 + 30 日内不可逆脱敏"，不加本列就无法区分哪些归档学员该被脱敏，定时任务只能要么全脱（毕业校友的联系方式也一并抹掉）要么全不脱（承诺落空）',
+  `anonymized_at`  DATETIME     NULL DEFAULT NULL      COMMENT '脱敏完成时间，NULL=未脱敏。脱敏不可逆：guardian_phone 与 sys_user.phone 被覆写为掩码，原值不再存于任何地方，故本列非空的学员不可归档恢复（接口 25 返回 400）。定时任务扫 archive_reason=2 且 archive_time 早于 30 日前且本列为 NULL',
   `tenant_id`      BIGINT       NOT NULL                COMMENT '租户（机构）ID',
   `create_by`      BIGINT       NULL DEFAULT NULL       COMMENT '创建人 user_id',
   `create_time`    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
