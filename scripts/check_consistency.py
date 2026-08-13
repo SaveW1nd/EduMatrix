@@ -231,7 +231,10 @@ def check_c3_error_codes():
                                f'第 {i} 行使用了**预留号段**内的错误码 {code}——'
                                f'预留码不在登记册中，"是否已登记"这条检查永远抓不到它')
 
-    # 废弃码不应再被任何分册引用
+    # 废弃码不应再被任何分册引用。
+    # 这是 ERROR 不是 WARN：废弃码保留号位正是为了让历史日志里的旧值不产生歧义，
+    # 一旦被重新引用，同一个码就又有了两种含义——与"一码两义"是同一类缺陷。
+    # 真实案例：20017（回调签名校验失败）随转码回调改为消息队列消费而退役。
     for code, meaning in registered.items():
         if '空号' in meaning or '已废弃' in meaning:
             for path in API_FILES:
@@ -239,7 +242,8 @@ def check_c3_error_codes():
                     continue
                 for i, line in enumerate(read(path).split('\n'), 1):
                     if code in line and '废弃' not in line and '空号' not in line:
-                        report('WARN', 'C3', path, f'第 {i} 行引用了已废弃的错误码 {code}')
+                        report('ERROR', 'C3', path,
+                               f'第 {i} 行引用了已废弃的错误码 {code}（登记册：{meaning[:30]}）')
 
 
 # ================================================ C4 字段长度 API vs DDL
