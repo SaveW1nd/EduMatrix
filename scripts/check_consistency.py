@@ -185,7 +185,10 @@ def check_c3_error_codes():
         report('ERROR', 'C3', REGISTRY, '未能从登记册解析出任何错误码，检查表格格式')
         return
 
-    for path in API_FILES + [os.path.join(DOCS, '01-PRD-产品需求文档.md')]:
+    # 从 API_FILES + [PRD] 扩到全部 MD_FILES：此前 README / 00-原始需求 /
+    # 02-数据库设计 / 04-一期实施计划 都不在 C3 视野内——04 加进 MD_FILES 后
+    # C3 依然一个错误码都没校验，因为它压根不读这张表。
+    for path in MD_FILES:
         if path == REGISTRY:
             continue
         text = read(path)
@@ -1036,12 +1039,28 @@ def check_c11_interface_refs():
                f'以下分册应有整数编号目录却未解析出，跨册引用校验对其失效：'
                f'{"、".join(sorted(_INT_NUMBERED - set(volume_tocs)))}')
 
+    # 数字册号 → 分册名。文档里长期并存两种指代分册的写法：分册名（「02-组织机构」）与
+    # 数字册号（「03-02」，其中 `03-` 是 docs/03-API接口文档/ 这一层的目录号、后两位才是
+    # 分册号），而 volume_tocs 的键只来自文件名即分册名。只认其中一种就会让另一种整类
+    # 静默失校——04-一期实施计划.md 全篇 13 处跨册引用用的都是数字式，它加进 MD_FILES 后
+    # C11 依旧一处都没看到，报出来的 0 错 0 警是空的。新增分册时只改这张表，
+    # 不要在下面写死 if 分支。
+    _VOL_ALIAS = {
+        '03-01': '01-认证与系统',
+        '03-02': '02-组织机构',
+        '03-03': '03-课程与视频',
+        '03-04': '04-题库与作业',
+        '03-05': '05-数据中心',
+    }
+
     # 跨册引用：「02-组织机构接口 39」「02-组织机构分册接口 8」「02-组织机构 §7.3（接口 29）」
-    _XREF = re.compile(r'(0\d-[\u4e00-\u9fa5]{2,8})\s*(?:分册)?[^\n]{0,14}?接口\s*(\d+)')
+    # 以及数字式的「03-02 接口 37」。两种形态命中后一律归一为分册名，
+    # 后续的范围校验 / 接口名比对 / §小节号比对三段逻辑完全复用。
+    _XREF = re.compile(r'(0\d-(?:[\u4e00-\u9fa5]{2,8}|0\d))\s*(?:分册)?[^\n]{0,14}?接口\s*(\d+)')
     for path in MD_FILES:            # 含 PRD 与 00-通用约定，不限于有目录的分册
         for i, line in enumerate(read(path).split('\n'), 1):
             for m in _XREF.finditer(line):
-                vol, n = m.group(1), int(m.group(2))
+                vol, n = _VOL_ALIAS.get(m.group(1), m.group(1)), int(m.group(2))
                 if vol not in volume_tocs:
                     continue
                 if os.path.basename(path).startswith(vol):
