@@ -449,6 +449,17 @@ def check_c9_type_binding():
                         report('ERROR', 'C9', path,
                                f'第 {i} 行枚举串把 {num} 标为「{name}」，应为 {want}')
 
+            # ⑤ 箭头映射：「node_type 由 userType 推导：1→2、2→3、3→4」
+            # 两者取值恒等，任何"左右不等"的箭头对都是旧编号残留。
+            # 这种句式不含概念词也不构成枚举串，前四种模式全都捕不到——
+            # 真实缺陷 01:514 就是这样活过了两轮人工排查与一轮 C9。
+            if re.search(r'node_?[Tt]ype', line) and re.search(r'user_?[Tt]ype', line):
+                for am in re.finditer(r'(?<![\d])(\d)\s*(?:→|->|=>)\s*(\d)(?![\d])', line):
+                    if am.group(1) != am.group(2):
+                        report('ERROR', 'C9', path,
+                               f'第 {i} 行出现 node_type↔user_type 的映射 {am.group(0)}，'
+                               f'而两者取值恒等（契约 §5）；此类映射一律是旧编号残留')
+
             for m in _PAT_DDL_COMMENT.finditer(raw):
                 key, want = _lookup(m.group(1))
                 if key and want != int(m.group(2)):
@@ -557,6 +568,63 @@ def check_c14_column_sets(tables):
         if only_doc:
             report('ERROR', 'C14', DDL_PATH,
                    f'`{name}`：文档字段表有而 DDL 缺 {only_doc}')
+
+
+# ============ C17 JSON 示例内部自洽（nodeType / userType / childCount）
+
+def _walk_json(obj):
+    """深度优先产出所有 dict 对象"""
+    if isinstance(obj, dict):
+        yield obj
+        for v in obj.values():
+            yield from _walk_json(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            yield from _walk_json(v)
+
+
+def check_c17_json_examples():
+    """C17 响应示例里的 nodeType 必须自洽
+
+    真实缺陷：node_type 重编号后，01 分册四处教师示例（userType=2）仍写 nodeType=3、
+    02 分册示例树把管理员写成 2、教师写成 3、学生写成 4，且一个 nodeType=3 的节点
+    带着 childCount=32。示例是实现方交叉验证时最信任的证据——十余处互相印证的旧编号，
+    会让人越看越确信旧编号才是对的。
+
+    三条断言（都只在字段同时出现时才生效，避免误报）：
+      1. 同一对象内 userType 与 nodeType 并存 → 必须相等（契约 §5 恒等）
+      2. nodeType == 3（学生）→ childCount 必须为 0（学生是叶子）
+      3. nodeType >= 4 → 一律错误（现编号只到 3）
+    """
+    for path in API_FILES:
+        text = read(path)
+        for m in re.finditer(r'```json\n(.*?)```', text, re.S):
+            body = '\n'.join(l for l in m.group(1).split('\n')
+                              if not re.match(r'^\s*(GET|POST|PUT|DELETE)\s', l))
+            try:
+                data = json.loads(body)
+            except Exception:
+                continue                      # 解析失败由 C7 负责报
+            line_no = text[:m.start()].count('\n') + 1
+            for o in _walk_json(data):
+                nt = o.get('nodeType')
+                if not isinstance(nt, int):
+                    continue
+                name = o.get('nodeName') or o.get('realName') or o.get('username') or '?'
+                ut = o.get('userType')
+                if isinstance(ut, int) and ut != nt:
+                    report('ERROR', 'C17', path,
+                           f'第 {line_no} 行起的示例中「{name}」userType={ut} 但 nodeType={nt}，'
+                           f'契约 §5 规定二者恒等')
+                cc = o.get('childCount')
+                if nt == 3 and isinstance(cc, int) and cc != 0:
+                    report('ERROR', 'C17', path,
+                           f'第 {line_no} 行起的示例中「{name}」nodeType=3（学生）却有 '
+                           f'childCount={cc}——学生必须是叶子，该示例是一棵非法树')
+                if nt >= 4:
+                    report('ERROR', 'C17', path,
+                           f'第 {line_no} 行起的示例中「{name}」nodeType={nt}，'
+                           f'现编号只到 3（0超管 1管理员 2教师 3学生）')
 
 
 # ============ C15 心跳请求体签名三处一致（契约 §6.4 / PRD F2-7 / 03-03）
@@ -809,6 +877,7 @@ def main():
         ('C14', lambda: check_c14_column_sets(tables)),
         ('C15', check_c15_heartbeat_signature),
         ('C16', check_c16_heartbeat_rule_numbers),
+        ('C17', check_c17_json_examples),
     ]
     for code, fn in checks:
         if only and code != only:
@@ -832,6 +901,7 @@ def main():
         'C14': 'DDL 列集合 = 02-数据库设计字段表',
         'C15': '心跳签名三处一致',
         'C16': '心跳校验规则编号 PRD ↔ API 对应',
+        'C17': 'JSON 示例内部自洽（nodeType/userType/childCount）',
     }
     errors = [r for r in results if r[0] == 'ERROR']
     warns = [r for r in results if r[0] == 'WARN']
