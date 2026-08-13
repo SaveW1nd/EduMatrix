@@ -427,6 +427,42 @@ MyBatis-Plus 租户插件从**当前会话**取 `tenant_id` 并自动注入 `WHE
 - 机构管理员与下级管理员**角色相同**，差别仅在树的位置（子树范围不同）。不再需要单独的"节点管理员"角色。
 - 角色对应的菜单/按钮权限沿用 RBAC（`sys_role_menu`）。
 
+### 3.1 `perms` 权限标识命名规范（权威）
+
+**`perms` 是线上鉴权依据，不是前端展示用的字符串。** 03-01 §4.3 明写「权限标识改动会影响线上鉴权，需与后端注解同步发版」——它与表名、字段名、枚举值同级，改动成本一样高，因此在此定死。
+
+**格式**：`{路由前缀}:{对象}:{动作}`，三段全小写驼峰（段内可用驼峰，段间用 `:` 分隔）。
+
+**第一段路由前缀**只能取自 §6.2 的八个之一：`system` / `org` / `course` / `vod` / `question` / `homework` / `stat`。`auth` **不产生 perms**——`/api/v1/auth/**` 的六个接口要么在认证白名单里、要么只作用于登录人自身，不经过 `@SaCheckPermission`。
+
+**第三段动作词表（穷举，不得另造，且严禁同义词并存）**：
+
+| 类别 | 动作词 |
+| --- | --- |
+| 查询 | `list`（列表/分页/树）、`query`（按 ID 查详情） |
+| 增删改 | `add`、`edit`、`remove` |
+| 状态与流转 | `status`（启用停用/上下架/禁用）、`publish`、`revoke`、`apply` |
+| 数据进出 | `import`、`export`、`upload`、`download` |
+| 领域专有 | `resetPwd`、`assignMenu`、`move`、`assign`、`transfer`、`quit`、`archive`、`unarchive`、`grant`、`sort`、`retranscode`、`regrade`、`submit`、`renew` |
+
+**禁止的同义写法**（左侧一律改为右侧）：
+
+| 禁用 | 使用 |
+| --- | --- |
+| `del` / `delete` | `remove` |
+| `create` / `save` | `add` |
+| `update` / `modify` | `edit` |
+| `get` / `detail` / `info` | `query` |
+| `page` / `all` | `list` |
+| `enable` / `disable` | `status` |
+
+**两条边界**：
+
+1. **`grant` / `revoke` 保留给资源授权，不与 `add` / `remove` 混用。** 撤销授权是**级联整棵子树**的动作（§2.5 规则 5），与"删一行"语义完全不同；用 `remove` 会让实现方以为是普通删除。
+2. **只有写操作才单独发按钮标识。** 同一页面内的辅助读接口（详情、树、版本列表等）随该页 `:list` 一并放行，不再逐个发 `perms`——否则按钮表会膨胀到与接口数等长，而机构侧无人使用那种粒度。
+
+**遗留例外（本规范生效前已写入分册，未擅自改写）**：`stat:board:teacher` 的第三段是角色名而非动作，不符合本格式；`system:log:login` / `system:log:oper` 的第三段实为日志种类。三者已在多处分册引用，改名需同步修订分册与后端注解，故**原样保留并在此登记**。
+
 ## 4. 表清单（权威命名，共 41 张）
 
 前缀：`sys_` 系统基座 / `org_` 组织与人员 / `crs_` 课程 / `vod_` 视频与进度 / `qb_` 题库 / `hw_` 作业 / `stat_` 数据中心
@@ -734,3 +770,149 @@ Resp: {"code":200,"data":{"watchedDuration":130,"watchStatus":1,"maxPosition":13
 **这一条是自动化检查覆盖不到的部分。** 第 8 节那套一致性检查（C1~C17）能保证十份文档说的是同一件事，**但保证不了那件事真的存在**——那需要有人试着去测它。机械检查查的是"两处是否一致"，写验收标准问的是"这条路走不走得通"，后者只能由人来做。
 
 **因此新增条款的顺序是：先写验收标准，再写实现。** 反过来做，就会像上面四条一样，得到一份读起来毫无破绽、却没有任何人能验证的文档。
+
+---
+
+## 10. 附表 A：菜单树与权限标识（权威）
+
+> 本表与 `docs/sql/V202608140000__init_menu_and_role_menu.sql` **由同一份数据源生成**，两者不一致即缺陷。
+> 落库脚本走 Flyway 增量，`edumatrix_ddl.sql` 基线**不因菜单数据而改动**（§7.3）。
+>
+> `sys_menu` **无 `tenant_id` 列**（平台级表，不进租户插件）；`sys_role_menu` 的绑定行 `tenant_id` 一律为 `0`，
+> 读侧放行规则见 §2.9，写侧对 `org_admin` **全只读**——仅 `super_admin` 可改，任何人不可删。
+>
+> ID 为固定值而非雪花：`id = 1949000000000000000 + 目录号×10000 + 菜单号×100 + 按钮号`，末五位即 (目录, 菜单, 按钮)。
+> 初始化数据必须可重复执行、可逐行对账，雪花 ID 做不到这两点。
+>
+> 类型：`M` 目录 / `C` 菜单 / `F` 按钮。「PRD 页面」列对应 01-PRD §6 页面清单编号，**菜单不得脱离该清单自造页面**。
+
+| 菜单 ID | 父 ID | 名称 | 类型 | 前端路由 | perms | PRD 页面 | 绑定角色 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `1949000000000010000` | `1949000000000010000` | 工作台 | C | /workbench | `stat:workbench:list` | A2 | org_admin |
+| `1949000000000020000` | `1949000000000020000` | 导师看板 | C | /teacher/dashboard | `stat:board:teacher` | B1 | teacher |
+| `1949000000000100000` | `0` | 组织管理 | M | /org | — | — | super_admin、org_admin、teacher |
+| `1949000000000100100` | `1949000000000100000` | 组织树管理 | C | /org/tree | `org:node:list` | A3 | super_admin、org_admin |
+| `1949000000000100101` | `1949000000000100100` | 修改节点 | F | — | `org:node:edit` | A3 | org_admin |
+| `1949000000000100102` | `1949000000000100100` | 移动节点 | F | — | `org:node:move` | A3 | org_admin |
+| `1949000000000100103` | `1949000000000100100` | 停用/启用节点 | F | — | `org:node:status` | A3 | org_admin |
+| `1949000000000100104` | `1949000000000100100` | 重置人员密码 | F | — | `org:node:resetPwd` | A3 | org_admin、teacher |
+| `1949000000000100200` | `1949000000000100000` | 人员管理 | C | /org/staff | `org:staff:list` | A4 | super_admin、org_admin |
+| `1949000000000100201` | `1949000000000100200` | 新建下级管理员 | F | — | `org:admin:add` | A4 | org_admin |
+| `1949000000000100202` | `1949000000000100200` | 修改管理员 | F | — | `org:admin:edit` | A4 | org_admin |
+| `1949000000000100203` | `1949000000000100200` | 删除管理员 | F | — | `org:admin:remove` | A4 | org_admin |
+| `1949000000000100204` | `1949000000000100200` | 新建教师 | F | — | `org:teacher:add` | A4 | org_admin |
+| `1949000000000100205` | `1949000000000100200` | 修改教师 | F | — | `org:teacher:edit` | A4 | org_admin |
+| `1949000000000100206` | `1949000000000100200` | 删除教师 | F | — | `org:teacher:remove` | A4 | org_admin |
+| `1949000000000100300` | `1949000000000100000` | 学员管理 | C | /org/student | `org:student:list` | A5 | super_admin、org_admin、teacher |
+| `1949000000000100301` | `1949000000000100300` | 创建学生 | F | — | `org:student:add` | A5 | org_admin、teacher |
+| `1949000000000100302` | `1949000000000100300` | 修改学生 | F | — | `org:student:edit` | A5 | org_admin、teacher |
+| `1949000000000100303` | `1949000000000100300` | 删除学生 | F | — | `org:student:remove` | A5 | org_admin |
+| `1949000000000100304` | `1949000000000100300` | 分配导师 | F | — | `org:student:assign` | A5 | org_admin |
+| `1949000000000100305` | `1949000000000100300` | 转交管理员 | F | — | `org:student:transfer` | A5 | org_admin |
+| `1949000000000100306` | `1949000000000100300` | 学生退课 | F | — | `org:student:quit` | A5 | org_admin、teacher |
+| `1949000000000100307` | `1949000000000100300` | 毕业归档 | F | — | `org:student:archive` | A5 | org_admin |
+| `1949000000000100308` | `1949000000000100300` | 归档恢复 | F | — | `org:student:unarchive` | A5 | org_admin |
+| `1949000000000100400` | `1949000000000100000` | 学员导入向导 | C | /org/student/import | `org:student:import` | A6 | org_admin、teacher |
+| `1949000000000100500` | `1949000000000100000` | 标签管理 | C | /org/tag | `org:tag:list` | A7 | org_admin、teacher |
+| `1949000000000100501` | `1949000000000100500` | 新建标签 | F | — | `org:tag:add` | A7 | org_admin |
+| `1949000000000100502` | `1949000000000100500` | 修改标签 | F | — | `org:tag:edit` | A7 | org_admin |
+| `1949000000000100503` | `1949000000000100500` | 删除标签 | F | — | `org:tag:remove` | A7 | org_admin |
+| `1949000000000100504` | `1949000000000100500` | 批量打标签 | F | — | `org:studentTag:add` | A7 | org_admin、teacher |
+| `1949000000000100505` | `1949000000000100500` | 批量移除标签 | F | — | `org:studentTag:remove` | A7 | org_admin、teacher |
+| `1949000000000100600` | `1949000000000100000` | 节点异动轨迹 | C | /org/change-log | `org:changeLog:list` | A8 | org_admin、teacher |
+| `1949000000000200000` | `0` | 课程中心 | M | /course | — | — | org_admin、teacher |
+| `1949000000000200100` | `1949000000000200000` | 课程管理 | C | /course/courses | `course:course:list` | A9 | org_admin、teacher |
+| `1949000000000200101` | `1949000000000200100` | 新建课程 | F | — | `course:course:add` | A9 | org_admin、teacher |
+| `1949000000000200102` | `1949000000000200100` | 修改课程 | F | — | `course:course:edit` | A9 | org_admin、teacher |
+| `1949000000000200103` | `1949000000000200100` | 删除课程 | F | — | `course:course:remove` | A9 | org_admin、teacher |
+| `1949000000000200104` | `1949000000000200100` | 课程上下架 | F | — | `course:course:status` | A9 | org_admin、teacher |
+| `1949000000000200200` | `1949000000000200000` | 课程编排 | C | /course/courses/outline | `course:lesson:list` | A10 / B6 | org_admin、teacher |
+| `1949000000000200201` | `1949000000000200200` | 新建章节 | F | — | `course:chapter:add` | A10 | org_admin、teacher |
+| `1949000000000200202` | `1949000000000200200` | 修改章节 | F | — | `course:chapter:edit` | A10 | org_admin、teacher |
+| `1949000000000200203` | `1949000000000200200` | 删除章节 | F | — | `course:chapter:remove` | A10 | org_admin、teacher |
+| `1949000000000200204` | `1949000000000200200` | 章节排序 | F | — | `course:chapter:sort` | A10 | org_admin、teacher |
+| `1949000000000200205` | `1949000000000200200` | 新建课时 | F | — | `course:lesson:add` | A10 | org_admin、teacher |
+| `1949000000000200206` | `1949000000000200200` | 修改课时 | F | — | `course:lesson:edit` | A10 | org_admin、teacher |
+| `1949000000000200207` | `1949000000000200200` | 删除课时 | F | — | `course:lesson:remove` | A10 | org_admin、teacher |
+| `1949000000000200208` | `1949000000000200200` | 图文资料查看 | F | — | `course:material:list` | A10 | org_admin、teacher |
+| `1949000000000200209` | `1949000000000200200` | 新建图文资料 | F | — | `course:material:add` | A10 | org_admin、teacher |
+| `1949000000000200210` | `1949000000000200200` | 修改图文资料 | F | — | `course:material:edit` | A10 | org_admin、teacher |
+| `1949000000000200211` | `1949000000000200200` | 删除图文资料 | F | — | `course:material:remove` | A10 | org_admin、teacher |
+| `1949000000000200300` | `1949000000000200000` | 媒资库 | C | /course/videos | `vod:video:list` | A11 | org_admin、teacher |
+| `1949000000000200301` | `1949000000000200300` | 上传视频 | F | — | `vod:video:add` | A11 | org_admin、teacher |
+| `1949000000000200302` | `1949000000000200300` | 删除媒资 | F | — | `vod:video:remove` | A11 | org_admin、teacher |
+| `1949000000000200303` | `1949000000000200300` | 重新发起转码 | F | — | `vod:video:retranscode` | A11 | org_admin、teacher |
+| `1949000000000200304` | `1949000000000200300` | 媒资禁用/启用 | F | — | `vod:video:status` | A11 | org_admin、teacher |
+| `1949000000000300000` | `0` | 资源授权 | M | /grant | — | — | org_admin、teacher |
+| `1949000000000300100` | `1949000000000300000` | 资源下发中心 | C | /grant/center | `org:grant:list` | A12 / B4 / B5 | org_admin、teacher |
+| `1949000000000300101` | `1949000000000300100` | 授权资源给节点 | F | — | `org:grant:grant` | A12 | org_admin、teacher |
+| `1949000000000300102` | `1949000000000300100` | 撤销资源授权 | F | — | `org:grant:revoke` | A12 | org_admin、teacher |
+| `1949000000000300103` | `1949000000000300100` | 修改授权有效期 | F | — | `org:grant:edit` | A12 | org_admin、teacher |
+| `1949000000000300200` | `1949000000000300000` | 权限模板管理 | C | /grant/templates | `org:permTemplate:list` | A13 | org_admin、teacher |
+| `1949000000000300201` | `1949000000000300200` | 新建模板 | F | — | `org:permTemplate:add` | A13 | org_admin |
+| `1949000000000300202` | `1949000000000300200` | 修改模板 | F | — | `org:permTemplate:edit` | A13 | org_admin |
+| `1949000000000300203` | `1949000000000300200` | 删除模板 | F | — | `org:permTemplate:remove` | A13 | org_admin |
+| `1949000000000300204` | `1949000000000300200` | 追加模板明细 | F | — | `org:permTemplateItem:add` | A13 | org_admin |
+| `1949000000000300205` | `1949000000000300200` | 移除模板明细 | F | — | `org:permTemplateItem:remove` | A13 | org_admin |
+| `1949000000000300206` | `1949000000000300200` | 套用模板到节点 | F | — | `org:permTemplate:apply` | A13 | org_admin、teacher |
+| `1949000000000300300` | `1949000000000300000` | 资源授权健康度 | C | /grant/health | `org:grantHealth:list` | A14 | （暂不绑定） |
+| `1949000000000400000` | `0` | 题库作业 | M | /qb | — | — | org_admin、teacher |
+| `1949000000000400100` | `1949000000000400000` | 题库管理 | C | /qb/questions | `question:question:list` | A15 / B7 | org_admin、teacher |
+| `1949000000000400101` | `1949000000000400100` | 新建题目 | F | — | `question:question:add` | A15 | org_admin、teacher |
+| `1949000000000400102` | `1949000000000400100` | 修改题目 | F | — | `question:question:edit` | A15 | org_admin、teacher |
+| `1949000000000400103` | `1949000000000400100` | 删除题目 | F | — | `question:question:remove` | A15 | org_admin、teacher |
+| `1949000000000400104` | `1949000000000400100` | 启用/停用题目 | F | — | `question:question:status` | A15 | org_admin、teacher |
+| `1949000000000400105` | `1949000000000400100` | 新建题库分类 | F | — | `question:category:add` | A15 | org_admin、teacher |
+| `1949000000000400106` | `1949000000000400100` | 修改题库分类 | F | — | `question:category:edit` | A15 | org_admin、teacher |
+| `1949000000000400107` | `1949000000000400100` | 删除题库分类 | F | — | `question:category:remove` | A15 | org_admin、teacher |
+| `1949000000000400200` | `1949000000000400000` | 作业管理 | C | /qb/homeworks | `homework:homework:list` | A16 / B8 / B10 | org_admin、teacher |
+| `1949000000000400201` | `1949000000000400200` | 创建作业 | F | — | `homework:homework:add` | B8 | teacher |
+| `1949000000000400202` | `1949000000000400200` | 修改作业 | F | — | `homework:homework:edit` | B8 | teacher |
+| `1949000000000400203` | `1949000000000400200` | 删除作业 | F | — | `homework:homework:remove` | B8 | teacher |
+| `1949000000000400204` | `1949000000000400200` | 发布作业 | F | — | `homework:homework:publish` | B9 | teacher |
+| `1949000000000400205` | `1949000000000400200` | 撤回作业 | F | — | `homework:homework:revoke` | B10 | teacher |
+| `1949000000000400206` | `1949000000000400200` | 按新答案重判 | F | — | `homework:homework:regrade` | A16 | org_admin |
+| `1949000000000400300` | `1949000000000400000` | 批改工作台 | C | /qb/grading | `homework:grade:list` | B11 | teacher |
+| `1949000000000400301` | `1949000000000400300` | 提交批改 | F | — | `homework:grade:submit` | B11 | teacher |
+| `1949000000000400400` | `1949000000000400000` | 学员错题本 | C | /qb/wrong-book | `homework:wrongBook:list` | B12 | org_admin、teacher |
+| `1949000000000500000` | `0` | 数据中心 | M | /stat | — | — | org_admin、teacher |
+| `1949000000000500100` | `1949000000000500000` | 节点数据大屏 | C | /stat/board | `stat:node:list` | A17 | org_admin |
+| `1949000000000500200` | `1949000000000500000` | 学员学习档案 | C | /stat/students | `stat:student:query` | A5 下钻 / B2 | org_admin、teacher |
+| `1949000000000500300` | `1949000000000500000` | 导出中心 | C | /stat/exports | `stat:export:list` | A18 / B13 | org_admin、teacher |
+| `1949000000000500301` | `1949000000000500300` | 创建导出任务 | F | — | `stat:export:add` | A18 | org_admin、teacher |
+| `1949000000000600000` | `0` | 系统管理 | M | /system | — | — | super_admin、org_admin |
+| `1949000000000600100` | `1949000000000600000` | 用户管理 | C | /system/users | `system:user:list` | A20 | super_admin、org_admin |
+| `1949000000000600101` | `1949000000000600100` | 创建用户 | F | — | `system:user:add` | A20 | super_admin |
+| `1949000000000600102` | `1949000000000600100` | 修改用户 | F | — | `system:user:edit` | A20 | super_admin |
+| `1949000000000600103` | `1949000000000600100` | 删除用户 | F | — | `system:user:remove` | A20 | super_admin |
+| `1949000000000600104` | `1949000000000600100` | 重置用户密码 | F | — | `system:user:resetPwd` | A20 | super_admin |
+| `1949000000000600105` | `1949000000000600100` | 启用/停用用户 | F | — | `system:user:status` | A20 | super_admin |
+| `1949000000000600200` | `1949000000000600000` | 角色管理 | C | /system/roles | `system:role:list` | A20 | super_admin、org_admin |
+| `1949000000000600201` | `1949000000000600200` | 查询角色详情 | F | — | `system:role:query` | A20 | super_admin、org_admin |
+| `1949000000000600202` | `1949000000000600200` | 创建角色 | F | — | `system:role:add` | A20 | super_admin、org_admin |
+| `1949000000000600203` | `1949000000000600200` | 修改角色 | F | — | `system:role:edit` | A20 | super_admin、org_admin |
+| `1949000000000600204` | `1949000000000600200` | 删除角色 | F | — | `system:role:remove` | A20 | super_admin、org_admin |
+| `1949000000000600205` | `1949000000000600200` | 为角色分配菜单 | F | — | `system:role:assignMenu` | A20 | super_admin、org_admin |
+| `1949000000000600300` | `1949000000000600000` | 菜单管理 | C | /system/menus | `system:menu:list` | A20 | super_admin、org_admin |
+| `1949000000000600301` | `1949000000000600300` | 创建菜单 | F | — | `system:menu:add` | A20 | super_admin |
+| `1949000000000600302` | `1949000000000600300` | 修改菜单 | F | — | `system:menu:edit` | A20 | super_admin |
+| `1949000000000600303` | `1949000000000600300` | 删除菜单 | F | — | `system:menu:remove` | A20 | super_admin |
+| `1949000000000600400` | `1949000000000600000` | 租户配置 | C | /system/tenant-configs | `system:tenantConfig:list` | A20 | org_admin |
+| `1949000000000600401` | `1949000000000600400` | 修改租户配置 | F | — | `system:tenantConfig:edit` | A20 | org_admin |
+| `1949000000000600500` | `1949000000000600000` | 登录日志 | C | /system/logs/login | `system:log:login` | A20 | super_admin、org_admin |
+| `1949000000000600600` | `1949000000000600000` | 操作日志 | C | /system/logs/oper | `system:log:oper` | A20 | super_admin、org_admin |
+| `1949000000000600700` | `1949000000000600000` | 文件管理 | C | /system/files | `system:file:query` | — | super_admin、org_admin |
+| `1949000000000600701` | `1949000000000600700` | 上传文件 | F | — | `system:file:upload` | — | super_admin、org_admin、teacher、student |
+| `1949000000000600702` | `1949000000000600700` | 下载文件 | F | — | `system:file:download` | — | super_admin、org_admin、teacher、student |
+| `1949000000000700000` | `0` | 平台管理 | M | /platform | — | — | super_admin |
+| `1949000000000700100` | `1949000000000700000` | 租户管理 | C | /platform/tenants | `system:tenant:list` | A19 | super_admin |
+| `1949000000000700101` | `1949000000000700100` | 查询租户详情 | F | — | `system:tenant:query` | A19 | super_admin |
+| `1949000000000700102` | `1949000000000700100` | 开通机构 | F | — | `system:tenant:add` | A19 | super_admin |
+| `1949000000000700103` | `1949000000000700100` | 修改租户 | F | — | `system:tenant:edit` | A19 | super_admin |
+| `1949000000000700104` | `1949000000000700100` | 删除租户 | F | — | `system:tenant:remove` | A19 | super_admin |
+| `1949000000000700105` | `1949000000000700100` | 租户续期 | F | — | `system:tenant:renew` | A19 | super_admin |
+| `1949000000000700106` | `1949000000000700100` | 启用/停用租户 | F | — | `system:tenant:status` | A19 | super_admin |
+
+**`student` 角色不占任何目录与菜单行**，只绑定 `system:file:upload` 与 `system:file:download` 两条按钮——
+学生端是 H5、不走管理端菜单系统，而这两个接口的「允许角色」在 03-01 §7.1 / §7.3 中明确含 `student`（作答附件上传与下载）。
+学生端其余接口（03-02 接口 26 学生异动轨迹、03-03 §6 与 §8、03-04 §4 与 §6、03-05 §4.5）在分册中**只声明角色、未声明权限标识**，故按角色判定，不发 `perms`。
