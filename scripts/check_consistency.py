@@ -748,6 +748,13 @@ def check_c18_endpoint_paths():
     **它是某个已登记路径的段级前缀**——命名了一棵含真实端点的子树，就是分组不是
     死端点。顺序上必须先判命中、不中再判前缀：`/org/nodes` 本身是端点、同时又是
     `/org/nodes/{id}` 的前缀，反过来会把它短路进前缀桶而不再校验。
+
+    **已知漏报，不要"修"**：固定段打错、且错值恰好落在另一条同段数登记路径的占位符
+    位置时不报（`/org/nodes/treee` 被 `/org/nodes/{id}` 接住）。要抓它必须判断"这个值
+    像不像 ID"——几位数字算 ID？带字母算不算？`complete_rate_threshold` 这种字面量
+    参数值怎么办？——正是删掉这类启发式才换来零豁免零误报。暴露面算得清：159 条登记
+    端点里只有 2 条有此风险（`org/nodes/tree`、`org/students/tags`）。详见 README
+    「已知漏报」一节。
     """
     registry, reg_by_len = set(), {}
     for path in MD_FILES:
