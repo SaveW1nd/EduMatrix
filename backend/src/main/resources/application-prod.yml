@@ -1,0 +1,23 @@
+# ============================================================================
+# 生产 profile
+#
+# 【敏感项一律占位符】05-工程结构.md §F4：仓库中不得出现任何真实值。
+# 全部部署级参数由环境变量注入，字段清单见 deploy/.env.example。
+# ============================================================================
+logging:
+  level:
+    root: WARN
+    com.edumatrix: INFO
+
+mybatis-plus:
+  configuration:
+    log-impl: org.apache.ibatis.logging.nologging.NoLoggingImpl
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus
+  endpoint:
+    health:
+      show-details: never

@@ -1,0 +1,25 @@
+# ============================================================================
+# 本地开发 profile
+#
+# 【只放非敏感的本地开关】05-工程结构.md §F4：本地开发的值一律走 backend/.env
+# （已 gitignore），不要同时支持 .env 与本地 profile 覆盖 —— 两条路并存时，
+# 「我改了怎么没生效」的排查成本远大于少一种选择的不便。
+# ============================================================================
+logging:
+  level:
+    com.edumatrix: DEBUG
+    # 慢查询阈值 200ms 与 FIND_IN_SET 告警在 common/config 里做，见契约 §7.1
+    org.springframework.jdbc.core: DEBUG
+
+mybatis-plus:
+  configuration:
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: '*'
+  endpoint:
+    health:
+      show-details: always

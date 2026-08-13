@@ -1,0 +1,171 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  EduMatrix 后端：单模块 Maven（05-工程结构.md §A1 定案，不拆多模块）。
+
+  §A1 的理由摘要：本项目是「一个开发者 + 每模块可能换 Agent」，要防的不是「B 组乱 import
+  A 组内部实现」，而是「模块 12 的 Agent 没看见公共层，自己又写了一个子树查询」。多模块把
+  「调用公共层」这件事变贵，与模块 01「不重写公共层」的要求正好相抵。
+  代价（没有编译期分层护栏）由 §A1 的三条可 grep 硬约束承担，见 scripts 与模块 01 自检项。
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.5.3</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.edumatrix</groupId>
+    <artifactId>edumatrix-backend</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+    <name>edumatrix-backend</name>
+    <description>EduMatrix ToB 私域督学管理平台 - 后端服务</description>
+
+    <properties>
+        <java.version>17</java.version>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+
+        <mybatis-plus.version>3.5.17</mybatis-plus.version>
+        <sa-token.version>1.44.0</sa-token.version>
+        <xxl-job.version>2.4.2</xxl-job.version>
+        <!-- flyway / mysql-connector-j / micrometer 的版本由 spring-boot-starter-parent 统一管理，此处不写死 -->
+    </properties>
+
+    <dependencies>
+        <!-- ============ Web / 校验 / AOP ============ -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-aop</artifactId>
+        </dependency>
+
+        <!-- ============ 数据层：MySQL + MyBatis-Plus + Flyway ============ -->
+        <dependency>
+            <groupId>com.baomidou</groupId>
+            <artifactId>mybatis-plus-spring-boot3-starter</artifactId>
+            <version>${mybatis-plus.version}</version>
+        </dependency>
+        <!--
+          MP 3.5.9 起把 JSqlParser 拆成独立坐标（3.5.7 上这个 artifactId 还不存在，实测确认）。
+          租户插件（TenantLineInnerInterceptor）与分页插件都靠它解析 SQL —— 缺了它插件在
+          运行期报 ClassNotFound，而不是「悄悄不过滤」，但仍必须显式引入。
+        -->
+        <dependency>
+            <groupId>com.baomidou</groupId>
+            <artifactId>mybatis-plus-jsqlparser</artifactId>
+            <version>${mybatis-plus.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.mysql</groupId>
+            <artifactId>mysql-connector-j</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-mysql</artifactId>
+        </dependency>
+
+        <!-- ============ 缓存 ============ -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-pool2</artifactId>
+        </dependency>
+
+        <!-- ============ 认证：Sa-Token ============ -->
+        <!--
+          模块 01 只做装配骨架与 00-通用约定 §2.3 的四条免登录白名单排除路径
+          （05-工程结构.md §C2：common/config 含 Sa-Token 装配；§G1：白名单注册位置）。
+          登录/登出/刷新令牌与冻结集鉴权是模块 02 的产出。
+        -->
+        <dependency>
+            <groupId>cn.dev33</groupId>
+            <artifactId>sa-token-spring-boot3-starter</artifactId>
+            <version>${sa-token.version}</version>
+        </dependency>
+
+        <!-- ============ 调度：XXL-Job ============ -->
+        <!--
+          模块 01 只交付 traceId 的继承包装（契约 §7.1：traceId 须贯穿异步线程池与 XXL-Job）。
+          第一个真正的 Job 在模块 05/09，全部落在 com.edumatrix.job 包（05-工程结构.md §H）。
+        -->
+        <dependency>
+            <groupId>com.xuxueli</groupId>
+            <artifactId>xxl-job-core</artifactId>
+            <version>${xxl-job.version}</version>
+        </dependency>
+
+        <!-- ============ 可观测性：契约 §7.1 十项指标 → Micrometer → Prometheus ============ -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
+
+        <!-- ============ 测试 ============ -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <finalName>edumatrix-backend</finalName>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <compilerArgs>
+                        <arg>-parameters</arg>
+                    </compilerArgs>
+                </configuration>
+            </plugin>
+            <!--
+              *Test  → Surefire（mvn test）：纯单元测试，无外部依赖，随时可跑。
+              *IT    → Failsafe（mvn verify）：需要 deploy/docker-compose.dev.yml 起的
+                       MySQL 8 与 Redis 7。分开是为了让「没起容器」表现为一批 IT 失败，
+                       而不是混在单元测试里让人分不清是代码错还是环境没起。
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

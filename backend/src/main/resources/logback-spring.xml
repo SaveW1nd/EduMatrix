@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  日志配置。
+
+  【traceId 必须出现在每一行】契约 §7.1：traceId 经 MDC 贯穿日志、异步线程池、XXL-Job 与 MQ，
+  响应头 X-Trace-Id 原样回传 —— 用户截图报错时，那个 32 位 hex 就是唯一的检索键。
+  日志行里没有它，回传就白做了。
+
+  parentTraceId 只在异步任务继承不到 traceId、新生成一条链路时才有值（契约 §7.1），
+  所以用 %X{parentTraceId:-} 让它在缺省时留空而不是打印 "parentTraceId_IS_UNDEFINED"。
+-->
+<configuration>
+    <springProperty scope="context" name="APP_NAME" source="spring.application.name" defaultValue="edumatrix"/>
+
+    <property name="LOG_PATTERN"
+              value="%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%X{traceId:-}%X{parentTraceId:- }] %logger{40} - %msg%n"/>
+
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>${LOG_PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>logs/${APP_NAME}.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>logs/${APP_NAME}.%d{yyyy-MM-dd}.%i.log</fileNamePattern>
+            <maxFileSize>100MB</maxFileSize>
+            <!--
+              保留 180 天。契约 §7.2 第 5 条要求 sys_login_log / sys_oper_log 保留 ≥ 6 个月
+              （《网络安全法》第 21 条）。那两张是数据库表、由归档任务管，与本文件无关，
+              但应用日志跟着同一个保留期，排查合规问题时两边才对得上。
+            -->
+            <maxHistory>180</maxHistory>
+            <totalSizeCap>20GB</totalSizeCap>
+        </rollingPolicy>
+        <encoder>
+            <pattern>${LOG_PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="FILE"/>
+    </root>
+</configuration>
