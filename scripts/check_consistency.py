@@ -393,6 +393,27 @@ BANNED = {
 }
 
 
+# 已废弃概念的"裸词"登记。
+#
+# 与 BANNED 的区别：BANNED 收的是**当年那次缺陷的具体写法**（org_class 是表名残留、
+# DataScope 三档 是那句话的原文），换个写法就穿过去了——references/README.md:13 的
+# 「数据权限（DataScope），对应"教师仅看自己班级"」在 BANNED 表下活了很久，正因为
+# 它写的是裸词而非登记的那两种形态。这里收概念本身。
+#
+# 代价是文档里有大量"点名它以说明不用它"的否定式表述（全库 13 行，01-认证与系统.md
+# 一个文件就占 7 行），逐条豁免要写 13 条且任一处改字就失效。改判上下文：**紧邻在前
+# 的否定词**放行。这样否定式一次性全过，而将来有人新写一句肯定式的"支持 DataScope
+# 分档"会被立刻抓到——这才是这条规则要防的东西。
+DEPRECATED_CONCEPT = {
+    r'[Dd]ata[_ ]?[Ss]cope': '数据权限不设分档，全系统只有"你能看到的数据 = 你所在节点的子树"一条规则（契约 §2.4 / §3）',
+    r'班级': '教学的最小单元是"导师-学员"关系，系统没有班级概念（契约 §2.4、00-原始需求 §1）',
+}
+# 否定词须落在命中词前 10 个字符内（足够跨过 ** 与反引号，跨不过一个从句）
+_NEG = re.compile(
+    r'(?:不设|不再|不预设|不采用|不存在|不含|不返回|不出现|不接受|没有|无|'
+    r'已删除|已移除|已废弃|禁止|本质区别)[^一-龥]{0,10}$')
+
+
 # 少数位置需要"点名旧方案以说明为什么不用它"，逐条豁免而不是整行放行
 ALLOW = [
     ('is_deleted', '若用 `is_deleted` 这类 0/1 标志'),      # 契约 §2.2 论证前提
@@ -417,6 +438,12 @@ def check_c8_banned():
                 if any(w == word and ctx in line for w, ctx in ALLOW):
                     continue
                 report('ERROR', 'C8', path, f'第 {i} 行出现 `{word}`（{why}）')
+            for pat, why in DEPRECATED_CONCEPT.items():
+                for m in re.finditer(pat, line):
+                    if _NEG.search(line[:m.start()]):
+                        continue     # "不设 DataScope 分档"这类否定式表述
+                    report('ERROR', 'C8', path,
+                           f'第 {i} 行出现已废弃概念 `{m.group(0)}`（{why}）')
 
 
 # ====================================== C9 概念 ↔ 编号绑定（node_type / user_type）
@@ -668,6 +695,63 @@ def check_c17_json_examples():
                     report('ERROR', 'C17', path,
                            f'第 {line_no} 行起的示例中「{name}」nodeType={nt}，'
                            f'现编号只到 3（0超管 1管理员 2教师 3学生）')
+
+
+# ============ C18 端点路径存在性（正文引用 ↔ 接口目录）
+
+# 历史陈述：必须点名已删除的端点才能说清"这个定时任务替换了什么"
+C18_ALLOW = [
+    ('/api/v1/vod/callback/{provider}', '取代了原先的'),   # 03-03 §7.2 改造理由
+]
+
+_DIR_ROW = re.compile(
+    r'^\|\s*[\d.]+\s*\|[^|]*\|\s*(GET|POST|PUT|DELETE|PATCH)\s*\|\s*`([^`]+)`')
+_PATH_REF = re.compile(r'(GET|POST|PUT|DELETE|PATCH)\s+(/api/v1/[^\s`"\'）)\],；。]*)')
+
+
+def check_c18_endpoint_paths():
+    """C18 正文里写出的每个 `METHOD /api/v1/...` 都必须在某分册的接口目录中存在
+
+    这是第一条跨"文档 ↔ 接口清单"的**存在性**检查。C5 只数总量、C11 只校验编号
+    引用，路径没人管——references/README.md 曾同时写着一个已删除的端点
+    (`POST /api/v1/vod/callback/{provider}`) 和一个少了 `/videos` 段的错路径，
+    两个都是人眼发现的。
+
+    实现要点：目录里是**路径模板**（`/org/nodes/{id}`），正文示例里是**具体值**
+    （`/org/nodes/1960000000000000010`）。整串集合比对会把 87 条合法请求示例判成
+    死端点——第一次跑就喊 88 次狼来了，接着必然被人加一条"跳过整个 API 目录"的
+    豁免，规则就废了。改为**逐段对齐**：先按段数分组，再逐段判断，目录侧是 `{xxx}`
+    则该段任意匹配。这样雪花 ID、`tenant-configs/{configKey}` 这类字面量参数值
+    一并消掉，零豁免、零启发式，只留真命中。
+
+    段数参与匹配是这条规则的牙齿：漏写 `/videos` 段会改变段数，直接落选。
+    """
+    registry, reg_by_len = set(), {}
+    for path in MD_FILES:
+        for line in read(path).split('\n'):
+            m = _DIR_ROW.match(line)
+            if m:
+                registry.add((m.group(1), m.group(2).split('?')[0].rstrip('/')))
+    for meth, p in registry:
+        reg_by_len.setdefault((meth, p.count('/')), []).append(p.split('/'))
+
+    if len(registry) < 100:      # 目录解析失效时不要静默放行
+        report('ERROR', 'C18', REGISTRY,
+               f'仅解析出 {len(registry)} 条目录路径，接口目录表格式可能已变，本项失效')
+        return
+
+    for path in MD_FILES:
+        for i, line in enumerate(read(path).split('\n'), 1):
+            for m in _PATH_REF.finditer(line):
+                meth, p = m.group(1), m.group(2).split('?')[0].rstrip('/')
+                segs = p.split('/')
+                if any(all(c.startswith('{') or c == s for c, s in zip(cand, segs))
+                       for cand in reg_by_len.get((meth, p.count('/')), [])):
+                    continue
+                if any(ref in line and ctx in line for ref, ctx in C18_ALLOW):
+                    continue
+                report('ERROR', 'C18', path,
+                       f'第 {i} 行引用了接口目录中不存在的端点：{meth} {p}')
 
 
 # ============ C15 心跳请求体签名三处一致（契约 §6.4 / PRD F2-7 / 03-03）
@@ -993,6 +1077,7 @@ def main():
         ('C15', check_c15_heartbeat_signature),
         ('C16', check_c16_heartbeat_rule_numbers),
         ('C17', check_c17_json_examples),
+        ('C18', check_c18_endpoint_paths),
     ]
     for code, fn in checks:
         if only and code != only:
@@ -1017,6 +1102,7 @@ def main():
         'C15': '心跳签名三处一致',
         'C16': '心跳校验规则编号 PRD ↔ API 对应',
         'C17': 'JSON 示例内部自洽（nodeType/userType/childCount）',
+        'C18': '端点路径存在性（正文引用 ↔ 接口目录）',
     }
     errors = [r for r in results if r[0] == 'ERROR']
     warns = [r for r in results if r[0] == 'WARN']
