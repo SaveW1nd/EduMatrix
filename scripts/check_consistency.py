@@ -39,6 +39,7 @@ MD_FILES = [
     os.path.join(DOCS, '00-原始需求.md'),
     os.path.join(DOCS, '01-PRD-产品需求文档.md'),
     os.path.join(DOCS, '02-数据库设计.md'),
+    os.path.join(DOCS, '04-一期实施计划.md'),
 ] + sorted(
     os.path.join(DOCS, '03-API接口文档', f)
     for f in os.listdir(os.path.join(DOCS, '03-API接口文档'))
