@@ -756,7 +756,7 @@ CREATE TABLE `vod_video` (
   UNIQUE KEY `uk_provider_file` (`provider`, `vod_file_id`, `deleted_at`) COMMENT '同一云厂商媒资ID唯一（转码回调幂等定位，追加 deleted_at 兼容逻辑删除；vod_file_id 为 NULL 的上传中记录不参与唯一冲突，可多条并存）',
   KEY `idx_tenant_status` (`tenant_id`, `status`) COMMENT '机构媒资库按转码状态筛选',
   KEY `idx_owner_node_status` (`owner_node_id`, `status`) COMMENT '"我上传的媒资"列表 / 授权校验时确认自己是否为 owner'
-) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci COMMENT = '云端媒资表（腾讯云/阿里云 VOD；授权见 org_resource_grant，resource_type=3）';
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci COMMENT = '云端媒资表（阿里云 VOD 为主，provider 列保留腾讯兼容位；授权见 org_resource_grant，resource_type=3）';
 
 -- ----------------------------------------------------------------------------
 -- 26. vod_play_auth_log 播放凭证发放记录表（日志表：雪花主键，允许物理归档清理，按契约例外精简 update_by/remark）
