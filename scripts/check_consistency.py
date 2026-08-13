@@ -625,6 +625,14 @@ def check_c14_column_sets(tables):
             continue
         documented[name] = [c for c in re.findall(r'^\| (\w+) \| [A-Z]', m.group(2), re.M)]
 
+    # 下限断言：小节标题或字段表格式一改，documented 会整体塌成空——那时本项只剩
+    # 一片 WARN（不影响退出码），看起来像"文档没写全"而不是"检查器瞎了"。
+    if len(documented) < len(tables) * 0.8:
+        report('ERROR', 'C14', doc_path,
+               f'仅解析出 {len(documented)} 张表的字段表（DDL 有 {len(tables)} 张），'
+               f'小节标题或字段表格式可能已变，本项大面积失效')
+        return
+
     for name in sorted(set(tables) - set(documented)):
         report('WARN', 'C14', doc_path, f'DDL 有表 `{name}`，02-数据库设计中未找到其字段表小节')
 
@@ -707,10 +715,17 @@ C18_ALLOW = [
 _DIR_ROW = re.compile(
     r'^\|\s*[\d.]+\s*\|[^|]*\|\s*(GET|POST|PUT|DELETE|PATCH)\s*\|\s*`([^`]+)`')
 _PATH_REF = re.compile(r'(GET|POST|PUT|DELETE|PATCH)\s+(/api/v1/[^\s`"\'）)\],；。]*)')
+# 不带方法的裸路径引用。DDL 列注释、契约路由表、章节标题都是这个形态
+_BARE_PATH = re.compile(r'(?<![A-Za-z/])(/api/v1/[^\s`"\'）)\],；。]*)')
+
+# DDL 不进 MD_FILES（那会让 C7 markdown 健康度、C8 禁用词等一堆规则对着 SQL 空转），
+# 但它是 Flyway 基线、列注释里指着真实端点（decrypt_key_uri 指向 /vod/decrypt-key），
+# 注释写错了将来是要被人当依据的——单独作为 C18 的扫描源。
+C18_EXTRA_SOURCES = [DDL_PATH]
 
 
 def check_c18_endpoint_paths():
-    """C18 正文里写出的每个 `METHOD /api/v1/...` 都必须在某分册的接口目录中存在
+    """C18 正文里写出的每个 `/api/v1/...` 都必须在某分册的接口目录中存在
 
     这是第一条跨"文档 ↔ 接口清单"的**存在性**检查。C5 只数总量、C11 只校验编号
     引用，路径没人管——references/README.md 曾同时写着一个已删除的端点
@@ -725,6 +740,14 @@ def check_c18_endpoint_paths():
     一并消掉，零豁免、零启发式，只留真命中。
 
     段数参与匹配是这条规则的牙齿：漏写 `/videos` 段会改变段数，直接落选。
+
+    **裸路径分支**：只认 `METHOD /path` 会漏掉不写方法的引用——DDL 的
+    `decrypt_key_uri` 列注释、契约 §6.2 路由表、各分册章节标题都是这个形态。
+    裸引用不校验方法，只校验路径存在。放过的是**路由前缀**，判据不是"段数 ≤ 3"
+    （`## 8. 日志（/api/v1/system/logs）` 有 4 段，真端点是 `/logs/login`），而是
+    **它是某个已登记路径的段级前缀**——命名了一棵含真实端点的子树，就是分组不是
+    死端点。顺序上必须先判命中、不中再判前缀：`/org/nodes` 本身是端点、同时又是
+    `/org/nodes/{id}` 的前缀，反过来会把它短路进前缀桶而不再校验。
     """
     registry, reg_by_len = set(), {}
     for path in MD_FILES:
@@ -740,18 +763,44 @@ def check_c18_endpoint_paths():
                f'仅解析出 {len(registry)} 条目录路径，接口目录表格式可能已变，本项失效')
         return
 
-    for path in MD_FILES:
+    all_paths = [p.split('/') for p in {p for _, p in registry}]
+
+    def aligns(cand, segs):
+        return all(c.startswith('{') or c == s for c, s in zip(cand, segs))
+
+    def known(segs, meth=None):
+        if meth:
+            return any(aligns(c, segs) for c in reg_by_len.get((meth, len(segs) - 1), []))
+        return any(len(c) == len(segs) and aligns(c, segs) for c in all_paths)
+
+    def is_route_prefix(raw, segs):
+        if raw.endswith('/') or '*' in raw:
+            return True
+        return any(len(c) > len(segs) and aligns(c, segs) for c in all_paths)
+
+    for path in MD_FILES + C18_EXTRA_SOURCES:
         for i, line in enumerate(read(path).split('\n'), 1):
+            spans = []
             for m in _PATH_REF.finditer(line):
+                spans.append(m.span(2))
                 meth, p = m.group(1), m.group(2).split('?')[0].rstrip('/')
-                segs = p.split('/')
-                if any(all(c.startswith('{') or c == s for c, s in zip(cand, segs))
-                       for cand in reg_by_len.get((meth, p.count('/')), [])):
+                if known(p.split('/'), meth):
                     continue
                 if any(ref in line and ctx in line for ref, ctx in C18_ALLOW):
                     continue
                 report('ERROR', 'C18', path,
                        f'第 {i} 行引用了接口目录中不存在的端点：{meth} {p}')
+            for m in _BARE_PATH.finditer(line):
+                if any(a <= m.start(1) < b for a, b in spans):
+                    continue                 # 已由带方法分支处理
+                raw = m.group(1)
+                segs = raw.split('?')[0].rstrip('/').split('/')
+                if known(segs) or is_route_prefix(raw, segs):
+                    continue
+                if any(ref in line and ctx in line for ref, ctx in C18_ALLOW):
+                    continue
+                report('ERROR', 'C18', path,
+                       f'第 {i} 行引用了接口目录中不存在的路径：{"/".join(segs)}')
 
 
 # ============ C15 心跳请求体签名三处一致（契约 §6.4 / PRD F2-7 / 03-03）
@@ -962,6 +1011,22 @@ def check_c11_interface_refs():
         toc_ = {int(x.group(1)): x.group(2).strip() for x in _TOC_ROW.finditer(read(path))}
         if m and toc_:
             volume_tocs[m.group(1)] = toc_
+
+    # 下限断言：目录解析不出来时，下面的跨册校验会走 `vol not in volume_tocs: continue`
+    # 静默放行——检查器失效而不自知。凡"先解析出一个集合再比对"的检查都该声明
+    # "我现在看不见了"（同 C18 的 len(registry) < 100）。
+    #
+    # 期望值不能从 _TOC_ROW 反推——那是用被守护的解析器去推导守护条件，格式一坏
+    # 两边同时归零、断言恒真（写这条时先踩了一次）。也不写死"应为 5"：01 与 05
+    # 分册用的是小节式编号（`| 1.1 |`、`| 4.1 |`），_XREF 的「接口 N」形态本就不
+    # 适用于它们，全库指向这两册的此类引用为 0。写死的是**分册名**——这是关于当前
+    # 文档集的事实。新增整数编号的分册时要往这里加一行；某册改用小节式编号时这条
+    # 会响，那正是该由人来确认的时刻。
+    _INT_NUMBERED = {'02-组织机构', '03-课程与视频', '04-题库与作业'}
+    if _INT_NUMBERED - set(volume_tocs):
+        report('ERROR', 'C11', REGISTRY,
+               f'以下分册应有整数编号目录却未解析出，跨册引用校验对其失效：'
+               f'{"、".join(sorted(_INT_NUMBERED - set(volume_tocs)))}')
 
     # 跨册引用：「02-组织机构接口 39」「02-组织机构分册接口 8」「02-组织机构 §7.3（接口 29）」
     _XREF = re.compile(r'(0\d-[\u4e00-\u9fa5]{2,8})\s*(?:分册)?[^\n]{0,14}?接口\s*(\d+)')
