@@ -537,6 +537,7 @@ Resp: {"code":200,"data":{"watchedDuration":130,"watchStatus":1,"maxPosition":13
 | `grant_dangling_count` | Gauge | **> 0** | 契约 §2.5 规则 6 的真悬挂授权，目标值恒为 0；`crossScopeCount` 单独打点，**不进告警** |
 | `stat_settle_job_duration_seconds` | Histogram | P99 > 30min | 日结算跑不完则次日看板空白 |
 | `vod_callback_orphan_total` | Counter | **> 0** | 回调反查不到媒资行（§2.8 规则 3），每一次都是静默的数据丢失 |
+| `vod_callback_sign_fail_total` | Counter | 5min 内 > 0 | 回调签名校验失败。与 orphan 是**两个不同的失败点**：签名失败发生在反查之前，orphan 指标压根不会计数。密钥轮换/时钟漂移期间会短暂非 0，但持续非 0 意味着转码事件正在被丢弃 |
 | `tree_move_depth` / `tree_move_subtree_size` | Histogram | 子树 > 5000 告警 | 大子树移动会长时间持有 `ancestors` 重算的写锁 |
 | `api_permission_denied_total{code}` | Counter | 单账号 5min 内 > 100 | 403/404/10107 突增 = 越权探测 |
 
