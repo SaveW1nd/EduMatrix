@@ -734,8 +734,10 @@ DROP TABLE IF EXISTS `vod_video`;
 CREATE TABLE `vod_video` (
   `id`             BIGINT       NOT NULL                COMMENT '媒资ID（雪花算法）',
   `owner_node_id`  BIGINT       NOT NULL                COMMENT '归属节点ID（→org_node.id，上传时写入上传者所在节点）：契约 2.5 授权前提，视频亦为受管资源（resource_type=3）',
-  `provider`       TINYINT      NOT NULL DEFAULT 1      COMMENT '云厂商：1腾讯 2阿里',
-  `vod_file_id`    VARCHAR(100) NULL DEFAULT NULL       COMMENT '云端媒资唯一ID（腾讯 FileId / 阿里 VideoId；预创建（status=0）时为 NULL，上传完成回调回填）',
+  `provider`       TINYINT      NOT NULL DEFAULT 2      COMMENT '云厂商：1腾讯 2阿里。**默认 2 阿里云**（契约 §1 主选）——uk_provider_file 以 provider 为首列，默认值写错会让整批媒资落在错误的唯一键分区上，转码回调按 (provider, vod_file_id) 反查将定位不到',
+  `encrypt_type`   TINYINT      NOT NULL DEFAULT 1      COMMENT '加密方式：1 HLS标准加密(AES-128，契约 §1 定案) 2 阿里云私有加密 0 不加密。选 1 的代价是必须自建密钥分发接口（03-03 §8.2），而该接口才是真正的鉴权闸口——CDN 直出的 m3u8/TS 只靠 auth_key 防盗链、不防越权',
+  `decrypt_key_uri` VARCHAR(500) NULL DEFAULT NULL      COMMENT '解密密钥 URI（写入 m3u8 的 EXT-X-KEY，指向本服务 /api/v1/vod/decrypt-key）。**只存 URI，绝不存密钥本身**：明文密钥不落库、不进日志，由服务端按 videoId 向 KMS 实时取密文再解密下发',
+  `vod_file_id`    VARCHAR(100) NULL DEFAULT NULL       COMMENT '云端媒资唯一ID（阿里 VideoId / 腾讯 FileId）。**阿里云路径下发上传凭证时即写入**（响应的 cloudVideoId），故非空；NULL 仅出现在腾讯路径的预创建态（status=0，上传完成回调才回填）',
   `video_name`     VARCHAR(200) NOT NULL                COMMENT '视频名称',
   `duration`       INT          NOT NULL DEFAULT 0      COMMENT '视频时长（秒，转码回调后回填）',
   `cover_url`      VARCHAR(500) NULL DEFAULT NULL       COMMENT '云端封面 URL',
@@ -762,6 +764,7 @@ CREATE TABLE `vod_video` (
 DROP TABLE IF EXISTS `vod_play_auth_log`;
 CREATE TABLE `vod_play_auth_log` (
   `id`          BIGINT       NOT NULL                COMMENT '记录ID（雪花算法）',
+  `event_type`  TINYINT      NOT NULL DEFAULT 1      COMMENT '发放类型：1 播放凭证（03-03 §8.1）2 解密密钥（§8.2）。走 HLS 标准加密后，真正的鉴权闸口是密钥接口而非凭证接口——只审计 1 等于漏掉了最关键的那次调用；且一次取证可对应多次取密钥（两者 TTL 独立），故必须分类型记录',
   `viewer_user_id` BIGINT    NOT NULL                COMMENT '取证人账号ID（→sys_user.id）：学生、教师、管理员均可取证，故审计主体统一用账号而非学生档案',
   `viewer_type` TINYINT      NOT NULL                COMMENT '取证人类型（=sys_user.user_type）：1管理员 2教师 3学生。管理端预览与学生学习走同一接口、同一审计表，靠本列区分',
   `student_id`  BIGINT       NULL DEFAULT NULL       COMMENT '学生ID（→org_student.id）：仅 viewer_type=3 时有值；教师/管理员预览时为 NULL——二者没有 org_student 档案行，此列若为 NOT NULL 则管理端预览必然插入失败或漏审计',
@@ -821,8 +824,8 @@ CREATE TABLE `vod_heartbeat_log` (
   `video_id`         BIGINT        NOT NULL                COMMENT '媒资ID（→vod_video.id）',
   `current_time_sec` DECIMAL(10,1) NOT NULL DEFAULT 0.0    COMMENT '心跳上报时的播放位置（秒，对应请求体 currentTime；命名已避开保留字）',
   `interval_sec`     INT           NOT NULL DEFAULT 0      COMMENT '与上次心跳的实际间隔（秒，>=8s 视为有效，单次计入 min(实际间隔,15)）',
-  `seeked`           TINYINT       NOT NULL DEFAULT 0      COMMENT '本次心跳前是否发生 seek 或暂停恢复：0否 1是（对应请求体 seeked）。必须落库——它决定本次是否执行推进一致性校验（03-课程与视频 8.2.1 规则 6），不记录就无法回放这条心跳当时为什么被采纳或丢弃，而本表是防刷审计与进度争议回溯的唯一依据；同时供风控统计 seeked 频次：连续 >2 次或单课时每小时 >20 次即判异常，防脚本恒置 true 关闭规则 6',
-  `reject_rule`      TINYINT       NOT NULL DEFAULT 0      COMMENT '本条心跳的判定结果：0=采纳并计时；2/3/5/6/7/8/9=被 03-03 §8.2.1 对应编号的规则拒绝。【编号锚定】本列的取值就是 §8.2.1 的规则编号，PRD F2-7 校验规则列表亦用同一套编号，三处必须一致——编号一旦改动，已落库的历史日志会指向另一条规则，且无法回溯修正。【1 与 4 保留不使用】1 凭证无效在进入心跳处理前即被拦下（返回 20001、前端续签后重试），此时学生与课时的绑定尚未通过校验，写一行归属到某学生的审计记录本身就是错的；4 倍速不加速是计时口径、不拒绝任何心跳，playRate 越界由规则 5 承担。实现方无需为这两个值写分支，运维在日志中找不到它们也不是埋点漏了。【2/3 与 5 的分工】规则 2/3 判定失败时虽经规则 5 的响应路径返回 20002，本列记的是**首次判定失败的那条规则**（2 或 3），5 专指参数明显非法；若一律记 5，本列就退化为"要么 0 要么 5"，丧失全部诊断价值。【为什么需要本列】本表是防刷审计与进度争议回溯的唯一依据，而此前没有任何一列记录"这条到底算没算、为什么没算"——只能从 interval_sec<8 反推规则 2，其余规则的拒绝完全不可追溯。1 字节换全链路可回放。不记 sessionId 是权衡结果：CHAR(32) 在常驻 0.95 亿行上多占约 3GB（+25%），而排查真正需要的是"为什么被拒"而非"哪个会话"',
+  `seeked`           TINYINT       NOT NULL DEFAULT 0      COMMENT '本次心跳前是否发生 seek 或暂停恢复：0否 1是（对应请求体 seeked）。必须落库——它决定本次是否执行推进一致性校验（03-课程与视频 8.3.1 规则 6），不记录就无法回放这条心跳当时为什么被采纳或丢弃，而本表是防刷审计与进度争议回溯的唯一依据；同时供风控统计 seeked 频次：连续 >2 次或单课时每小时 >20 次即判异常，防脚本恒置 true 关闭规则 6',
+  `reject_rule`      TINYINT       NOT NULL DEFAULT 0      COMMENT '本条心跳的判定结果：0=采纳并计时；2/3/5/6/7/8/9=被 03-03 §8.3.1 对应编号的规则拒绝。【编号锚定】本列的取值就是 §8.3.1 的规则编号，PRD F2-7 校验规则列表亦用同一套编号，三处必须一致——编号一旦改动，已落库的历史日志会指向另一条规则，且无法回溯修正。【1 与 4 保留不使用】1 凭证无效在进入心跳处理前即被拦下（返回 20001、前端续签后重试），此时学生与课时的绑定尚未通过校验，写一行归属到某学生的审计记录本身就是错的；4 倍速不加速是计时口径、不拒绝任何心跳，playRate 越界由规则 5 承担。实现方无需为这两个值写分支，运维在日志中找不到它们也不是埋点漏了。【2/3 与 5 的分工】规则 2/3 判定失败时虽经规则 5 的响应路径返回 20002，本列记的是**首次判定失败的那条规则**（2 或 3），5 专指参数明显非法；若一律记 5，本列就退化为"要么 0 要么 5"，丧失全部诊断价值。【为什么需要本列】本表是防刷审计与进度争议回溯的唯一依据，而此前没有任何一列记录"这条到底算没算、为什么没算"——只能从 interval_sec<8 反推规则 2，其余规则的拒绝完全不可追溯。1 字节换全链路可回放。不记 sessionId 是权衡结果：CHAR(32) 在常驻 0.95 亿行上多占约 3GB（+25%），而排查真正需要的是"为什么被拒"而非"哪个会话"',
   `client_ip`        VARCHAR(64)   NULL DEFAULT NULL       COMMENT '客户端 IP',
   `device`           VARCHAR(200)  NULL DEFAULT NULL       COMMENT '设备/浏览器标识（UA 摘要）',
   `created_time`     DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '心跳时间（分区键）',

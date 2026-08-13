@@ -708,7 +708,7 @@ def check_c15_heartbeat_signature():
                    f'心跳签名字段序不一致：{label} 为 {fields}，{base_label} 为 {base}')
 
 
-# ====== C16 心跳校验规则编号 PRD F2-7 ↔ 03-03 §8.2.1 一一对应
+# ====== C16 心跳校验规则编号 PRD F2-7 ↔ 03-03 §8.3.1 一一对应
 
 # 同号规则在两份文档里措辞可以不同，但必须谈的是同一件事。
 # 这里给每条规则登记若干关键词，同号两侧只要各命中其一即认为对齐。
@@ -726,26 +726,26 @@ RULE_KEYWORDS = {
 
 
 def check_c16_heartbeat_rule_numbers():
-    """C16 心跳校验规则的编号，PRD F2-7 与 03-03 §8.2.1 必须一一对应
+    """C16 心跳校验规则的编号，PRD F2-7 与 03-03 §8.3.1 必须一一对应
 
     真实缺陷：PRD F2-7 曾把"服务端拒绝规则"与"处理流程"混在一个列表里编号，
-    与 8.2.1 只有 2/6/7/8 四条碰巧对上。最危险的是 9 号——两边都是拒绝规则、
+    与 8.3.1 只有 2/6/7/8 四条碰巧对上。最危险的是 9 号——两边都是拒绝规则、
     都编号 9，一边是"参数越界"一边是"多端会话冲突"，而两者的处置动作完全相反。
 
     这已经不只是读着别扭：`vod_heartbeat_log.reject_rule` 把规则编号**持久化进了
     审计表**，该表按月分区保留 6 个月、累计留存数年。编号一旦不一致，运维查到
     reject_rule=N 对着 PRD 读就会读成另一条规则，且历史日志无法回溯修正。
 
-    另外校验 reject_rule 注释里枚举的取值都能在 8.2.1 中找到对应的拒绝规则。
+    另外校验 reject_rule 注释里枚举的取值都能在 8.3.1 中找到对应的拒绝规则。
     """
     prd_path = os.path.join(DOCS, '01-PRD-产品需求文档.md')
     vol_path = os.path.join(DOCS, '03-API接口文档', '03-课程与视频.md')
 
-    # --- 03-03 §8.2.1 的规则表：| N | **规则名** | ... ---
+    # --- 03-03 §8.3.1 的规则表：| N | **规则名** | ... ---
     vol = read(vol_path)
-    m = re.search(r'^#### 8\.2\.1 .*?(?=^#### 8\.2\.2)', vol, re.M | re.S)
+    m = re.search(r'^#### 8\.3\.1 .*?(?=^#### 8\.3\.2)', vol, re.M | re.S)
     if not m:
-        report('ERROR', 'C16', vol_path, '未能定位 §8.2.1 规则表，检查标题格式')
+        report('ERROR', 'C16', vol_path, '未能定位 §8.3.1 规则表，检查标题格式')
         return
     api_rules = {int(n): name for n, name in
                  re.findall(r'^\|\s*(\d)\s*\|\s*\*\*([^*]+)\*\*', m.group(0), re.M)}
@@ -756,14 +756,14 @@ def check_c16_heartbeat_rule_numbers():
     if not s:
         report('ERROR', 'C16', prd_path,
                '未能定位 F2-7「服务端校验规则」列表——校验规则与处理流程必须分成两个列表，'
-               '混编则编号无法与 §8.2.1 对齐')
+               '混编则编号无法与 §8.3.1 对齐')
         return
     prd_rules = {int(n): name for n, name in
                  re.findall(r'^(\d)\. \*\*([^*]+)\*\*', s.group(0), re.M)}
 
     if set(api_rules) != set(prd_rules):
         report('ERROR', 'C16', prd_path,
-               f'规则编号集合不一致：PRD {sorted(prd_rules)} vs §8.2.1 {sorted(api_rules)}')
+               f'规则编号集合不一致：PRD {sorted(prd_rules)} vs §8.3.1 {sorted(api_rules)}')
         return
 
     for n in sorted(api_rules):
@@ -772,7 +772,7 @@ def check_c16_heartbeat_rule_numbers():
         p_hit = any(k in prd_rules[n] for k in kws)
         if not (a_hit and p_hit):
             report('ERROR', 'C16', prd_path,
-                   f'规则 {n} 两侧含义对不上：§8.2.1「{api_rules[n]}」vs PRD「{prd_rules[n]}」'
+                   f'规则 {n} 两侧含义对不上：§8.3.1「{api_rules[n]}」vs PRD「{prd_rules[n]}」'
                    f'（期望关键词之一：{kws}）')
 
     # --- reject_rule 注释枚举的取值必须都是 8.2.1 里真实存在的规则号 ---
@@ -784,7 +784,7 @@ def check_c16_heartbeat_rule_numbers():
     declared = {int(x) for x in re.findall(r'(?<![\d.])([1-9])(?=[/=、])', c.group(1))}
     for n in sorted(declared - set(api_rules)):
         report('ERROR', 'C16', DDL_PATH,
-               f'reject_rule 注释声明取值 {n}，但 §8.2.1 无该编号规则')
+               f'reject_rule 注释声明取值 {n}，但 §8.3.1 无该编号规则')
 
 
 # ============================== C10 列类型与注释语义一致（DDL）
