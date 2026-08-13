@@ -41,6 +41,7 @@ MD_FILES = [
     os.path.join(DOCS, '01-PRD-产品需求文档.md'),
     os.path.join(DOCS, '02-数据库设计.md'),
     os.path.join(DOCS, '04-实施计划.md'),
+    os.path.join(DOCS, '05-工程结构.md'),
 ] + sorted(
     os.path.join(DOCS, '03-API接口文档', f)
     for f in os.listdir(os.path.join(DOCS, '03-API接口文档'))
@@ -456,7 +457,7 @@ DEPRECATED_CONCEPT = {
 }
 # 否定词须落在命中词前 10 个字符内（足够跨过 ** 与反引号，跨不过一个从句）
 _NEG = re.compile(
-    r'(?:不设|不再|不预设|不采用|不存在|不含|不返回|不出现|不接受|没有|无|'
+    r'(?:不设|不再|不预设|不采用|不存在|不含|不返回|不出现|不接受|不叫|没有|无|'
     r'已删除|已移除|已废弃|禁止|本质区别)[^一-龥]{0,10}$')
 
 
