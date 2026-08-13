@@ -21,7 +21,9 @@
 --   2) 移动节点禁止成环：targetParentId != movingNodeId
 --      AND FIND_IN_SET(movingNodeId, targetParent.ancestors) = 0；
 --   3) 移动节点后必须在同一事务内递归重算整棵子树的 ancestors；
---   4) 树深度不设上限（ancestors 预留 VARCHAR(1000)，约可容纳 50 级）。
+--   4) 树深度上限 50 级：ancestors 为 VARCHAR(1000)，雪花 ID 19 位 + 逗号 = 20 字符/级，
+--      50 级即写满。服务层建/移节点时必须校验深度并返回 400——不校验则第 51 级在写入时
+--      Data too long，让"移动 + 递归重算整棵子树 ancestors"的复合事务整体回滚。
 -- 子树查询性能策略（org_node.ancestors，重要）:
 --   FIND_IN_SET(#{nodeId}, ancestors) 语义最准但【无法走索引】，全表扫描。
 --   本 DDL 为此提供三条互补路径，服务层按场景选择：
@@ -773,6 +775,7 @@ CREATE TABLE `vod_play_auth_log` (
   `update_time` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   `deleted_at`  BIGINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除：0=未删除，删除时写入毫秒时间戳（日志业务恒为 0，清理走物理归档）',
   PRIMARY KEY (`id`),
+  KEY `idx_create_time` (`create_time`) COMMENT '归档清理专用：保留 6 个月后按 create_time 分批删除（每批 ≤ 1 万行）。另外三个索引的前导列都不是 create_time，缺本索引时每一批 DELETE 都是全表扫——单机构 6 个月约 320 万行',
   KEY `idx_viewer_time` (`viewer_user_id`, `create_time`) COMMENT '审计某账号取证频次（防刷排查）：覆盖学生、教师、管理员三类取证人',
   KEY `idx_student_time` (`student_id`, `create_time`) COMMENT '审计某学员取证频次；student_id 为 NULL 的管理端预览行不入本索引，正合需求',
   KEY `idx_lesson_time` (`lesson_id`, `create_time`) COMMENT '按课时统计取证量'

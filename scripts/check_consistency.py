@@ -188,15 +188,49 @@ def check_c3_error_codes():
             # 号段/预留说明行不是"使用"，跳过
             if re.search(r'预留|号段|保留不复用|~\s*1[0-9]{4}', line):
                 continue
-            # 必须出现错误码语境词，否则五位数字多半是数量/毫秒/字节等业务数值
-            if not re.search(r'返回|错误码|错误|code|拒绝|失败|校验不通过', line):
+            # 必须出现错误码语境词，否则五位数字多半是数量/毫秒/字节等业务数值。
+            # `→` 与「不可/不允许」也算语境词：PRD 写「valid_start >= valid_end → 20012」
+            # 一个传统语境词都没有，整行被跳过，预留码就这样绿灯放行
+            if not re.search(r'返回|错误码|错误|code|拒绝|失败|校验不通过|→|不可|不允许', line):
                 continue
             # 语境词之外还要求写法像错误码：`10107` / 返回 10107 / 表格首列 | 10107 |
-            for m in re.finditer(r'`([1-4]\d{4})`|(?:返回|错误码|code[=:\s]+)\s*`?([1-4]\d{4})`?'
-                                 r'|^\|\s*([1-4]\d{4})\s*\|', line):
+            # / 括号内的码列表（10010 / 10207）——最后一种曾整类漏检
+            for m in re.finditer(r'`([1-4]\d{4})`'
+                                 r'|(?:返回|错误码|拒绝|失败|抛|报|→)\s*`?([1-4]\d{4})`?'
+                                 r'|^\|\s*([1-4]\d{4})\s*\|'
+                                 r'|[（(]\s*([1-4]\d{4})(?:\s*[/、,，]\s*[1-4]\d{4})*\s*[）)]', line):
                 code = next(g for g in m.groups() if g)
                 if code not in registered:
                     report('ERROR', 'C3', path, f'第 {i} 行使用了未登记的错误码 {code}')
+    # 预留号段：登记册声明"预留"的码一律不得被使用。
+    # 这类码天生不在登记册里，只查"是否登记"永远抓不到它们——必须单独解析预留声明。
+    reserved = set()
+    for m in re.finditer(r'预留\s*((?:\d{5}(?:~\d{5})?[、,，]?\s*)+)', reg):
+        for part in re.split(r'[、,，]', m.group(1)):
+            part = part.strip()
+            if re.fullmatch(r'\d{5}~\d{5}', part):
+                lo, hi = (int(x) for x in part.split('~'))
+                reserved.update(range(lo, hi + 1))
+            elif re.fullmatch(r'\d{5}', part):
+                reserved.add(int(part))
+    if reserved:
+        for path in API_FILES + [os.path.join(DOCS, '01-PRD-产品需求文档.md')]:
+            if path == REGISTRY:
+                continue
+            for i, line in enumerate(read(path).split('\n'), 1):
+                # 跳过预留声明、以及「10301~10399」这类**段位范围**标题——
+                # 范围端点天然落在预留集合里，但那是在划分号段而非使用错误码
+                if re.search(r'预留|号段|保留不复用', line):
+                    continue
+                if re.search(r'\d{5}\s*~\s*\d{5}', line):
+                    continue
+                for m in re.finditer(r'(?<![\d.~])([1-4]\d{4})(?![\d.~])', line):
+                    code = int(m.group(1))
+                    if code in reserved:
+                        report('ERROR', 'C3', path,
+                               f'第 {i} 行使用了**预留号段**内的错误码 {code}——'
+                               f'预留码不在登记册中，"是否已登记"这条检查永远抓不到它')
+
     # 废弃码不应再被任何分册引用
     for code, meaning in registered.items():
         if '空号' in meaning or '已废弃' in meaning:
@@ -833,6 +867,7 @@ def check_c11_interface_refs():
         if sorted(toc) != list(range(1, len(toc) + 1)):
             report('ERROR', 'C11', path,
                    f'目录表编号不连续：{sorted(toc)[:12]}… 共 {len(toc)} 项')
+        in_trigger_table = False
         for i, line in enumerate(text.split('\n'), 1):
             for m in re.finditer(r'接口\s*(\d+)', line):
                 n = int(m.group(1))
@@ -842,6 +877,26 @@ def check_c11_interface_refs():
                 if n not in toc:
                     report('ERROR', 'C11', path,
                            f'第 {i} 行引用「接口 {n}」，本分册目录只有 1~{len(toc)}')
+            # 裸编号：§11 各表的「触发接口」列与 §2.3 权限总览的括号编号，
+            # 都不带"接口"前缀。P1-7 正是从这个洞漏出去的——插入一个接口后
+            # §2.3 整行编号错位一位，字面读出来是"教师可调转交管理员"。
+            if re.match(r'^\|[^|]*\|[^|]*\|\s*触发接口\s*\|', line):
+                in_trigger_table = True          # 只有带「触发接口」列的表才解析第 3 列
+            elif not line.startswith('|'):
+                in_trigger_table = False
+            bare = ''
+            if in_trigger_table:
+                m11 = re.match(r'^\| \d{5} \| [^|]* \| ([^|]*) \|', line)
+                if m11:
+                    bare = m11.group(1)
+            elif re.match(r'^\| [^|]* \| `(teacher|student|org_admin)` \|', line):
+                bare = line                      # §2.3 权限总览行
+            for bm in re.finditer(r'(?<![\d.])(\d{1,2})(?![\d.%s])' % '', bare):
+                n = int(bm.group(1))
+                if n and n not in toc:
+                    report('ERROR', 'C11', path,
+                           f'第 {i} 行的裸编号 {n} 超出本分册目录范围 1~{len(toc)}')
+
             # 带名称注解的引用，顺带核对名称是否对得上
             for m in re.finditer(r'接口\s*(\d+)（([^）]{2,20})）', line):
                 n, label = int(m.group(1)), m.group(2)
