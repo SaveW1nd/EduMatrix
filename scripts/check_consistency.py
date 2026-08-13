@@ -203,10 +203,17 @@ def check_c3_error_codes():
                 continue
             # 语境词之外还要求写法像错误码：`10107` / 返回 10107 / 表格首列 | 10107 |
             # / 括号内的码列表（10010 / 10207）——最后一种曾整类漏检
+            # / **无括号的码枚举**（10008 / 10009 / 10012）——括号列表分支当年只按
+            #   「（10010 / 10207）」这一种形态写，同类的无括号写法没进视野，一直漏着：
+            #   03-课程与视频 38 处、04-题库与作业 17 处，与 04-一期实施计划无关。
+            #   **必须至少两个五位码用分隔符相连**才触发，否则「6 万行 → 40007」这类
+            #   单个业务数值会被拖进来；语境词那道门仍然先过，本分支不绕过它。
             for m in re.finditer(r'`([1-4]\d{4})`'
                                  r'|(?:返回|错误码|拒绝|失败|抛|报|→)\s*`?([1-4]\d{4})`?'
                                  r'|^\|\s*([1-4]\d{4})\s*\|'
-                                 r'|[（(]\s*([1-4]\d{4})(?:\s*[/、,，]\s*[1-4]\d{4})*\s*[）)]', line):
+                                 r'|[（(]\s*([1-4]\d{4})(?:\s*[/、,，]\s*[1-4]\d{4})*\s*[）)]'
+                                 r'|([1-4]\d{4})(?=\s*[/、,，]\s*[1-4]\d{4})'
+                                 r'|(?<=[1-4]\d{4})(?:\s*[/、,，]\s*)([1-4]\d{4})', line):
                 code = next(g for g in m.groups() if g)
                 if code not in registered:
                     report('ERROR', 'C3', path, f'第 {i} 行使用了未登记的错误码 {code}')
@@ -222,7 +229,10 @@ def check_c3_error_codes():
             elif re.fullmatch(r'\d{5}', part):
                 reserved.add(int(part))
     if reserved:
-        for path in API_FILES + [os.path.join(DOCS, '01-PRD-产品需求文档.md')]:
+        # 同上，扩到 MD_FILES：C3 的三个子检查各有各的 for 循环与入口条件，
+        # 上一轮只改了第一个的文件列表，这两个继续对 04 假通过。
+        # 实测扩范围后新纳入的 6 份文档零命中，无副作用。
+        for path in MD_FILES:
             if path == REGISTRY:
                 continue
             for i, line in enumerate(read(path).split('\n'), 1):
@@ -243,12 +253,20 @@ def check_c3_error_codes():
     # 这是 ERROR 不是 WARN：废弃码保留号位正是为了让历史日志里的旧值不产生歧义，
     # 一旦被重新引用，同一个码就又有了两种含义——与"一码两义"是同一类缺陷。
     # 真实案例：20017（回调签名校验失败）随转码回调改为消息队列消费而退役。
+    # 解释性引用豁免：契约 §2.8 论证「为什么改用 SMQ 拉取而不是 HTTP 回调」时，
+    # 必须原样写出当年那个会被判成投递成功的响应体 `{"code":20017}`——**删了论证就断了**，
+    # 与 00-通用约定 §10 那笔「160 − 1 + 1 = 159」的接口数注记同性质：
+    # 它记录的是一次改造的理由，不是待清理的残留。后人不要顺手清掉。
+    # 锚点用「投递可靠性」而不是码本身——用码当锚点会把该文件所有引用一起豁免。
+    _DEPRECATED_ALLOW = ('投递可靠性', '会被判成投递成功')
     for code, meaning in registered.items():
         if '空号' in meaning or '已废弃' in meaning:
-            for path in API_FILES:
+            for path in MD_FILES:
                 if path == REGISTRY:
                     continue
                 for i, line in enumerate(read(path).split('\n'), 1):
+                    if any(a in line for a in _DEPRECATED_ALLOW):
+                        continue
                     if code in line and '废弃' not in line and '空号' not in line:
                         report('ERROR', 'C3', path,
                                f'第 {i} 行引用了已废弃的错误码 {code}（登记册：{meaning[:30]}）')
