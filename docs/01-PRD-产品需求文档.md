@@ -1432,7 +1432,7 @@ Resp: {"code":200,"msg":"操作成功","data":{"watchedDuration":130,"watchStatu
 - Given 监护人提出删除请求，管理员以 `archiveReason=2` 归档该学员，When 归档完成，Then `org_student.archive_reason=2`、`archive_time` 为当前时间、`anonymized_at` 仍为 NULL，该学员立即禁止登录（`10015`）。
 - Given 上述学员归档未满 30 日，When 管理员执行归档恢复，Then **恢复成功**（这正是撤回窗口的意义）。
 - Given 上述学员归档已满 30 日，When 脱敏定时任务执行，Then `guardian_phone` 与 `sys_user.phone` 变为不可逆掩码、`guardian_name` 与 `real_name` 变为姓氏 + `*`、`anonymized_at` 回填；而 `sys_login_log` / `sys_oper_log` **不受影响**（《网络安全法》第 21 条要求日志留存 ≥ 6 个月）。
-- Given 学员已脱敏（`anonymized_at` 非空），When 管理员尝试归档恢复，Then 返回 `400`——脱敏不可逆，恢复出来的是一个联系不上的账号，且违背了当初对监护人"已删除"的承诺。
+- Given 学员已脱敏（`anonymized_at` 非空），When 管理员尝试归档恢复，Then 返回 **`10209`**（学员已脱敏，不可恢复）——脱敏不可逆，恢复出来的是一个联系不上的账号，且违背了当初对监护人"已删除"的承诺。
 - Given 学员以 `archiveReason=1`（正常毕业）归档满 30 日，When 脱敏任务执行，Then **不脱敏**——毕业校友的联系方式必须保留，机构仍需联系他们。
 
 > **F7-3 这三列（`archive_reason` / `anonymized_at` / 脱敏任务）是写这一节时才补上的。** 此前契约 §7.2 第 3 条描述了完整路径，读起来毫无破绽，但归档接口只改 `org_student.status`、没有任何脱敏动作，也没有任何定时任务扫描"归档满 30 日的学员"，表结构里更没有承载它的列。**指向契约发现不了这件事**——契约那五条读起来都很完整；只有在写验收标准时才会发现第三条根本落不了地。

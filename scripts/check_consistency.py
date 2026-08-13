@@ -393,6 +393,7 @@ BANNED = {
 ALLOW = [
     ('is_deleted', '若用 `is_deleted` 这类 0/1 标志'),      # 契约 §2.2 论证前提
     ('is_deleted', '`is_deleted TINYINT(0/1)`'),            # 02-数据库设计 §7 对照表
+    ('is_deleted', '| 逻辑删除 | `is_deleted` 0/1 |'),        # 契约 §2.2「同源原则」对照表
     ('creator_id', '不设 `creator_id` 这类专用创建人列'),   # 契约 §2.2 禁用声明
     ('creator_id', 'creatorId'),                            # DTO 字段名说明中提及列名
 ]
