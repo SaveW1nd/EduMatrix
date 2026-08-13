@@ -22,6 +22,7 @@ import json
 import os
 import re
 import sys
+import traceback
 from collections import defaultdict
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -55,7 +56,30 @@ def report(level, code, file, detail):
     results.append((level, code, os.path.relpath(file, ROOT) if file else '-', detail))
 
 
+_MISSING = set()          # 已报过缺失的路径，避免同一个文件被十几条规则各报一次
+
+
 def read(path):
+    """读文件；**文件不存在时不抛异常，改为报一条 ERROR 并返回空串**。
+
+    为什么不让它直接崩：`MD_FILES` / `API_FILES` 是写死的路径清单，文档改名或删除
+    后忘了同步清单，这里就会 `FileNotFoundError`。崩溃的退出码确实是 1（CI 不会
+    误判成通过），但**整个脚本在第一个缺失文件处就中止，其余十几项检查一条都跑不到**
+    ——本该一次跑完的 18 项只剩下"在某处炸了"，真正的问题（比如同一批改动里还有
+    错误码没登记）被这次崩溃掩盖，要修完路径才看得见。
+
+    为什么也不静默返回空串：那是把崩溃换成**假通过**——所有针对该文件的检查都对着
+    空串跑，全绿，而文件根本没被读到。这正是本仓库反复踩的那一类（见 README
+    「扫描范围 ≠ 覆盖」）。所以必须留下一条 ERROR。
+    """
+    if not os.path.exists(path):
+        if path not in _MISSING:
+            _MISSING.add(path)
+            report('ERROR', 'C0', path,
+                   '扫描清单中登记的文件不存在——多半是文档改名或删除后没有同步 '
+                   '`MD_FILES` / `API_FILES`。本文件相关的检查已全部跳过，'
+                   '结果不完整，不要按"其余项全绿"判断通过')
+        return ''
     with open(path, encoding='utf-8') as f:
         return f.read()
 
@@ -1221,6 +1245,17 @@ def main():
     by_code = defaultdict(list)
     for lv, code, f, d in results:
         by_code[code].append((lv, f, d))
+
+    # C0 = 扫描清单本身出了问题（文件缺失）。它不属于任何一条检查项，因此**不在
+    # `checks` 里**——若不在这里单独打印，它会被计入总数却永远不显示，正是本仓库
+    # 反复踩的"报了但看不见"。且必须无视 `--only`：清单缺文件时，任何单跑的结果
+    # 都是不完整的。
+    if by_code.get('C0'):
+        print('  ‼️  C0 扫描清单不完整 — 本次结果不可信')
+        for lv, f, d in by_code['C0']:
+            print(f'        [{lv}] {f}: {d}')
+        print()
+
     for code, _ in checks:
         if only and code != only:
             continue
@@ -1241,4 +1276,16 @@ def main():
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    # 退出码是 CI 唯一的判据：0 = 检查通过。它**不表示脚本跑完了**——这两件事必须
+    # 分开看。Python 对未捕获异常本就以非 0 退出（实测崩溃时 EXIT=1，CI 不会误放行），
+    # 本层不是在修一个"崩溃却返回 0"的缺陷，而是把这条不变量**显式写死**：
+    # 将来任何人加一个兜底的 `except:`、或在 finally 里 `sys.exit(0)`，
+    # 都会在这里露出来，而不是悄悄把崩溃变成绿灯。
+    try:
+        sys.exit(main())
+    except SystemExit:
+        raise
+    except BaseException:
+        traceback.print_exc()
+        print('\n检查器自身异常中止——本次结果不完整，一律按失败处理（退出码 1）')
+        sys.exit(1)
