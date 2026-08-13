@@ -781,6 +781,9 @@ Resp: {"code":200,"data":{"watchedDuration":130,"watchStatus":1,"maxPosition":13
 > `sys_menu` **无 `tenant_id` 列**（平台级表，不进租户插件）；`sys_role_menu` 的绑定行 `tenant_id` 一律为 `0`，
 > 读侧放行规则见 §2.9，写侧对 `org_admin` **全只读**——仅 `super_admin` 可改，任何人不可删。
 >
+> **顶级项一律 `parent_id = 0`**（DDL 注释：父菜单ID，0=顶级），包括不挂在任何主导航目录下的顶级菜单（工作台 A2 / 导师看板 B1，PRD §6 入口列均为「登录后默认」）。
+> `parent_id` **绝不可等于自身 `id`**：按 `idx_parent_id(parent_id, sort)` 取子节点时，自环行会把自己查成自己的子节点——递归 CTE 因成环报错或无限展开，「按 parent 分组再拼树」则因找不到 `parent_id = 0` 的入口而让它从树上消失，而 `perms` 又确实返回了。
+>
 > ID 为固定值而非雪花：`id = 1949000000000000000 + 目录号×10000 + 菜单号×100 + 按钮号`，末五位即 (目录, 菜单, 按钮)。
 > 初始化数据必须可重复执行、可逐行对账，雪花 ID 做不到这两点。
 >
@@ -788,8 +791,8 @@ Resp: {"code":200,"data":{"watchedDuration":130,"watchStatus":1,"maxPosition":13
 
 | 菜单 ID | 父 ID | 名称 | 类型 | 前端路由 | perms | PRD 页面 | 绑定角色 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `1949000000000010000` | `1949000000000010000` | 工作台 | C | /workbench | `stat:workbench:list` | A2 | org_admin |
-| `1949000000000020000` | `1949000000000020000` | 导师看板 | C | /teacher/dashboard | `stat:board:teacher` | B1 | teacher |
+| `1949000000000010000` | `0` | 工作台 | C | /workbench | `stat:workbench:list` | A2 | org_admin |
+| `1949000000000020000` | `0` | 导师看板 | C | /teacher/dashboard | `stat:board:teacher` | B1 | teacher |
 | `1949000000000100000` | `0` | 组织管理 | M | /org | — | — | super_admin、org_admin、teacher |
 | `1949000000000100100` | `1949000000000100000` | 组织树管理 | C | /org/tree | `org:node:list` | A3 | super_admin、org_admin |
 | `1949000000000100101` | `1949000000000100100` | 修改节点 | F | — | `org:node:edit` | A3 | org_admin |
@@ -881,7 +884,7 @@ Resp: {"code":200,"data":{"watchedDuration":130,"watchStatus":1,"maxPosition":13
 | `1949000000000500300` | `1949000000000500000` | 导出中心 | C | /stat/exports | `stat:export:list` | A18 / B13 | org_admin、teacher |
 | `1949000000000500301` | `1949000000000500300` | 创建导出任务 | F | — | `stat:export:add` | A18 | org_admin、teacher |
 | `1949000000000600000` | `0` | 系统管理 | M | /system | — | — | super_admin、org_admin |
-| `1949000000000600100` | `1949000000000600000` | 用户管理 | C | /system/users | `system:user:list` | A20 | super_admin、org_admin |
+| `1949000000000600100` | `1949000000000600000` | 用户管理 | C | /system/users | `system:user:list` | — | super_admin、org_admin |
 | `1949000000000600101` | `1949000000000600100` | 创建用户 | F | — | `system:user:add` | A20 | super_admin |
 | `1949000000000600102` | `1949000000000600100` | 修改用户 | F | — | `system:user:edit` | A20 | super_admin |
 | `1949000000000600103` | `1949000000000600100` | 删除用户 | F | — | `system:user:remove` | A20 | super_admin |
