@@ -724,7 +724,7 @@ Resp: {"code":200,"data":{"watchedDuration":130,"watchStatus":1,"maxPosition":13
 **上线后 DDL 不再手工执行**，一律走 Flyway：
 
 - 脚本命名 `V{yyyyMMddHHmm}__{描述}.sql`，只增不改；已发布的脚本**永不修改**，修正靠新增脚本。
-- `docs/sql/edumatrix_ddl.sql` 是**初始基线**（Flyway `V202608120000__baseline.sql`），此后所有变更以增量脚本表达，该文件不再随手改动——否则新老环境会分叉。
+- `backend/src/main/resources/db/migration/V202608120000__baseline.sql` 是**初始基线**（原 `docs/sql/edumatrix_ddl.sql`，已于模块 01 迁入工程并改名，此后只有这一个名字），此后所有变更以增量脚本表达，该文件不再随手改动——否则新老环境会分叉。
 - 每个脚本必须**幂等或可重复执行前置判断**（`ADD COLUMN IF NOT EXISTS` 之类 MySQL 不支持，改为脚本内先查 `information_schema` 再决定），并配套一份回滚说明（不要求可执行的 down 脚本，但要写清怎么退）。
 
 **大表在线 DDL**：`hw_answer_detail` 稳态约 3600 万行、`vod_heartbeat_log` 亿级。MySQL 8.0 的 Online DDL 对加列是 INSTANT，但**加索引、改列类型仍会长时间占用元数据锁**。约定：
@@ -744,7 +744,7 @@ Resp: {"code":200,"data":{"watchedDuration":130,"watchStatus":1,"maxPosition":13
 | --- | --- |
 | `docs/01-PRD-产品需求文档.md` | 完整 PRD：角色与权限、组织树与人员管理、资源授权与权限模板（FR- 编号）、课程与视频、题库与作业、数据中心、页面清单、边界场景、非功能需求 |
 | `docs/02-数据库设计.md` | 表结构说明、ER 图、核心设计要点、索引与分区、容量估算 |
-| `docs/sql/edumatrix_ddl.sql` | 全部 41 表可执行 DDL（MySQL 8.0） |
+| `backend/src/main/resources/db/migration/V202608120000__baseline.sql` | 全部 41 表可执行 DDL（MySQL 8.0） |
 | `docs/03-API接口文档/00-通用约定.md` | 认证、响应结构、分页、幂等、错误码登记册 |
 | `docs/03-API接口文档/01-认证与系统.md` | auth + system |
 | `docs/03-API接口文档/02-组织机构.md` | org：组织树、人员、标签、资源授权、权限模板 |
@@ -785,8 +785,8 @@ Resp: {"code":200,"data":{"watchedDuration":130,"watchStatus":1,"maxPosition":13
 
 ## 10. 附表 A：菜单树与权限标识（权威）
 
-> 本表与 `docs/sql/V202608140000__init_menu_and_role_menu.sql` **由同一份数据源生成**，两者不一致即缺陷。
-> 落库脚本走 Flyway 增量，`edumatrix_ddl.sql` 基线**不因菜单数据而改动**（§7.3）。
+> 本表与 `backend/src/main/resources/db/migration/V202608140000__init_menu_and_role_menu.sql` **由同一份数据源生成**，两者不一致即缺陷。
+> 落库脚本走 Flyway 增量，`V202608120000__baseline.sql` 基线**不因菜单数据而改动**（§7.3）。
 >
 > `sys_menu` **无 `tenant_id` 列**（平台级表，不进租户插件）；`sys_role_menu` 的绑定行 `tenant_id` 一律为 `0`，
 > 读侧放行规则见 §2.9，写侧对 `org_admin` **全只读**——仅 `super_admin` 可改，任何人不可删。

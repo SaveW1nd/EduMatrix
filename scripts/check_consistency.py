@@ -27,7 +27,11 @@ from collections import defaultdict
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DOCS = os.path.join(ROOT, 'docs')
-DDL_PATH = os.path.join(DOCS, 'sql', 'edumatrix_ddl.sql')
+# DDL 已于模块 01 迁入工程作为 Flyway 初始基线（原 docs/sql/edumatrix_ddl.sql，
+# 见 05-工程结构.md §B）。C1 / C6 / C10 / C14 / C18 五条检查全部经本常量读 DDL，
+# 路径失效则这五条同时失效——read() 对缺文件报 ERROR，不会静默通过。
+DDL_PATH = os.path.join(ROOT, 'backend', 'src', 'main', 'resources',
+                        'db', 'migration', 'V202608120000__baseline.sql')
 REGISTRY = os.path.join(DOCS, '03-API接口文档', '00-通用约定.md')
 
 # 扫描范围。注意 scripts/README.md 故意不在列内：它的失败模式表大量点名已废弃的
