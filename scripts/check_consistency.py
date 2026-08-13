@@ -864,6 +864,57 @@ def check_c11_interface_refs():
     **不带"接口"前缀的裸编号列**（`9 / 10 / 13 / 14 / 18`）记录触发接口——后者极易
     整块漏掉。编号错了不会有任何症状，只会把读文档的人指到另一个接口上。
     """
+    # 先建"分册名 → 目录"总表，供跨册引用校验。
+    # 此前 C11 对没有接口目录的文件（00-通用约定）整份 continue 跳过，
+    # 于是它里面的跨册引用**从未被校验过**——白名单那行指向"03-课程与视频接口 30"，
+    # 而 30 是播放心跳上报、29 才是解密密钥。同类问题还有 01 分册指向 02 §7.3 的编号。
+    volume_tocs = {}
+    for path in API_FILES:
+        m = re.match(r'(0\d-[^.]+)\.md', os.path.basename(path))
+        toc_ = {int(x.group(1)): x.group(2).strip() for x in _TOC_ROW.finditer(read(path))}
+        if m and toc_:
+            volume_tocs[m.group(1)] = toc_
+
+    # 跨册引用：「02-组织机构接口 39」「02-组织机构分册接口 8」「02-组织机构 §7.3（接口 29）」
+    _XREF = re.compile(r'(0\d-[\u4e00-\u9fa5]{2,8})\s*(?:分册)?[^\n]{0,14}?接口\s*(\d+)')
+    for path in MD_FILES:            # 含 PRD 与 00-通用约定，不限于有目录的分册
+        for i, line in enumerate(read(path).split('\n'), 1):
+            for m in _XREF.finditer(line):
+                vol, n = m.group(1), int(m.group(2))
+                if vol not in volume_tocs:
+                    continue
+                if os.path.basename(path).startswith(vol):
+                    continue         # 本册内引用交给下面的逐册校验
+                tgt = volume_tocs[vol]
+                if n not in tgt:
+                    report('ERROR', 'C11', path,
+                           f'第 {i} 行跨册引用「{vol} 接口 {n}」，该分册目录只有 1~{len(tgt)}')
+                    continue
+                # 「在范围内但指错」范围检查抓不到——只有带名称/小节注解时才可判。
+                # 真实缺陷：白名单指向「03-课程与视频接口 30」（实为播放心跳，29 才是解密密钥）；
+                # 01 分册指向「02-组织机构 §7.3（接口 30）」（实为标签分页，29 才是导入任务查询）。
+                # 因此**跨册引用一律要求带接口名或小节号**，否则只报 WARN 提示补注解。
+                tail = line[m.end():m.end() + 24]
+                label = re.match(r'\s*([\u4e00-\u9fa5]{2,12})', tail)
+                sect = re.search(r'§(\d+\.\d+)', line[:m.start() + len(m.group(0))])
+                if label:
+                    a_, b_ = label.group(1).replace(' ', ''), tgt[n].replace(' ', '')
+                    if a_ not in b_ and b_ not in a_:
+                        report('ERROR', 'C11', path,
+                               f'第 {i} 行跨册引用「{vol} 接口 {n}（{label.group(1)}）」'
+                               f'与该分册目录名「{tgt[n]}」不符')
+                elif sect:
+                    head = re.search(r'^### %s (.+)$' % re.escape(sect.group(1)),
+                                     read(os.path.join(DOCS, '03-API接口文档', vol + '.md')), re.M)
+                    if head and head.group(1).strip().replace(' ', '') != tgt[n].replace(' ', ''):
+                        report('ERROR', 'C11', path,
+                               f'第 {i} 行跨册引用「{vol} §{sect.group(1)}（接口 {n}）」不自洽：'
+                               f'该分册 §{sect.group(1)} 是「{head.group(1).strip()}」，而接口 {n} 是「{tgt[n]}」')
+                else:
+                    report('WARN', 'C11', path,
+                           f'第 {i} 行跨册引用「{vol} 接口 {n}」未带接口名——'
+                           f'跨册编号变动时无从校验，建议写成「接口 {n} {tgt[n]}」')
+
     for path in API_FILES:
         text = read(path)
         toc = {int(m.group(1)): m.group(2).strip() for m in _TOC_ROW.finditer(text)}

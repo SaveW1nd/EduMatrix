@@ -736,12 +736,12 @@ DROP TABLE IF EXISTS `vod_video`;
 CREATE TABLE `vod_video` (
   `id`             BIGINT       NOT NULL                COMMENT '媒资ID（雪花算法）',
   `owner_node_id`  BIGINT       NOT NULL                COMMENT '归属节点ID（→org_node.id，上传时写入上传者所在节点）：契约 2.5 授权前提，视频亦为受管资源（resource_type=3）',
-  `provider`       TINYINT      NOT NULL DEFAULT 2      COMMENT '云厂商：1腾讯 2阿里。**默认 2 阿里云**（契约 §1 主选）——uk_provider_file 以 provider 为首列，默认值写错会让整批媒资落在错误的唯一键分区上，转码回调按 (provider, vod_file_id) 反查将定位不到',
+  `provider`       TINYINT      NOT NULL DEFAULT 2      COMMENT '云厂商：1腾讯 2阿里。**默认 2 阿里云**（契约 §1 主选）——uk_provider_file 以 provider 为首列，默认值写错会让整批媒资落在错误的唯一键分区上，转码事件消费时按 (provider, vod_file_id) 反查将定位不到',
   `encrypt_type`   TINYINT      NOT NULL DEFAULT 1      COMMENT '加密方式：1 HLS标准加密(AES-128，契约 §1 定案) 2 阿里云私有加密 0 不加密。选 1 的代价是必须自建密钥分发接口（03-03 §8.2），而该接口才是真正的鉴权闸口——CDN 直出的 m3u8/TS 只靠 auth_key 防盗链、不防越权',
   `decrypt_key_uri` VARCHAR(500) NULL DEFAULT NULL      COMMENT '解密密钥 URI（写入 m3u8 的 EXT-X-KEY，指向本服务 /api/v1/vod/decrypt-key）。**只存 URI，绝不存密钥本身**：明文密钥不落库、不进日志，由服务端按 videoId 向 KMS 实时取密文再解密下发',
-  `vod_file_id`    VARCHAR(100) NULL DEFAULT NULL       COMMENT '云端媒资唯一ID（阿里 VideoId / 腾讯 FileId）。**阿里云路径下发上传凭证时即写入**（响应的 cloudVideoId），故非空；NULL 仅出现在腾讯路径的预创建态（status=0，上传完成回调才回填）',
+  `vod_file_id`    VARCHAR(100) NULL DEFAULT NULL       COMMENT '云端媒资唯一ID（阿里 VideoId / 腾讯 FileId）。**阿里云路径下发上传凭证时即写入**（响应的 cloudVideoId），故非空；NULL 仅出现在腾讯路径的预创建态（status=0，上传完成事件才回填）',
   `video_name`     VARCHAR(200) NOT NULL                COMMENT '视频名称',
-  `duration`       INT          NOT NULL DEFAULT 0      COMMENT '视频时长（秒，转码回调后回填）',
+  `duration`       INT          NOT NULL DEFAULT 0      COMMENT '视频时长（秒，TranscodeComplete 事件消费时回填）',
   `cover_url`      VARCHAR(500) NULL DEFAULT NULL       COMMENT '云端封面 URL',
   `size_bytes`     BIGINT       NOT NULL DEFAULT 0      COMMENT '源文件大小（字节）',
   `status`         TINYINT      NOT NULL DEFAULT 0      COMMENT '媒资状态：0上传中 1转码中 2正常 3转码失败 9禁用',
@@ -755,7 +755,7 @@ CREATE TABLE `vod_video` (
   `deleted_at`     BIGINT      NOT NULL DEFAULT 0      COMMENT '逻辑删除标记：0=未删除；删除时写入毫秒时间戳。用时间戳而非 0/1，使同一业务键可容纳任意多条已删除行（唯一索引末尾追加本列）',
   `remark`         VARCHAR(500) NULL DEFAULT NULL       COMMENT '备注',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_provider_file` (`provider`, `vod_file_id`, `deleted_at`) COMMENT '同一云厂商媒资ID唯一（转码回调幂等定位，追加 deleted_at 兼容逻辑删除；vod_file_id 为 NULL 的上传中记录不参与唯一冲突，可多条并存）',
+  UNIQUE KEY `uk_provider_file` (`provider`, `vod_file_id`, `deleted_at`) COMMENT '同一云厂商媒资ID唯一（转码事件消费的幂等定位，追加 deleted_at 兼容逻辑删除；vod_file_id 为 NULL 的上传中记录不参与唯一冲突，可多条并存）',
   KEY `idx_tenant_status` (`tenant_id`, `status`) COMMENT '机构媒资库按转码状态筛选',
   KEY `idx_owner_node_status` (`owner_node_id`, `status`) COMMENT '"我上传的媒资"列表 / 授权校验时确认自己是否为 owner'
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci COMMENT = '云端媒资表（阿里云 VOD 为主，provider 列保留腾讯兼容位；授权见 org_resource_grant，resource_type=3）';
