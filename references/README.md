@@ -1,7 +1,7 @@
 # 参考开源仓库（References）
 
 > 本目录存放四个参考仓库的浅克隆（`--depth 1`，仅最新代码，无历史），供开发团队对照源码做二开与架构设计。
-> 云厂商 VOD（腾讯云/阿里云）无开源仓库，以官方文档为准，见文末链接。
+> 云厂商 VOD（阿里云）无开源仓库，以官方文档为准，见文末链接。
 
 ## 仓库清单与借鉴指引
 
@@ -42,7 +42,6 @@
   - HLS 支持：DPlayer + hls.js 播放 `.m3u8`，配合 VOD 加密流
 
 ### 5. 云端 VOD（无仓库，文档参考）
-- 腾讯云 VOD：https://cloud.tencent.com/document/product/266 （上传→自动转码模板→HLS 加密→播放器签名 psign）
 - 阿里云 VOD：https://help.aliyun.com/product/29932.html （PlayAuth 播放凭证模式）
 - 对应契约表：`vod_video`（provider 字段区分厂商），接口 `POST /api/v1/vod/upload-token`、`POST /api/v1/vod/play-auth`、`POST /api/v1/vod/callback/{provider}`
 
