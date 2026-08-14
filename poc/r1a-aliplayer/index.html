@@ -41,6 +41,14 @@
     object-fit:contain;
   }
 
+  /* 大播放按钮默认被 Aliplayer 用行内样式钉在左下角（left:30px; bottom:80px），
+     手机上很难点也不符合直觉，挪到画面正中。行内样式要 !important 才盖得住。 */
+  #playerbox .prism-big-play-btn {
+    left:50% !important; top:50% !important;
+    right:auto !important; bottom:auto !important;
+    transform:translate(-50%, -50%);
+  }
+
   /* 与基线同一套结构：#wm 是防篡改锚点（样式永不由脚本改动），漂移只作用在 #wmInner。
      红色虚线框是诊断用的 —— 全屏时若连这圈框都看不见，说明视频走了独立原生层。 */
   #wm { position:absolute; left:0; top:0; right:0; bottom:0; z-index:2147483000; pointer-events:none;
