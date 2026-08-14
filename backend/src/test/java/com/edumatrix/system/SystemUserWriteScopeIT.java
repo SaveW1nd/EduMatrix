@@ -162,15 +162,23 @@ class SystemUserWriteScopeIT extends SystemIntegrationTestBase {
     }
 
     @Test
-    @DisplayName("§2.1｜org_admin 传一个不在自身子树内的 nodeId → 403（分册明写，非 10107）")
+    @DisplayName("§2.1｜org_admin 传一个不在自身子树内的 nodeId → 10107（三分法，非 §2.1 写的 403）")
     void listRejectsOutOfScopeNodeId() throws Exception {
         JsonNode response = client.getWithToken(
                 USERS + "?nodeId=" + AuthFixtures.TEACHER_NODE, orgAdminToken());
 
-        // §2.1 参数表逐字：「传入的节点若不在自身子树内返回 403」。
-        // 这与契约 §2.4 三分法对「请求参数中显式指定的目标」规定的 10107 不同 ——
-        // 按权威顺序照分册实现，差异已登记在 UserPageQuery#nodeId 的注释里
-        assertThat(code(response)).isEqualTo(403);
+        // 契约 §2.4 三分法：「请求参数中显式指定的目标」越界 → 10107（HTTP 200），
+        // 因为用户是主动选的、需要明确提示"请重新选择"。
+        // §2.1 参数表写的是 403，但本字段与 §2.2 的 parentNodeId 是同一形状，
+        // 而 §2.2 用的就是 10107 —— 同一分册内同形状参数给了两种码。
+        // 已登记为 F-23，分册未改
+        assertThat(code(response)).isEqualTo(10107);
+        assertThat(response.path("msg").asText()).contains("管辖范围");
+
+        // §2.2 的 parentNodeId 越界【无法经 HTTP 验到】：super_admin 不受子树约束，
+        // 而 org_admin 在 @SaCheckPermission 那一层就 403 了，到不了 Service。
+        // 两处走的是【同一个方法】SubtreeScopeHelper#assertTargetInSubtree，
+        // 码由它一处决定 —— 这才是「同形状 → 同码」的保证，不是靠两条测试并列
     }
 
     @Test

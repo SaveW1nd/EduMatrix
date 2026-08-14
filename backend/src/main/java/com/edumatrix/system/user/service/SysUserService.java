@@ -117,7 +117,7 @@ public class SysUserService {
                 .orderByDesc(SysUser::getCreateTime)
                 .orderByAsc(SysUser::getId);
 
-        if (!applyDataScope(wrapper, query)) {
+        if (!applySubtreeScope(wrapper, query)) {
             // 子树解析为空集：SubtreeScopeHelper 已记 ERROR。按「什么都看不到」返回，
             // 绝不退化为不加过滤（那就是一次全量泄露）
             return PageResult.empty();
@@ -133,9 +133,15 @@ public class SysUserService {
     /**
      * 数据权限（§2.1 数据权限栏 + §0.2 唯一规则）。
      *
+     * <p><b>方法名刻意不叫 {@code applyDataScope}</b>：{@code DataScope} 是<b>已被契约否决的概念</b>
+     * （{@code sys_role} 早已删掉 {@code data_scope} 列，契约 §3「操作权限由角色定、数据范围由树定」），
+     * 用它命名会把后来者往「数据权限分档」上引，而本系统压根没有第二套过滤逻辑 ——
+     * 与 {@code common/subtree} 这个包为什么不叫 {@code datascope} 是同一条理由。
+     * {@code scripts/check_consistency.py} 的 C8 把 {@code DataScope} 列为禁用词。
+     *
      * <pre>
      * org_admin  ：仅自身节点子树内的账号（叠加租户插件的 tenant_id 过滤）
-     *              传了 nodeId 且不在自身子树内 → 403
+     *              传了 nodeId 且不在自身子树内 → 10107（三分法，见下）
      * super_admin：可传 tenantId 查指定租户；不传则查【平台级账号】(tenant_id = 0)
      *              传了 nodeId 则限定为该节点及其子树
      * </pre>
@@ -148,7 +154,7 @@ public class SysUserService {
      *
      * @return {@code false} 表示数据权限解析为空集，调用方应直接返回空页
      */
-    private boolean applyDataScope(LambdaQueryWrapper<SysUser> wrapper, UserPageQuery query) {
+    private boolean applySubtreeScope(LambdaQueryWrapper<SysUser> wrapper, UserPageQuery query) {
         if (TenantHelper.isSuperAdminSession()) {
             Long tenantId = query.getTenantId() == null
                     ? SystemOrgNode.PLATFORM_ROOT_ID : query.getTenantId();
@@ -164,12 +170,12 @@ public class SysUserService {
 
         Long myNodeId = currentNodeId();
         Long scopeNodeId = query.getNodeId() == null ? myNodeId : query.getNodeId();
-        if (query.getNodeId() != null && !subtreeScopeHelper.isInSubtree(myNodeId, query.getNodeId())) {
-            // §2.1 参数表逐字：「传入的节点若不在自身子树内返回 403」。
-            // 这与契约 §2.4 三分法对「请求参数中显式指定的目标」规定的 10107 不同 ——
-            // 按权威顺序（分册 > 契约通用条款在具体接口上的例外）照分册实现，
-            // 差异已在 UserPageQuery#nodeId 的注释里登记，不要当成 bug 去"修"
-            throw BizException.forbidden();
+        if (query.getNodeId() != null) {
+            // 取三分法的 10107，不取 §2.1 参数表写的 403 —— 本字段与 §2.2 的 parentNodeId
+            // 是同一形状（调用方在请求里显式选定的一个节点），而 §2.2 用的就是 10107。
+            // 同一分册内同形状参数给了两种码，其中一个必然是笔误；判断与依据逐条见
+            // UserPageQuery#nodeId 的注释，已登记为 04-实施计划.md §E 的 F-23
+            subtreeScopeHelper.assertTargetInSubtree(myNodeId, query.getNodeId());
         }
         return applySubtreeFilter(wrapper, scopeNodeId);
     }
