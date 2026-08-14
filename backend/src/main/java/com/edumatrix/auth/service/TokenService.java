@@ -267,6 +267,19 @@ public class TokenService {
         String token = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
         String tokenHash = hash(token);
 
+        // 【平台超管的 tenantId 就是 0，这不是「用 0 代替 null」】
+        //   sys_user.tenant_id 是 BIGINT NOT NULL DEFAULT 0，DDL 注释逐字写着「平台超管为 0」。
+        //   同一个 0 在另外两处互相印证：契约 §2.1 平台根节点 org_node.tenant_id = 0；
+        //   sys_user_role 的「平台超管绑定记录为 0」。
+        //   所以超管刷新时按 tenant_id = 0 过滤查到的正是他自己那一行 —— 是设计，不是巧合。
+        //
+        //   下面的 `== null` 分支因此是<b>纯防御性</b>的：从库里读出来的 AuthUser 永远走不到它
+        //   （列 NOT NULL）。留着是为了万一有人手工构造实体。
+        //
+        //   【将来若改成用 NULL 表示「不属于任何租户」的平台账号】——那要先改 DDL 的 NOT NULL，
+        //   而且<b>这里与 LoginService#refresh 必须一起改</b>：refresh 会把这个值喂给
+        //   runWithTenant，null 进去会直接抛 TenantContextMissingException，
+        //   而 0 进去会变成「按租户 0 过滤」——两种都不是那时想要的语义。
         redisTemplate.opsForValue().set(RedisKeys.refreshToken(tokenHash),
                 userId + ":" + (tenantId == null ? 0L : tenantId), REFRESH_TOKEN_TTL);
         String indexKey = RedisKeys.refreshTokenUserIndex(userId);
