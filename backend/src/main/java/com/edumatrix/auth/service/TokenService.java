@@ -241,6 +241,51 @@ public class TokenService {
         }
     }
 
+    /**
+     * 作废该账号<b>全部</b>在线会话 —— <b>含调用者自己那一个</b>（若调用者就是本人）。
+     *
+     * <p>由 {@code common/account/SessionRevoker} 暴露给 {@code system}（模块 03）与
+     * {@code org}（模块 07）：03-01 §2.4 删除用户 / §2.5 重置密码 / §2.6 停用，
+     * 03-02 §3.6 重置人员密码 / §4.4 / §5.4 / §6.4 删除人员，
+     * 七处逐字写着「作废（该用户全部）在线 Token」。
+     *
+     * <h2>与 {@link #revokeOtherSessions} 的唯一区别：不保留当前会话</h2>
+     * <p>那个是「本人改密 → 踢掉自己的其他设备」，当前这台不该被踢下去；
+     * 本方法的作用对象永远是<b>别人</b> —— 03-01 §2.3/§2.4/§2.6 都有 {@code 10012}
+     * 挡住「对当前登录账号执行该操作」，而 §2.5 的原文就是「该用户<b>全部</b>在线会话强制下线」。
+     * 若将来出现「管理员重置自己的密码」这种调用，被一起踢下线正是期望行为。
+     *
+     * <p><b>这与「不得为让停用生效而遍历子树逐个 logout」不冲突</b>：那条禁令针对的是
+     * 「停用一个节点 → 为其子树 1.1 万人各写两次」，规模由<b>受影响人数</b>决定；
+     * 这里是「处置一个账号 → 踢他自己的几个设备」，规模是个位数且不随组织规模增长。
+     * 与 {@link #revokeOtherSessions} 的类注释同一条理由。
+     *
+     * <p>{@code userId} 为 {@code null} 时静默返回：调用方通常刚从库里读出那一行，
+     * 让它再判一次 null 只会在七个调用点各写一遍同样的 if。
+     */
+    public void revokeAllSessions(Long userId) {
+        if (userId == null) {
+            return;
+        }
+        // Sa-Token 侧：该账号名下的全部 Token 一律登出。
+        // 用 logoutByTokenValue 逐个而不是 StpUtil.logout(userId)：两者效果相同，
+        // 但逐个走与 revokeOtherSessions 同一条路径，将来要加审计日志时只有一处形态
+        for (String token : StpUtil.getTokenValueListByLoginId(userId)) {
+            if (token != null) {
+                StpUtil.logoutByTokenValue(token);
+            }
+        }
+
+        // refreshToken 侧：按 auth:refresh:uid:{userId} 索引删，不做 KEYS 扫描（生产禁止）
+        Set<String> hashes = redisTemplate.opsForSet().members(RedisKeys.refreshTokenUserIndex(userId));
+        if (hashes == null) {
+            return;
+        }
+        for (String tokenHash : hashes) {
+            forget(userId, tokenHash);
+        }
+    }
+
     // =====================================================================
 
     /**

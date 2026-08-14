@@ -8,23 +8,36 @@ import com.edumatrix.common.entity.TenantEntity;
 /**
  * 登录链路专用的 {@code sys_user} 实体。
  *
- * <h2>⚠ 这是一个窄实体，模块 03 落地后须重新评估它的去留</h2>
- * <p>05-工程结构.md §D 写的是「模块 02 …… 同时触及 {@code system/user/entity}」，
- * 但 §A1 的第三条硬约束<b>禁止领域包互相 import</b>（{@code scripts/check_backend_conventions.sh}
- * 的检查③会 grep 出 {@code auth} 里的 {@code import com.edumatrix.system.*}），
- * 而模块 03 尚不存在、没有对方的 Service 可调。两条只能满足一条时，
- * <b>选那条能被脚本验证的</b>，因此本类落在 {@code auth/}。
+ * <h2>定案（模块 03）：保留为读模型，与 {@code system/user/entity/SysUser} 并存</h2>
+ * <p>本类原留有「模块 03 落地后须重新评估：合并还是保留」的标记。<b>那次评估已经发生，
+ * 结论是保留</b>，三条理由如下 —— 写在这里是为了让下一个人<b>不必再评估一次</b>。
  *
- * <p><b>后果是模块 03 建 {@code system/user/} 时会出现第二个 {@code sys_user} 实体。</b>
- * 届时的处置有两条，需要那时决定而不是现在猜：
  * <ol>
- *   <li><b>合并</b> —— 若 {@code system/user} 愿意通过 Service 暴露登录所需的查询，
- *       本类删除，{@code auth} 改调对方 Service（那时检查③仍禁止直接 import 实体，
- *       所以对方 Service 要返回自己的 DTO）；
- *   <li><b>保留为读模型</b> —— 明确本类是登录链路的窄读模型，与 {@code system/user}
- *       的写模型并存，各自演化。
+ *   <li><b>合并会把全库唯一的 {@code TenantHelper.ignore()} 调用点搬进 {@code system}，
+ *       或者变成两处。</b>登录链路的核心查询是
+ *       {@code TenantHelper.ignore(() -> authUserMapper.selectByUsername(username))} ——
+ *       它必须跨租户，因为<b>那一刻还不知道租户是谁，租户恰恰是这次查询的结果</b>。
+ *       要合并，就得让 {@code system/user} 的 Service 暴露一个「按用户名查、带 BCrypt 密文、
+ *       跨租户」的方法，那个 {@code ignore()} 就跟着搬家。而
+ *       {@code TokenService} 的类注释正把「全系统的 {@code ignore()} 因此仍然只有一处」
+ *       当作<b>已兑现的承诺</b>在引用 —— 合并等于当场作废那句话。
+ *   <li><b>两者的形状本来就不同。</b>本类是 11 列<b>只读</b>窄实体，且必须读
+ *       {@code password}；{@code SysUser} 是写模型，而它<b>任何路径下都不读
+ *       {@code password}</b>（03-01 §2.3 明写「密码不经本接口修改」，§2.5 只写不读）。
+ *       合并的结果是一个既把密文暴露给写侧、又给读侧背上 8 个用不到的列的实体。
+ *   <li><b>合并后 {@code auth} 反而更脆。</b>登录是免登录白名单接口，依赖越少越好；
+ *       让它转而依赖 {@code system} 领域的 Service，等于把登录链路挂到一个会随
+ *       模块 03/04/07 频繁演化的包上。
  * </ol>
- * <b>留这段注释是为了让那次评估真的发生</b>，而不是靠人想起来。
+ *
+ * <p>（§A1 第三条硬约束<b>禁止领域包互相 import</b>，{@code scripts/check_backend_conventions.sh}
+ * 的检查③会 grep 出 {@code auth} 里的 {@code import com.edumatrix.system.*} ——
+ * 它排除了「直接共用实体」这条路，但不是本次定案的主要理由：即便没有它，上面三条依然成立。）
+ *
+ * <p><b>跨领域的账号能力走 SPI</b>：{@code system} / {@code org} 需要 {@code auth} 的
+ * 会话作废与口令哈希时，注入 {@code common/account} 下的 {@code SessionRevoker} /
+ * {@code PasswordHasher}（实现是 {@code auth/session/AuthAccountProvider}），
+ * 不碰本类，也不碰 {@code AuthUserMapper}。
  *
  * <h2>字段只取登录链路要用的那些</h2>
  * <p>{@code sys_user} 有 19 列，这里只声明 11 列 —— 缺的列（如 {@code remark}）
