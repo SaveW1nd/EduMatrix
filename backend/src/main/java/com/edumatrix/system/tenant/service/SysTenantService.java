@@ -240,15 +240,35 @@ public class SysTenantService {
      * 删一个租户就把它全部账号的用户名释放出去，别人可以立刻注册走；
      * 等到"可恢复"真的发生时，那些用户名可能已经不属于它了。
      *
-     * <h2>"该租户全员即时禁止登录"不需要额外动作</h2>
-     * <p>租户行软删后 {@code AuthOrgMapper#selectTenant}（条件带 {@code deleted_at = 0}）查不到，
-     * {@code LoginCheckService} 的第⑥步按「租户行查不到也判 {@code 10007}」拒登。
+     * <h2>"该租户全员即时禁止登录"不需要额外动作，且<b>不依赖任何前置条件</b></h2>
+     * <pre>
+     * 删除 → sys_tenant.deleted_at 写毫秒时间戳
+     *      → AuthOrgMapper#selectTenant 的 SQL 带 AND deleted_at = 0
+     *      → 查不到 → LoginCheckService 第⑥步「租户行查不到也判 10007」→ 拒登
+     * </pre>
+     * <p><b>这条链路不经过 {@code status}</b>：即使有人绕过"必须先停用"直接删（或将来
+     * §5.5 取消了那条前置条件），登录照样被拦。所以它是<b>结构性的</b>闭合，
+     * 不是"因为前面那一步恰好做过"。
      *
      * <h2>已在线的 Token 为什么不在这里踢</h2>
-     * <p><b>因为进得来这里的租户必然已经停用过</b>——本接口的前置条件是 {@code status = 1}
-     * （§5.5：「仅允许删除已停用的租户，防误删」），而 §5.7 停用那一步已经把全员踢下线了。
-     * §5.5 原文也确实没有"作废在线 Token"这一句。<b>这个不对称是前置条件带来的，不是漏写</b>；
-     * 若将来 §5.5 取消"必须先停用"，这里就必须补上踢线。
+     * <p>§5.5 原文没有"作废在线 Token"这一句，而实际也不必：本接口的前置条件是
+     * {@code status = 1}（§5.5：「仅允许删除已停用的租户，防误删」），
+     * 而 §5.7 停用那一步<b>已经把全员踢下线了</b>。这个不对称是前置条件带来的，不是漏写。
+     *
+     * <h2>⚠ 一条必须写下来的依赖：级联软删让节点侧校验<b>失效</b>，靠判定顺序兜住</h2>
+     * <p>{@link TenantOrgMapper#softDeleteTenantSubtree} 把整棵子树的 {@code org_node}
+     * 写上 {@code deleted_at}，而 {@code FrozenNodeMapper#selectFirstDisabled} 的 SQL 是
+     * {@code WHERE deleted_at = 0 AND status = 1 …}——<b>已软删的节点永远不命中</b>，
+     * 于是 {@code LoginCheckService} 第⑧步（本人节点/祖先被停用 → {@code 10017}）
+     * 对这个租户<b>形同虚设</b>。
+     *
+     * <p><b>单独看它是漏的；闭合来自 {@code assertLoginable} 的判定顺序</b>：
+     * ⑤账号封禁 → <b>⑥租户停用/到期</b> → ⑦学籍归档 → <b>⑧节点停用</b>——
+     * 租户校验排在节点校验<b>之前</b>，第⑥步已经把人挡下，走不到第⑧步。
+     * <b>改动这个顺序（或让第⑧步先跑）会当场打开一个缺口</b>：
+     * 已删除租户的账号将通过节点侧校验，只剩其它几步拦它。
+     * 真要让节点侧也自足，正确的做法是级联时<b>同时置 {@code status = 1}</b>，
+     * 而不是调换判定顺序——但那超出 §5.5 的原文，属于新规则，本模块不发明。
      */
     @Transactional(rollbackFor = Exception.class)
     public void delete(Long id) {
@@ -317,9 +337,25 @@ public class SysTenantService {
      * <p>代价用<b>可观测性</b>兜住：踢线前后各记一条 INFO（租户、账号数、耗时），
      * 于是"这个接口跑了 3 秒"在日志里是可解释的，而不是一个谜。
      *
+     * <h2>⚠ 本方法<b>刻意没有</b> {@code @Transactional}，不要给它加上</h2>
+     * <p>看到一个写方法没有事务注解，第一反应通常是补一个。这里补上是<b>有害的</b>，三条：
+     * <ol>
+     *   <li><b>它保护不了要保护的东西</b>：{@link #revokeAllTenantSessions} 写的是 Redis，
+     *       <b>Redis 不参与数据库事务回滚</b>。循环跑到一半抛异常时，库能回滚成"未停用"，
+     *       而已经被踢掉的那批会话<b>回不来</b>——事务给出的是一个假的"要么全成要么全不成"；
+     *   <li><b>代价却是真的</b>：踢线是这个方法里唯一慢的一段（万人租户几秒），
+     *       包进事务就意味着 {@code sys_tenant} 那一行的写锁与一条连接池连接被持有整段时间；
+     *   <li><b>DB 侧本来就不需要事务</b>：这里只有<b>一条 UPDATE</b>，单条语句自带原子性；
+     *       前面那次 {@code selectById} 只是 404 门禁，与它之间没有一致性要求。
+     * </ol>
+     * <p><b>顺序是先落库、再踢线</b>，与 §5.5 删除那条一致：<b>租户状态本身就是拦截依据</b>
+     * ——{@code UPDATE} 一提交，{@code LoginCheckService#assertTenantActive} 立刻按
+     * {@code 10007} 拒绝新登录；随后的几秒里旧 accessToken 还能用，但入口已经关上。
+     * 这与冻结集"先 SADD 再提交事务"的方向<b>不冲突</b>：那里<b>冻结集才是拦截依据</b>，
+     * 所以必须让依据先就位；两处遵循的是同一条原则的两种落法——<b>让拦截依据先生效</b>。
+     *
      * <p><b>启用不踢线</b>：那会把一个刚被恢复的租户全员莫名其妙踢下线（与 §2.6 同理）。
      */
-    @Transactional(rollbackFor = Exception.class)
     public void changeStatus(Long id, TenantStatusReq req) {
         requireTenant(id);
 
@@ -327,6 +363,8 @@ public class SysTenantService {
                 .eq(SysTenant::getId, id)
                 .set(SysTenant::getStatus, req.getStatus()));
 
+        // 落库之后才踢线：上面那条 UPDATE 已提交（本方法无事务，单条语句自动提交），
+        // 新登录已被挡在门外，此刻慢一点也不会漏放一个进来的人
         if (req.getStatus() == SysTenant.STATUS_DISABLED) {
             revokeAllTenantSessions(id);
         }
@@ -334,7 +372,11 @@ public class SysTenantService {
 
     private void revokeAllTenantSessions(Long tenantId) {
         // 只取 id 列：整行取回来对万级用户是纯浪费。
-        // tenant_id 显式写 —— 超管会话下插件整体放行，不写就是【全平台】踢线
+        // tenant_id 显式写 —— 超管会话下插件整体放行，不写就是【全平台】踢线。
+        //
+        // 【已逻辑删除的账号不在此列】——SysUser 是逻辑删除实体，selectList 自动带
+        // deleted_at = 0。这【不是】漏掉：03-01 §2.4 删除用户时已作废其在线 Token，
+        // 那一刻就踢过了；此处再遍历一遍已删账号，是对着一批空会话做无用功
         List<SysUser> users = sysUserMapper.selectList(new LambdaQueryWrapper<SysUser>()
                 .select(SysUser::getId)
                 .eq(SysUser::getTenantId, tenantId));

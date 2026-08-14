@@ -160,6 +160,41 @@ class TenantLifecycleIT extends TenantIntegrationTestBase {
                 .isEqualTo(200);
     }
 
+    @Test
+    @DisplayName("§5.7｜停用踢的是【全员】：同租户三个账号的 Token 全失效，别的租户不受影响")
+    void disablingTenantRevokesEveryMemberButOnlyThatTenant() throws Exception {
+        // 三个账号、三种 user_type，都在租户 A 下。【一个账号验不到循环踢线】——
+        // 只踢第一个（或只踢调用者自己）的实现同样能让单账号的用例通过
+        String subAdminToken = client.loginForToken(
+                AuthFixtures.ADMIN_USERNAME, AuthFixtures.PASSWORD);
+        String teacherToken = client.loginForToken(
+                AuthFixtures.TEACHER_USERNAME, AuthFixtures.PASSWORD);
+        String studentToken = client.loginForToken(
+                AuthFixtures.STUDENT2_USERNAME, AuthFixtures.PASSWORD);
+
+        // 租户 B 的对照组：先续期让它能登录，拿一个活着的 Token
+        assertThat(code(client.putWithToken(
+                TENANTS + "/" + AuthFixtures.EXPIRED_TENANT_ID + "/renew", superAdminToken(), """
+                        {"expireTime":"2099-08-31 23:59:59"}
+                        """))).isEqualTo(200);
+        String otherTenantToken = client.loginForToken(
+                AuthFixtures.EXPIRED_USERNAME, AuthFixtures.PASSWORD);
+
+        for (String token : new String[]{subAdminToken, teacherToken, studentToken, otherTenantToken}) {
+            assertThat(code(client.getWithToken("/api/v1/auth/me", token))).isEqualTo(200);
+        }
+
+        assertThat(code(changeStatus(AuthFixtures.TENANT_ID, 1))).isEqualTo(200);
+
+        // 租户 A 的三个账号【全部】失效 —— 循环踢线的正确性只在"多个"上验得到
+        assertThat(code(client.getWithToken("/api/v1/auth/me", subAdminToken))).isEqualTo(401);
+        assertThat(code(client.getWithToken("/api/v1/auth/me", teacherToken))).isEqualTo(401);
+        assertThat(code(client.getWithToken("/api/v1/auth/me", studentToken))).isEqualTo(401);
+        // 租户 B 的账号【毫发无损】：踢线的名单是按 tenant_id 显式圈定的。
+        // 少写那个条件时，超管会话下插件整体放行，这里就是一次【全平台】踢线
+        assertThat(code(client.getWithToken("/api/v1/auth/me", otherTenantToken))).isEqualTo(200);
+    }
+
     // =====================================================================
     // §5.5 删除
     // =====================================================================
