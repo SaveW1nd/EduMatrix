@@ -1,5 +1,7 @@
 package com.edumatrix.auth;
 
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -7,6 +9,7 @@ import com.edumatrix.auth.support.AuthFixtures;
 import com.edumatrix.auth.support.AuthIntegrationTestBase;
 import com.edumatrix.auth.support.ProtectedProbeController;
 import com.edumatrix.common.errorcode.ErrorCode;
+import com.edumatrix.common.redis.RedisKeys;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -16,6 +19,42 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 与四个不可合并错误码的对照。
  */
 class AuthLoginIT extends AuthIntegrationTestBase {
+
+    /**
+     * 一个<b>故意不存在</b>的用户名，用于验「账号不存在与密码错误不区分」（{@code 10003}）。
+     *
+     * <h2>它必须由本类自清，不能进 {@code cleanAuthRedisKeys()} 的清单</h2>
+     * <p>那个清单是<b>夹具账号清单</b>（{@code AuthFixtures} 建出来的 7 个账号），
+     * 而本常量恰恰是「故意不存在的账号」—— 放进夹具清单语义上就错了，
+     * 而且下一个人再写一个同类用户名时又会漏。<b>谁造的谁清。</b>
+     *
+     * <h2>不自清会怎样：连跑第 6 次必红，且红的地方与改动无关</h2>
+     * <p>登录失败会累加 {@code auth:fail:{username}}（00-通用约定 §8），
+     * 而本用户名不在 {@code cleanAuthRedisKeys()} 的覆盖范围内，于是<b>计数跨运行累加</b>：
+     * 连续跑 5 次 {@code mvn verify} 后 {@code auth:lock:it_no_such_user = 5}，
+     * 第 6 次触发账号锁定，本用例断言 {@code 10003} 却拿到 {@code 10005}。
+     *
+     * <p><b>这种失败没人查得动</b>：它与当次改动毫无关系，出现在模块 02 的测试里，
+     * 而当事人多半正在改别的模块。
+     */
+    private static final String UNKNOWN_USERNAME = "it_no_such_user";
+
+    /** 前清：上一次运行若异常中断，残留的计数不该算到这次头上。 */
+    @BeforeEach
+    void clearUnknownAccountCountersBefore() {
+        clearUnknownAccountCounters();
+    }
+
+    /** 后清：本次造出的计数不留给下一次运行 —— 这一条才是「连跑第 6 次必红」的解。 */
+    @AfterEach
+    void clearUnknownAccountCountersAfter() {
+        clearUnknownAccountCounters();
+    }
+
+    private void clearUnknownAccountCounters() {
+        redisTemplate.delete(RedisKeys.loginFail(UNKNOWN_USERNAME));
+        redisTemplate.delete(RedisKeys.loginLock(UNKNOWN_USERNAME));
+    }
 
     // =====================================================================
     // 判据 1：租户到期 → 10007，且 sys_login_log 记录失败状态
@@ -155,7 +194,7 @@ class AuthLoginIT extends AuthIntegrationTestBase {
     @DisplayName("10003｜账号不存在与密码错误不区分（防撞库探测）")
     void wrongPasswordAndUnknownAccountAreIndistinguishable() throws Exception {
         JsonNode wrongPassword = client.login(AuthFixtures.ADMIN_USERNAME, "WrongPwd2026");
-        JsonNode unknownAccount = client.login("it_no_such_user", AuthFixtures.PASSWORD);
+        JsonNode unknownAccount = client.login(UNKNOWN_USERNAME, AuthFixtures.PASSWORD);
 
         assertThat(wrongPassword.path("code").asInt())
                 .isEqualTo(ErrorCode.USERNAME_OR_PASSWORD_WRONG.getCode());

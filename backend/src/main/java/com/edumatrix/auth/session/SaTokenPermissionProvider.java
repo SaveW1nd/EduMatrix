@@ -69,9 +69,15 @@ public class SaTokenPermissionProvider implements StpInterface {
      * 前端按 {@code perms} 显隐按钮，后端按本方法放行接口，两者必须同源，
      * 否则会出现「按钮在但点了 403」或「按钮没了但接口开着」。
      *
-     * <p><b>学生恒为空数组是设计意图</b>（F-1 定案②：student 不绑任何菜单行）。
-     * 学生端接口一律不加 {@code @SaCheckPermission}（契约 §3.1 边界 0），
-     * 只按角色与数据权限判定，因此空数组不会挡住任何学生功能。
+     * <p><b>学生恒为空数组是设计意图，不是故障</b>：04-实施计划.md §E 的
+     * <b>F-1 定案②</b> —— 「{@code student} 不绑任何菜单行；学生端接口一律不加
+     * {@code @SaCheckPermission}，只按角色（{@code sys_user.user_type}）与数据权限判定」。
+     * 该定案是模块 02 <b>回原文逐条核对后</b>得出的实现口径（依据见 F-1②），
+     * 因此空数组不会挡住任何学生功能。
+     *
+     * <p>与「放行失效」那个故障的区分方法：<b>看 {@code roles}</b> —— 里面查得到
+     * {@code student} 这一行，就说明 {@code tenant_id = 0} 的平台级放行是通的
+     * （与 {@code AuthPermMapper} / {@code MeService} 记的是同一条判别法）。
      */
     @Override
     public List<String> getPermissionList(Object loginId, String loginType) {
