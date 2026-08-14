@@ -151,6 +151,43 @@ class AuthTokenLifecycleIT extends AuthIntegrationTestBase {
     }
 
     @Test
+    @DisplayName("平台超管｜登录 → 刷新 → 新 Token 可用；旧 refreshToken 立即失效")
+    void superAdminCanRefreshToken() throws Exception {
+        // 六条完成判据全是租户内账号，超管这条路从来没被端到端跑过。而它走的租户上下文
+        // 与其他角色不同：refresh() 用的是「显式 runWithTenant」（TenantHelper 路径①），
+        // 它会关掉「超管会话整体放行」（路径③）。两者对超管同解 —— 因为超管在
+        // sys_user 里的 tenant_id 就是 0（NOT NULL 列，DDL 注释「平台超管为 0」），
+        // 刷新要读的三样东西全在 tenant_id = 0 里。本用例就是这句话的证据。
+        JsonNode login = client.login(AuthFixtures.SUPER_ADMIN_USERNAME, AuthFixtures.PASSWORD);
+        assertThat(login.path("code").asInt()).isEqualTo(200);
+        assertThat(login.path("data").path("userType").asInt())
+                .as("确认这条用例跑的确实是超管（user_type = 0）")
+                .isZero();
+        String oldRefreshToken = login.path("data").path("refreshToken").asText();
+
+        // ① 刷新返回 200
+        JsonNode refreshed = client.refresh(oldRefreshToken);
+        assertThat(refreshed.path("code").asInt())
+                .as("若这里是 10006，去看的应是租户过滤而不是 Redis / TTL / 旋转逻辑 —— "
+                        + "错误码指向的方向与真实原因不一致，这正是本用例存在的理由")
+                .isEqualTo(200);
+
+        // ② 新 accessToken 可用
+        String newAccessToken = refreshed.path("data").path("accessToken").asText();
+        JsonNode me = client.getWithToken("/api/v1/auth/me", newAccessToken);
+        assertThat(me.path("code").asInt()).isEqualTo(200);
+        assertThat(me.path("data").path("username").asText()).isEqualTo(AuthFixtures.SUPER_ADMIN_USERNAME);
+        assertThat(me.path("data").path("tenant").isNull())
+                .as("§1.5：平台超管的 tenant 为 null —— 会话上下文没被刷新链路弄坏")
+                .isTrue();
+
+        // ③ 旋转对超管同样生效：旧令牌立即失效
+        assertThat(client.refresh(oldRefreshToken).path("code").asInt())
+                .as("§2.2 规则 3 对超管不打折")
+                .isEqualTo(ErrorCode.REFRESH_TOKEN_INVALID.getCode());
+    }
+
+    @Test
     @DisplayName("白名单四条之外一律要 Token：无 Authorization 头 → 401")
     void protectedEndpointRequiresToken() throws Exception {
         assertThat(mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders

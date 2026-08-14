@@ -153,7 +153,26 @@ public class LoginService {
         Long userId = record.userId();
 
         // 刷新是白名单接口，没有会话 —— 租户从令牌里显式取（契约 §2.8 规则 1「从数据显式取」），
-        // 而不是再开一处 ignore() 逃生舱
+        // 而不是再开一处 ignore() 逃生舱。
+        //
+        // 【这里走的是「显式租户上下文」，它会压过「超管整体放行」——对超管两者同解，不是漏了分支】
+        //   TenantHelper 有四条取值路径，这里用的是第一条<b>显式 runWithTenant</b>，
+        //   而超管跨租户靠的是第三条<b>超管会话整体放行</b>（契约 §2.9）。
+        //   两条路径不能同时生效：isSuperAdminSession() 的判定是
+        //   「没有显式租户上下文 且 provider.isSuperAdmin()」，一旦 runWithTenant 设了值，
+        //   整体放行就被关掉了。这是 TenantHelper 自己的定案，不是这里的疏忽 ——
+        //   它的原话是「显式租户上下文优先于超管身份：超管手动指定要操作哪个租户时，
+        //   应当按那个租户过滤，而不是继续全局放行」。
+        //
+        //   <b>对超管而言两者结果相同</b>，因为刷新链路要读的三样东西全都在 tenant_id = 0 里：
+        //     ① sys_user 里超管自己那一行（NOT NULL 列，值就是 0，见 TokenService#issueRefreshToken）；
+        //     ② org_node 的 0 号平台根（契约 §2.1，tenant_id = 0）；
+        //     ③ 冻结集校验对上面两者的点查。
+        //   一处需要跨租户的读都没有。
+        //
+        //   <b>所以不要在这里加「if 超管则跳过 runWithTenant」的分支</b> —— 那会让超管这条路
+        //   与其他角色分叉，而分叉出来的那一支没有任何测试覆盖得到的收益。
+        //   超管刷新令牌的端到端断言见 AuthTokenLifecycleIT#superAdminCanRefreshToken。
         AuthUser user = TenantHelper.runWithTenant(record.tenantId(),
                 () -> authUserMapper.selectById(userId));
         if (user == null) {
