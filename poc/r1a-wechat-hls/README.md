@@ -146,8 +146,13 @@ CA 会主动回访 `http://poc.hqtw.cn/.well-known/acme-challenge/...`，走的�
 在**本机仓库根目录**执行（`media/` `logs/` `vendor/` 都在服务器上生成，不传）：
 
 ```bash
-rsync -avz -e "ssh -i ~/.ssh/edumatrix.pem" --exclude media --exclude logs --exclude vendor poc/r1a-wechat-hls/ root@114.215.196.24:/opt/r1a-poc/
+rsync -avz --no-owner --no-group -e "ssh -i ~/.ssh/edumatrix.pem" --exclude media --exclude logs --exclude vendor poc/r1a-wechat-hls/ root@114.215.196.24:/opt/r1a-poc/
 ```
+
+> `--no-owner --no-group` 不能省。`rsync -a` 以 root 身份上传时会把**本机**的 UID/GID
+> 一起搬过去（macOS 是 `501:staff`），服务器上没有这个用户，systemd unit 里就会写成
+> `User=UNKNOWN`，服务报 `217/USER` 起不来。部署脚本里已经兜了一层（解析不出来就 chown
+> 成 root），但从源头上别把它带过去更干净。
 
 ### 2）登上去跑部署脚本
 

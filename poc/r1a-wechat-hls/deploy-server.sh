@@ -244,6 +244,20 @@ step "systemd 服务 $SERVICE"
 # 免得 root 写出一堆 root 属主的日志文件。
 APP_USER="$(stat -c '%U' "$APP_DIR")"
 APP_GROUP="$(stat -c '%G' "$APP_DIR")"
+
+# 属主在本机解析不出来时必须兜住：`rsync -a` 以 root 上传会把【上传端】的 UID/GID
+# 原样搬过来（macOS 常见的 501:staff），服务器上没有这个用户，stat -c %U 返回字面量
+# "UNKNOWN"，写进 unit 就是 User=UNKNOWN —— systemd 报 217/USER 起不来，
+# 而 Restart=on-failure 会让它每 2 秒重试一次，日志刷满还看不出原因。
+if ! id -u "$APP_USER" >/dev/null 2>&1; then
+  warn "$APP_DIR 属主 $(stat -c '%u:%g' "$APP_DIR") 在本机解析不出来（多半是 rsync -a 把上传端的 UID/GID 带过来了），改用 root:root 并 chown"
+  $SUDO chown -R root:root "$APP_DIR"
+  APP_USER=root
+  APP_GROUP=root
+elif ! getent group "$APP_GROUP" >/dev/null 2>&1; then
+  APP_GROUP="$(id -gn "$APP_USER")"
+fi
+
 UNIT="/etc/systemd/system/${SERVICE}.service"
 
 NEW_UNIT="$(cat <<EOF
@@ -275,6 +289,8 @@ else
 fi
 
 $SUDO systemctl enable --quiet "$SERVICE"
+# 上一轮若失败过并触发了重启限流，不 reset-failed 的话这次 restart 会直接被拒
+$SUDO systemctl reset-failed "$SERVICE" 2>/dev/null || true
 $SUDO systemctl restart "$SERVICE"
 sleep 1
 $SUDO systemctl is-active --quiet "$SERVICE" \
