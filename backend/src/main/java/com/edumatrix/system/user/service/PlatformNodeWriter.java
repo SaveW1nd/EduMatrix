@@ -31,7 +31,8 @@ import com.edumatrix.system.user.mapper.SystemOrgNodeMapper;
  *       深度 ≤ 50 级校验（契约 §2.3 约束 5）<br>
  *       {@code ref_user_id} ↔ {@code node_id} 双向回填<br>
  *       父节点 {@code child_count} ± 1<br>
- *       建档轨迹 {@code change_type = 1}
+ *       建档轨迹 {@code change_type = 1}<br>
+ *       <b>机构根节点</b>（{@link #createTenantRootNode}，模块 04 的 03-01 §5.3 步骤②）
  *     </td>
  *     <td>
  *       节点移动与 {@code ancestors} 递归重算<br>
@@ -130,6 +131,79 @@ public class PlatformNodeWriter {
         changeLogMapper.insert(changeLog);
 
         return node.getId();
+    }
+
+    // =====================================================================
+    // 03-01 §5.3 步骤②：机构根节点 —— 模块 04 开通租户时唯一的建节点入口
+    // =====================================================================
+
+    /**
+     * 建<b>机构根节点</b>：它的 {@code id}【就是】租户 {@code id}，且它<b>就是</b>机构最高管理员本人
+     * （契约 §2.1、03-01 §5.0 / §5.3 步骤②）。
+     *
+     * <h2>为什么不能复用 {@link #createNode}，也不能给它加一个"可选指定 id"的重载</h2>
+     * <p>对不上的<b>不是一处而是两处</b>：
+     * <ol>
+     *   <li>{@code id} —— {@code createNode} 走 {@code ASSIGN_ID} 自己生成，而这里必须等于租户 id
+     *       （DDL 对 {@code sys_tenant.id} 的注释逐字：「其值 = 该机构在 {@code org_node} 上的
+     *       根节点 id」）。不等的后果<b>不报错</b>：树能建出来、账号能登录，只是
+     *       {@code sys_tenant.root_node_id} 指向一个与 {@code tenant_id} 不同的节点，
+     *       此后所有按 {@code tenant_id} 过滤的查询都对不上；
+     *   <li>{@code tenant_id} —— {@code createNode} 取自<b>父节点</b>（契约 §2.8 规则 1
+     *       「从数据显式取」），而这里的父是<b>平台根</b>，其 {@code tenant_id = 0}：
+     *       照抄会把整个机构建到平台租户下，同样不报错。
+     * </ol>
+     * <p>两个参数一起放开，{@code createNode} 就从「在父节点下建人」变成「你说建什么我就建什么」，
+     * <b>父节点推导 {@code tenant_id} 这条护栏会从必然降级成可选</b>——而 03-01 §2.2 那条路径
+     * 正靠它兜着。所以本方法是<b>另开一个窄口</b>：两个"例外"都写死在方法内部、只此一处，
+     * 调用方无从传错。
+     *
+     * <h2>为什么不在 {@code system/tenant} 自己写一段</h2>
+     * <p>那会多出一个<b>不在 {@link SystemOrgNode} 交接清单上的临时构件</b>，
+     * 模块 06 删完清单上的五个就会以为交接完了；而它含 {@code ancestors} 推导、
+     * {@code child_count} 维护、建档轨迹三段与本类重复的逻辑，规则一改两份不会同步。
+     * 05-工程结构.md §D 模块 04 那一行的「同时触及」列写的就是 {@code system/user/}。
+     *
+     * <p><b>调用方必须已在事务内</b>：§5.3 的三步「任一步失败整体回滚」。
+     *
+     * @param tenantId    步骤①刚插入的租户 id；<b>同时是本节点的 id 与 tenant_id</b>
+     * @param adminUserId 机构最高管理员账号 id（成为 {@code ref_user_id}）
+     * @param orgName     节点名，取<b>机构名称</b>（§5.3 步骤②表、响应示例的 {@code adminNodePath}、
+     *                    §5.4「改机构名同步更新根节点 {@code node_name}」三处一致）
+     */
+    public void createTenantRootNode(Long tenantId, Long adminUserId, String orgName) {
+        // 父恒为平台根（契约 §2.1：机构根节点 parent_id = 0、ancestors = "0"）。
+        // 仍然查一次并走同一套父子类型校验：平台根只挂 node_type = 1，本节点正是 1
+        SystemOrgNode platformRoot = requireParent(SystemOrgNode.PLATFORM_ROOT_ID);
+        assertParentAcceptsChild(platformRoot, NodePath.NODE_TYPE_ADMIN);
+
+        SystemOrgNode node = new SystemOrgNode();
+        // 【例外①】id 不由 ASSIGN_ID 生成 —— MyBatis-Plus 只在 id 为 null 时才生成，
+        // 显式设值即按设的写。这是全系统仅有的两个节点 id 特例之一（另一个是平台根 id = 0）
+        node.setId(tenantId);
+        node.setParentId(SystemOrgNode.PLATFORM_ROOT_ID);
+        node.setAncestors(platformRoot.selfPrefix());
+        node.setNodeName(orgName);
+        node.setNodeType(NodePath.NODE_TYPE_ADMIN);
+        node.setRefUserId(adminUserId);
+        node.setSort(0);
+        node.setStatus(0);
+        node.setChildCount(0);
+        // 【例外②】tenant_id 取新租户 id，【不是】父节点的 0 —— 与 createNode 的唯一语义分叉。
+        // 沿用父节点会把整个机构建到平台租户下，而且不报错（契约 §2.1：其 tenant_id 即节点自身 id）
+        node.setTenantId(tenantId);
+        nodeMapper.insert(node);
+
+        nodeMapper.addChildCount(SystemOrgNode.PLATFORM_ROOT_ID, 1);
+
+        SystemOrgNodeChangeLog changeLog = new SystemOrgNodeChangeLog();
+        changeLog.setNodeId(tenantId);
+        changeLog.setChangeType(SystemOrgNodeChangeLog.CHANGE_TYPE_CREATE);
+        changeLog.setFromParentId(null);
+        changeLog.setToParentId(SystemOrgNode.PLATFORM_ROOT_ID);
+        changeLog.setOperatorId(TenantHelper.getUserId());
+        changeLog.setTenantId(tenantId);
+        changeLogMapper.insert(changeLog);
     }
 
     // =====================================================================
