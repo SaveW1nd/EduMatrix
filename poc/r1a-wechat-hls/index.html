@@ -414,7 +414,18 @@ wireVideo(video);
 ['fullscreenchange', 'webkitfullscreenchange'].forEach(function (ev) {
   document.addEventListener(ev, function () {
     var el = document.fullscreenElement || document.webkitFullscreenElement;
-    (el ? L.hi : L.info)('FS', ev + ' → ' + (el ? '进入全屏，元素=' + el.tagName + '#' + (el.id || '') : '退出全屏'));
+    if (!el) { L.info('FS', ev + ' → 退出全屏'); return; }
+
+    // ③ 在全屏下成不成立，不用靠肉眼猜：全屏渲染层只包含【进入全屏的那个元素及其后代】，
+    // 水印不在这棵子树里，画面上就必然看不到它 —— 这是渲染模型决定的，可以直接判。
+    var where = '进入全屏，元素=' + el.tagName + '#' + (el.id || '');
+    if (!opt.wm) { L.hi('FS', where + '（水印已关闭，不判）'); return; }
+    if (el.contains(wm)) {
+      L.ok('FS', where + '｜水印在全屏层内 → 会跟着一起全屏，③ 这一项过（仍请截图确认层级）');
+    } else {
+      L.err('FS', where + '｜★ 水印【不在】全屏元素内 —— 全屏期间画面上必然没有水印。' +
+                  '原生 controls 的全屏按钮全屏的是 video 自己，水印作为兄弟节点不在这一层');
+    }
   });
 });
 document.addEventListener('x5videoenterfullscreen', function () { L.hi('FS', 'document 上的 x5videoenterfullscreen'); });
@@ -602,6 +613,18 @@ function withDPlayer() {
   window.__dp = d;
   window.__engineUsed = 'DPlayer+hls.js';
   L.hi('ENGINE', '★ 走【DPlayer + hls.js】');
+
+  // ★ 水印必须挂进 DPlayer 容器【内部】，否则全屏时画面上根本看不到它。
+  //
+  // 全屏渲染层只包含"进入全屏的那个元素及其后代"。DPlayer 的全屏是对 container
+  // 调 requestFullscreen（references/DPlayer/src/js/fullscreen.js:66-78），
+  // 水印留在容器外面就不在这一层里 —— 2026-08-15 XWEB 实测原生控件全屏时
+  // 全屏元素是 VIDEO 本身，水印作为兄弟节点直接消失，就是同一个道理。
+  // 模块 14 挂跑马灯水印时同理：必须挂进播放器容器内部。
+  if (opt.wm && wm.isConnected) {
+    box.appendChild(wm);   // box 即 DPlayer 的 container，.dplayer 是 position:relative
+    L.info('WM', '已把水印移进 DPlayer 容器内（否则全屏时不在全屏渲染层里）');
+  }
 
   // 把属性装配与四项守卫整套搬到 DPlayer 造出来的 video 上，
   // 否则第 3 轮只能回答"能不能加载"，回答不了 ③④
