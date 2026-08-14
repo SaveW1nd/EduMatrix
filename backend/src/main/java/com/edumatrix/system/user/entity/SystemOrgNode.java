@@ -27,7 +27,7 @@ import com.edumatrix.common.entity.TenantEntity;
  *   <li><b>窄写入器落 {@code system/user/}（本方案）</b>。
  * </ul>
  *
- * <p><b>交接方式（模块 06 请照此执行）</b>：{@code org/node/} 建成
+ * <p><b>交接方式（模块 <s>06</s> 07 请照此执行）</b>：{@code org/node/} 建成
  * {@code NodeCreateService} / {@code NodeDeleteService} 后，<b>删除本类、
  * {@link SystemOrgNodeChangeLog}、{@code SystemOrgNodeMapper}、
  * {@code SystemOrgNodeChangeLogMapper} 与 {@code PlatformNodeWriter}</b>，
@@ -53,6 +53,28 @@ import com.edumatrix.common.entity.TenantEntity;
  * <p><b>本类与将来 {@code org/node/entity/OrgNode} 并存期间会有两个 {@code org_node} 实体</b>
  * —— 这是已知代价，不是漏改。代价可控的原因是本类<b>只声明 {@code PlatformNodeWriter}
  * 真正读写的列</b>：{@code student_count} 等不在其中（口径见 {@code PlatformNodeWriter}）。
+ * <b>模块 06 已建成 {@code org/node/entity/OrgNode}，并存期从那时开始。</b>
+ *
+ * <h2>⚠ 交接时机订正（模块 06 落地时核实）：是模块 <b>07</b>，不是 06</h2>
+ * <p>上面写的「模块 06 建成 {@code NodeCreateService} / {@code NodeDeleteService} 后」
+ * <b>找错了模块</b>：模块 06 的六个接口是查询 / 详情 / 修改 / 移动 / 停用 / 重置密码，
+ * <b>没有建节点与删节点</b>。03-02 §2.2 原文：「本模块<b>没有独立的『新建节点』接口</b>，
+ * 建节点 = 建人，一律走接口 8（新建下级管理员）/ 12（新建教师）/ 17（创建学生）」——
+ * 那三个接口和三个删除接口都在<b>模块 07</b> 的工单里
+ * （04-实施计划.md 模块 07「涉及表」：写 {@code org_node}、{@code sys_user}、
+ * {@code org_teacher}、{@code org_student}…）。
+ * <p><b>本清单上的七个构件因此原样留到模块 07</b>，模块 06 一个都没删。
+ *
+ * <h2>另有一张清单：模块 06 自己的临时构件</h2>
+ * <p>见 {@code com.edumatrix.org.node} 的 {@code package-info}（四个：
+ * {@code NodeMemberMapper} / {@code NodeGrantScopeMapper} / {@code NodeAccountMapper} /
+ * {@code NodeTypeRule} 的第二份实现）。
+ * <b>两张清单不合并</b>：本清单是「{@code system} 领域为了碰 {@code org} 的表而开的窄构件」
+ * （成因是检查③禁止 {@code system} import {@code org}），
+ * 那张是「{@code org/node} 为了碰 {@code org} 其它<b>子域</b>的表而开的」
+ * （检查③的 {@code DOMAINS} 是<b>顶层</b>领域包，压根管不到子域）。
+ * 成因不同、交接对象不同（本清单 → 模块 07；那张 → 模块 07 与 <b>11</b>）。
+ * 混成一张的后果是：删完这七个就以为交接完毕。
  */
 @TableName("org_node")
 public class SystemOrgNode extends TenantEntity {

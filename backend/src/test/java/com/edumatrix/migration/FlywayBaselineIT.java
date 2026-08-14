@@ -76,17 +76,19 @@ class FlywayBaselineIT {
     }
 
     @Test
-    @DisplayName("三个 Flyway 脚本全部 success，且基线版本号是 202608120000")
+    @DisplayName("四个 Flyway 脚本全部 success，且基线版本号是 202608120000")
     void allMigrationsSucceeded() {
         List<String> versions = jdbcTemplate.queryForList(
                 "SELECT version FROM flyway_schema_history WHERE success = 1 ORDER BY installed_rank",
                 String.class);
 
-        assertThat(versions).containsExactly("202608120000", "202608140000", "202608140100");
+        // 202608150000 是模块 06 补的 teacher → org:node:list 角色绑定
+        assertThat(versions).containsExactly(
+                "202608120000", "202608140000", "202608140100", "202608150000");
     }
 
     @Test
-    @DisplayName("菜单与角色绑定初始化数据已就位（F-1 定案：124 菜单 / 200 绑定 / 117 个唯一 perms）")
+    @DisplayName("菜单与角色绑定初始化数据已就位（F-1 定案 124 菜单 / 117 唯一 perms；绑定 200 + 模块 06 补的 1 行）")
     void menuAndRoleMenuInitialized() {
         Integer menus = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM sys_menu", Integer.class);
         Integer bindings = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM sys_role_menu", Integer.class);
@@ -94,7 +96,10 @@ class FlywayBaselineIT {
                 "SELECT COUNT(DISTINCT perms) FROM sys_menu WHERE perms IS NOT NULL", Integer.class);
 
         assertThat(menus).as("契约 §10 附表 A 与 V202608140000 由同一份数据源生成").isEqualTo(124);
-        assertThat(bindings).as("student 不绑任何菜单行（F-1 ② 定案），故为 200 而非 201").isEqualTo(200);
+        assertThat(bindings)
+                .as("F-1 ② 定案 student 不绑任何菜单行，故基线是 200；"
+                        + "模块 06 的 V202608150000 补了 teacher → org:node:list，共 201")
+                .isEqualTo(201);
         assertThat(perms).isEqualTo(117);
     }
 
