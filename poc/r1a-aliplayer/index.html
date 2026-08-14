@@ -1,0 +1,542 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="format-detection" content="telephone=no">
+<title>R1a-Ali · 阿里云播放器验证</title>
+<link rel="stylesheet" href="vendor/aliplayer-min.css">
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body { margin:0; background:#0e0e10; color:#e6e6e6;
+         font:14px/1.55 -apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",sans-serif; }
+  .bar { padding:8px 10px; background:#17171a; border-bottom:1px solid #2a2a30;
+         display:flex; gap:8px; flex-wrap:wrap; align-items:center; font-size:12px; }
+  .bar b { color:#fff; }
+  .pill { background:#26262c; border:1px solid #3a3a44; border-radius:10px; padding:1px 7px; color:#bbb; }
+  .pill.on { background:#14532d; border-color:#22c55e; color:#bbf7d0; }
+  .pill.off{ background:#3f1d1d; border-color:#ef4444; color:#fecaca; }
+
+  #stage { position:relative; width:100%; background:#000; overflow:hidden; }
+  #playerbox { width:100%; aspect-ratio:16 / 9; }
+
+  /* 与基线同一套结构：#wm 是防篡改锚点（样式永不由脚本改动），漂移只作用在 #wmInner。
+     红色虚线框是诊断用的 —— 全屏时若连这圈框都看不见，说明视频走了独立原生层。 */
+  #wm { position:absolute; left:0; top:0; right:0; bottom:0; z-index:2147483000; pointer-events:none;
+        border:3px dashed rgba(255,60,60,.85); }
+  #wm::before { content:'H5 层'; position:absolute; left:4px; top:2px;
+        font:700 13px/1.2 -apple-system,sans-serif; color:#fff; background:rgba(255,60,60,.85);
+        padding:2px 6px; border-radius:3px; }
+  #wmInner { position:absolute; left:0; top:0; white-space:nowrap;
+        color:rgba(255,255,255,.72); font-size:clamp(15px, 3.2vmin, 44px); font-weight:700;
+        text-shadow:0 2px 6px rgba(0,0,0,.95);
+        transition:transform 2.6s linear; will-change:transform; }
+
+  .btns { display:flex; gap:6px; flex-wrap:wrap; padding:8px 10px; background:#17171a;
+          border-bottom:1px solid #2a2a30; }
+  button { font:13px/1.2 inherit; color:#e6e6e6; background:#2a2a32; border:1px solid #3d3d48;
+           border-radius:6px; padding:8px 10px; }
+  button:active { background:#3a3a46; }
+  button.danger { background:#4a1f1f; border-color:#7f2a2a; }
+  button.primary{ background:#123d2a; border-color:#1f7a4d; }
+
+  #vitals { padding:8px 10px; background:#121216; border-bottom:1px solid #2a2a30;
+            font:12px/1.5 ui-monospace,Menlo,Consolas,monospace; color:#9fb3c8; }
+  #vitals span { display:inline-block; margin-right:12px; }
+  #vitals b { color:#fff; }
+
+  #panel { padding:6px 8px 40px; font:12px/1.45 ui-monospace,Menlo,Consolas,monospace; }
+  .row { padding:3px 4px; border-bottom:1px solid #1c1c22; white-space:pre-wrap; word-break:break-all; }
+  .t { color:#666; }
+  .ok{color:#7ee787} .info{color:#9fb3c8} .warn{color:#f0b429} .err{color:#ff7b72} .hi{color:#fff;background:#2d2d38}
+</style>
+</head>
+<body>
+
+<div class="bar" id="modebar"><b>R1a-Ali</b></div>
+
+<div id="stage">
+  <div id="playerbox"></div>
+  <div id="wm"><span id="wmInner">R1a-POC · 138****0000 · <span id="wmclock">00:00</span></span></div>
+</div>
+
+<div class="btns">
+  <button class="primary" id="btnPlay">播放</button>
+  <button id="btnPause">暂停</button>
+  <button id="btnFs">请求全屏</button>
+  <button id="btnSeek">前跳 +30s（测④）</button>
+  <button class="danger" id="btnKillWm">删除水印（测③）</button>
+  <button class="danger" id="btnHideWm">隐藏水印（测③）</button>
+  <button id="btnFlush">上报日志</button>
+  <button id="btnCopy">复制日志</button>
+</div>
+
+<div id="vitals"></div>
+<div id="panel"></div>
+
+<script src="vendor/aliplayer-min.js"></script>
+<script>
+/* =====================================================================
+ * R1a-Ali —— 阿里云播放器（Aliplayer 2.25.1）验证页
+ *
+ * 与基线（hls.js / DPlayer / xgplayer）验的是同样四件事，日志口径也刻意保持一致，
+ * 这样两边的结论能直接对比：
+ *   ① 微信 X5/XWEB 能否播加密 HLS
+ *   ② 身份能否随密钥请求到达服务端
+ *   ③ 水印 DOM + MutationObserver 在同层渲染 / 全屏下是否有效
+ *   ④ 进度条能否拦住
+ *
+ * 两种模式（阿里云文档：私有加密在 Web 端【只能】VidAuth，UrlSource ❌）：
+ *   ?mode=source  播 URL —— 用基线那段 AES-128 标准加密流，零阿里云依赖，
+ *                  ② 仍然成立（密钥接口是我们自己的，能看到 ?token=）
+ *   ?mode=vid&vid=xxx
+ *                  VidAuth + encryptType:1 私有加密 —— 需服务端 /playauth 签发凭证。
+ *                  【注意】此模式下 ② 这一项不存在：私有加密的密钥由点播服务托管，
+ *                  没有自建密钥接口，要验的换成 PlayAuth 的签发与时效。
+ *
+ * 其余开关与基线同名：?wm=on|off  ?seekguard=on|off  ?inline=on|off  ?x5=on|off  ?src=
+ * ===================================================================== */
+(function () {
+'use strict';
+
+var Q = new URLSearchParams(location.search);
+var opt = {
+  mode:      Q.get('mode')      || 'source',
+  vid:       Q.get('vid')       || '',
+  src:       Q.get('src')       || 'https://poc.hqtw.cn/media/index.m3u8',
+  inline:    (Q.get('inline')    || 'on') === 'on',
+  x5:        (Q.get('x5')        || 'on') === 'on',
+  wm:        (Q.get('wm')        || 'on') === 'on',
+  seekguard: (Q.get('seekguard') || 'on') === 'on'
+};
+var SESSION = 'A' + Math.random().toString(36).slice(2, 8) + '-' + Date.now().toString(36);
+
+// ---------- 屏内日志（与基线同一套，便于逐条对比） ----------
+var panel = document.getElementById('panel');
+var lines = [], outbox = [];
+function log(level, tag, msg, extra) {
+  var now = new Date();
+  var t = now.toTimeString().slice(0, 8) + '.' + String(now.getMilliseconds()).padStart(3, '0');
+  var text = '[' + tag + '] ' + msg + (extra !== undefined ? '  ' + safe(extra) : '');
+  var div = document.createElement('div');
+  div.className = 'row ' + level;
+  div.innerHTML = '<span class="t">' + t + '</span> ';
+  div.appendChild(document.createTextNode(text));
+  panel.appendChild(div);
+  if (window.scrollY + window.innerHeight > document.body.scrollHeight - 160) {
+    window.scrollTo(0, document.body.scrollHeight);
+  }
+  while (panel.childNodes.length > 500) panel.removeChild(panel.firstChild);
+  lines.push(t + ' ' + level.toUpperCase() + ' ' + text);
+  outbox.push({ t: t, level: level, tag: tag, msg: msg, extra: extra === undefined ? null : extra });
+  if (outbox.length >= 40) flush();
+}
+function safe(v) { try { return typeof v === 'string' ? v : JSON.stringify(v); } catch (e) { return String(v); } }
+var L = {
+  ok:   function (a,b,c){ log('ok',a,b,c); },   info: function (a,b,c){ log('info',a,b,c); },
+  warn: function (a,b,c){ log('warn',a,b,c); }, err:  function (a,b,c){ log('err',a,b,c); },
+  hi:   function (a,b,c){ log('hi',a,b,c); }
+};
+function flush(useBeacon) {
+  if (!outbox.length) return;
+  var body = JSON.stringify({ session: SESSION, opt: opt, href: location.href, events: outbox.splice(0) });
+  try {
+    if (useBeacon && navigator.sendBeacon) navigator.sendBeacon('log', new Blob([body], { type: 'application/json' }));
+    else fetch('log', { method:'POST', headers:{'Content-Type':'application/json'}, body:body, keepalive:true }).catch(function(){});
+  } catch (e) {}
+}
+setInterval(function () { flush(false); }, 3000);
+document.addEventListener('visibilitychange', function () { if (document.hidden) flush(true); });
+window.addEventListener('pagehide', function () { flush(true); });
+window.onerror = function (m, s, l) { L.err('JS', 'window.onerror: ' + m + ' @' + s + ':' + l); };
+window.addEventListener('unhandledrejection', function (ev) { L.err('JS', 'unhandledrejection', String(ev.reason).slice(0, 300)); });
+
+// ---------- 模式条 ----------
+(function () {
+  var bar = document.getElementById('modebar');
+  function pill(on, label) {
+    var s = document.createElement('span');
+    s.className = 'pill ' + (on === null ? '' : on ? 'on' : 'off');
+    s.textContent = label; bar.appendChild(s);
+  }
+  pill(null, 'mode=' + opt.mode);
+  pill(opt.inline, 'inline ' + (opt.inline ? 'ON' : 'OFF'));
+  pill(opt.x5, 'x5同层 ' + (opt.x5 ? 'ON' : 'OFF'));
+  pill(opt.wm, '水印 ' + (opt.wm ? 'ON' : 'OFF'));
+  pill(opt.seekguard, '禁拖拽 ' + (opt.seekguard ? 'ON' : 'OFF'));
+  pill(null, SESSION);
+})();
+
+var stage = document.getElementById('stage');
+var wm = document.getElementById('wm');
+var wmInner = document.getElementById('wmInner');
+var playerbox = document.getElementById('playerbox');
+var activeVideo = null;
+var player = null;
+
+var env = {
+  ua: navigator.userAgent,
+  wechat: /MicroMessenger/i.test(navigator.userAgent),
+  wechatVer: (navigator.userAgent.match(/MicroMessenger\/([\d.]+)/i) || [])[1] || null,
+  xweb: (navigator.userAgent.match(/XWEB\/([\d.]+)/i) || [])[1] || null,
+  tbs: (navigator.userAgent.match(/TBS\/(\d+)/i) || [])[1] || null,
+  platform: navigator.platform,
+  screen: screen.width + 'x' + screen.height + ' @' + (window.devicePixelRatio || 1),
+  mse: typeof window.MediaSource !== 'undefined',
+  mms: typeof window.ManagedMediaSource !== 'undefined',
+  aliplayer: typeof window.Aliplayer !== 'undefined',
+  href: location.href
+};
+
+// =====================================================================
+// ③ 水印（与基线完全同一套实现，结论才可比）
+// =====================================================================
+var wmState = { alive: true, lastReport: '', badStreak: 0 };
+
+if (!opt.wm) {
+  wm.remove();
+  L.warn('WM', '水印按参数关闭（wm=off）');
+} else {
+  (function drift() {
+    if (!wmInner.isConnected) return;
+    var w = wm.clientWidth || stage.clientWidth || 320;
+    var h = wm.clientHeight || stage.clientHeight || 180;
+    var x = Math.random() * Math.max(10, w - wmInner.offsetWidth - 10);
+    var y = Math.random() * Math.max(10, h - wmInner.offsetHeight - 10);
+    wmInner.style.transform = 'translate(' + x.toFixed(0) + 'px,' + y.toFixed(0) + 'px)';
+    setTimeout(drift, 2800);
+  })();
+  setInterval(function () {
+    var el = document.getElementById('wmclock');
+    if (el) el.textContent = new Date().toTimeString().slice(3, 8);
+  }, 1000);
+
+  var mo = new MutationObserver(function (muts) {
+    var hit = null;
+    for (var i = 0; i < muts.length && !hit; i++) {
+      var m = muts[i];
+      if (m.type === 'childList') {
+        if (!wm.isConnected || !wmInner.isConnected) {
+          hit = 'childList:水印节点被移除（wm=' + wm.isConnected + ' inner=' + wmInner.isConnected + '）';
+        }
+      } else if (m.type === 'attributes' && m.target === wm) {
+        hit = 'attributes:锚点 #wm 的 ' + m.attributeName + ' 被改（新值=' + wm.getAttribute(m.attributeName) + '）';
+      }
+    }
+    if (hit) onTamper(hit);
+  });
+  mo.observe(stage, { childList: true, subtree: true, attributes: true, attributeFilter: ['style','class','id','hidden'] });
+  L.info('WM', 'MutationObserver 已挂载（锚点 #wm，漂移在 #wmInner 上）');
+
+  setInterval(function () {
+    var connected = wm.isConnected && wmInner.isConnected;
+    var csOuter = connected ? getComputedStyle(wm) : null;
+    var cs = connected ? getComputedStyle(wmInner) : null;
+    var r = connected ? wmInner.getBoundingClientRect() : null;
+    function hidden(s) { return s && (s.display === 'none' || s.visibility === 'hidden' || Number(s.opacity) < 0.05); }
+    var report = [
+      'connected=' + connected,
+      csOuter ? '外层display=' + csOuter.display + '/vis=' + csOuter.visibility + '/op=' + csOuter.opacity : '',
+      cs ? '内层display=' + cs.display : '',
+      csOuter ? 'zIndex=' + csOuter.zIndex : '',
+      r ? 'rect=' + Math.round(r.width) + 'x' + Math.round(r.height) : ''
+    ].filter(Boolean).join(' ');
+
+    // 容器还没布局出尺寸时不判，否则播放器初始化的头几帧会把播放锁死
+    var host = wm.parentElement;
+    var hostR = host ? host.getBoundingClientRect() : null;
+    if (connected && hostR && (hostR.width < 1 || hostR.height < 1)) { wmState.badStreak = 0; return; }
+
+    var bad = !connected || hidden(csOuter) || hidden(cs) || (r && r.width < 1);
+    wmState.badStreak = bad ? wmState.badStreak + 1 : 0;
+    if (report !== wmState.lastReport) { wmState.lastReport = report; (bad ? L.err : L.ok)('WM', '自检 ' + report); }
+    if (bad && wmState.badStreak === 2) onTamper('自检:' + report);
+  }, 2000);
+}
+
+function onTamper(reason) {
+  if (!wmState.alive) return;
+  wmState.alive = false;
+  L.err('WM', '★ 水印被破坏 → 暂停并锁死', reason);
+  try { pausePlayer(); } catch (e) {}
+}
+function blockPlayIfTampered() {
+  if (wmState.alive || !opt.wm) return false;
+  L.err('WM', '★ 水印已被破坏，拒绝恢复播放');
+  try { pausePlayer(); } catch (e) {}
+  return true;
+}
+
+// =====================================================================
+// ④ 禁止向前拖拽（口径与基线一致：高水位只认连续播放，终判在 seeked）
+// =====================================================================
+var maxPosition = 0, SEEK_TOL = 1.0, PLAY_STEP_MAX = 1.5, guardHits = 0, lastT = 0;
+
+function pullBack(el) {
+  try { el.currentTime = maxPosition; lastT = maxPosition; }
+  catch (e) { L.err('SEEK', '拉回失败', String(e)); }
+}
+
+function wireVideo(el) {
+  activeVideo = el;
+  lastT = el.currentTime || 0;
+
+  el.addEventListener('play', blockPlayIfTampered);
+  el.addEventListener('playing', blockPlayIfTampered);
+
+  el.addEventListener('timeupdate', function () {
+    var t = el.currentTime, delta = t - lastT;
+    if (!el.seeking && delta > 0 && delta < PLAY_STEP_MAX && t > maxPosition) maxPosition = t;
+    lastT = t;
+  });
+
+  el.addEventListener('seeking', function () {
+    var target = el.currentTime;
+    if (!opt.seekguard) { L.warn('SEEK', 'seeking → ' + target.toFixed(2) + 's（守卫已关闭）'); return; }
+    if (target > maxPosition + SEEK_TOL) {
+      guardHits++;
+      L.hi('SEEK', '★ 拦截 #' + guardHits + '：目标 ' + target.toFixed(2) + 's > maxPosition ' + maxPosition.toFixed(2) + 's → 拉回');
+      pullBack(el);
+    } else {
+      L.info('SEEK', 'seeking → ' + target.toFixed(2) + 's（允许，maxPosition=' + maxPosition.toFixed(2) + 's）');
+    }
+  });
+  el.addEventListener('seeked', function () {
+    var landed = el.currentTime;
+    if (opt.seekguard && landed > maxPosition + SEEK_TOL) {
+      guardHits++;
+      L.hi('SEEK', '★ 落点仍超限：' + landed.toFixed(2) + 's > maxPosition ' + maxPosition.toFixed(2) + 's → 再次拉回');
+      pullBack(el); return;
+    }
+    L.info('SEEK', 'seeked 落点 ' + landed.toFixed(2) + 's  maxPosition=' + maxPosition.toFixed(2) + 's');
+  });
+
+  el.addEventListener('webkitbeginfullscreen', function () {
+    L.err('FS', '★ webkitbeginfullscreen —— iOS 原生全屏接管，DOM 水印在此期间不可见');
+  });
+  el.addEventListener('webkitendfullscreen', function () { L.info('FS', 'webkitendfullscreen'); });
+  ['x5videoenterfullscreen','x5videoexitfullscreen'].forEach(function (ev) {
+    el.addEventListener(ev, function () { L.hi('FS', 'X5 事件 ' + ev); });
+  });
+
+  ['loadstart','loadedmetadata','canplay','play','playing','pause','waiting','stalled','ended','error']
+  .forEach(function (ev) {
+    el.addEventListener(ev, function () {
+      if (ev === 'error') {
+        var e = el.error || {};
+        L.err('VID', '★ video error code=' + e.code + '  【1中止 2网络 3解码 4源不支持】');
+        return;
+      }
+      L.info('VID', ev + '  rs=' + el.readyState + ' t=' + el.currentTime.toFixed(2) +
+                     ' dur=' + (isFinite(el.duration) ? el.duration.toFixed(2) : 'NaN'));
+    });
+  });
+}
+
+// 属性装配（这些属性本身就是验证对象；Aliplayer 也有同名配置，这里再补一遍保证与基线一致）
+function applyVideoAttrs(el) {
+  var applied = [];
+  if (opt.inline) { el.setAttribute('playsinline',''); el.setAttribute('webkit-playsinline','true');
+                    applied.push('playsinline','webkit-playsinline'); }
+  if (opt.x5) { el.setAttribute('x5-playsinline','true'); el.setAttribute('x5-video-player-type','h5-page');
+                el.setAttribute('x5-video-player-fullscreen','false');
+                applied.push('x5-playsinline','x5-video-player-type=h5-page','x5-video-player-fullscreen=false'); }
+  L.info('ATTR', '已加属性', applied.length ? applied : '(全部关闭)');
+}
+
+// 全屏判定（与基线同口径）
+['fullscreenchange','webkitfullscreenchange'].forEach(function (ev) {
+  document.addEventListener(ev, function () {
+    var el = document.fullscreenElement || document.webkitFullscreenElement;
+    if (!el) { L.info('FS', ev + ' → 退出全屏'); return; }
+    var where = '进入全屏，元素=' + el.tagName + '#' + (el.id || '') + '.' + (el.className || '').split(' ')[0];
+    if (!opt.wm) { L.hi('FS', where + '（水印已关闭）'); return; }
+    if (!el.contains(wm)) {
+      L.err('FS', where + '｜★ 水印【不在】全屏元素内 —— 全屏期间画面上必然没有水印');
+      return;
+    }
+    L.hi('FS', where + '｜水印在全屏子树内（只排除了"没渲染"，压不压得住原生视频层要看画面）');
+    setTimeout(function () {
+      var r = wm.getBoundingClientRect();
+      L.hi('FS', '全屏实测：水印框=' + Math.round(r.width) + 'x' + Math.round(r.height) +
+                 '  屏幕=' + window.innerWidth + 'x' + window.innerHeight);
+      L.hi('FS', '看画面：红色虚线框 + 左上角"H5 层"标签在不在？不在 = 视频走了独立原生层');
+    }, 400);
+  });
+});
+
+// ---------- vitals ----------
+var vitals = document.getElementById('vitals');
+setInterval(function () {
+  var v = activeVideo, el = document.fullscreenElement || document.webkitFullscreenElement;
+  vitals.innerHTML =
+    '<span>mode=<b>' + opt.mode + '</b></span>' +
+    '<span>readyState=<b>' + (v ? v.readyState : '-') + '</b></span>' +
+    '<span>t=<b>' + (v ? v.currentTime.toFixed(1) : '-') + '</b>/' + (v && isFinite(v.duration) ? v.duration.toFixed(1) : '?') + '</span>' +
+    '<span>max=<b>' + maxPosition.toFixed(1) + '</b></span>' +
+    '<span>拦截=<b>' + guardHits + '</b></span>' +
+    '<span>paused=<b>' + (v ? v.paused : '-') + '</b></span>' +
+    '<span>全屏=<b>' + (el ? 'YES' : 'no') + '</b></span>' +
+    '<span>水印=<b>' + (!opt.wm ? 'off' : (wm.isConnected && wmInner.isConnected ? (wmState.alive ? '在' : '已锁') : '丢失')) + '</b></span>';
+}, 500);
+
+// ---------- 按钮 ----------
+function playPlayer()  { if (player && player.play) player.play(); else if (activeVideo) activeVideo.play(); }
+function pausePlayer() { if (player && player.pause) player.pause(); else if (activeVideo) activeVideo.pause(); }
+
+document.getElementById('btnPlay').onclick  = function () { L.info('ACT','调用 play()'); playPlayer(); };
+document.getElementById('btnPause').onclick = function () { L.info('ACT','调用 pause()'); pausePlayer(); };
+document.getElementById('btnFs').onclick = function () {
+  L.info('ACT', '请求全屏');
+  try {
+    if (player && player.fullscreenService && player.fullscreenService.requestFullScreen) {
+      player.fullscreenService.requestFullScreen(); L.info('ACT','走 Aliplayer fullscreenService');
+    } else if (activeVideo && activeVideo.webkitEnterFullscreen) {
+      activeVideo.webkitEnterFullscreen(); L.info('ACT','走 video.webkitEnterFullscreen()（iOS 原生全屏）');
+    } else if (stage.requestFullscreen) { stage.requestFullscreen(); L.info('ACT','走 stage.requestFullscreen()'); }
+    else { L.warn('ACT','没有可用的全屏 API'); }
+  } catch (e) { L.err('ACT','全屏调用抛错', String(e)); }
+};
+document.getElementById('btnSeek').onclick = function () {
+  if (!activeVideo) return L.warn('ACT','还没有 video 元素');
+  var target = activeVideo.currentTime + 30;
+  L.info('ACT', '脚本置 currentTime = ' + target.toFixed(2));
+  activeVideo.currentTime = target;
+  setTimeout(function () { L.hi('ACT', '0.5s 后实际落点 = ' + activeVideo.currentTime.toFixed(2) + 's'); }, 500);
+};
+document.getElementById('btnKillWm').onclick = function () {
+  if (!opt.wm) return L.warn('ACT','水印已关闭');
+  L.info('ACT','手动删除水印节点'); wm.remove();
+};
+document.getElementById('btnHideWm').onclick = function () {
+  if (!opt.wm) return L.warn('ACT','水印已关闭');
+  L.info('ACT','手动置 #wm display:none'); wm.style.display = 'none';
+};
+document.getElementById('btnFlush').onclick = function () { flush(false); L.ok('ACT','已手动上报'); };
+document.getElementById('btnCopy').onclick = function () {
+  try {
+    var ta = document.createElement('textarea');
+    ta.value = lines.join('\n'); ta.style.position='fixed'; ta.style.left='-9999px';
+    document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove();
+    L.ok('ACT','已复制 ' + lines.length + ' 行');
+  } catch (e) { L.err('ACT','复制失败', String(e)); }
+};
+
+// =====================================================================
+// 启动
+// =====================================================================
+L.hi('ENV', '会话 ' + SESSION);
+Object.keys(env).forEach(function (k) { L.info('ENV', k + ' = ' + env[k]); });
+L.info('OPT', JSON.stringify(opt));
+
+if (!window.Aliplayer) {
+  L.err('LOAD', '★ Aliplayer 没加载到（vendor/aliplayer-min.js）—— 在微信里这会伪装成"①播不了"');
+}
+
+function commonCfg() {
+  var c = {
+    id: 'playerbox',
+    width: '100%',
+    height: '100%',
+    autoplay: false,
+    isLive: false,
+    rePlay: false,
+    preload: true,
+    playsinline: opt.inline,
+    controlBarVisibility: 'always',
+    useH5Prism: undefined   // 2.25.1 已无此选项，留个注释免得又被加回来
+  };
+  delete c.useH5Prism;
+  if (opt.x5) {
+    c.x5_type = 'h5';                 // Aliplayer 侧的同层渲染开关
+    c.x5_fullscreen = false;
+    c.x5_video_position = 'center';
+  }
+  return c;
+}
+
+function afterCreated(p) {
+  player = p;
+  window.__ali = p;
+
+  // 取底层 video：优先 player.tag，取不到就从容器里找
+  var v = p.tag || playerbox.querySelector('video');
+  if (!v) {
+    L.err('ENGINE', '★ 取不到底层 video 元素，④ 的守卫挂不上');
+  } else {
+    applyVideoAttrs(v);
+    wireVideo(v);
+    L.ok('ENGINE', '已挂上属性与拖拽守卫（video 元素级）');
+  }
+
+  // 水印必须移进播放器容器内，否则全屏时不在全屏渲染层里（基线那轮的教训）
+  if (opt.wm && wm.isConnected) {
+    playerbox.appendChild(wm);
+    L.info('WM', '已把水印移进播放器容器 #playerbox 内');
+  }
+
+  // ④ 的产品形态挂点：包住 player.seek()
+  if (typeof p.seek === 'function') {
+    var rawSeek = p.seek.bind(p);
+    p.seek = function (time) {
+      if (opt.seekguard && time > maxPosition + SEEK_TOL) {
+        guardHits++;
+        L.hi('SEEK', '★ Aliplayer.seek 拦截 #' + guardHits + '：目标 ' + Number(time).toFixed(2) +
+                     's > maxPosition ' + maxPosition.toFixed(2) + 's → 夹到 maxPosition');
+        return rawSeek(maxPosition);
+      }
+      return rawSeek(time);
+    };
+    L.info('ENGINE', '已包住 Aliplayer.seek()');
+  } else {
+    L.warn('ENGINE', 'Aliplayer 上没有 seek()，只能靠 video 元素级守卫');
+  }
+
+  ['ready','play','pause','ended','error','waiting'].forEach(function (ev) {
+    p.on(ev, function (e) {
+      (ev === 'error' ? L.err : L.info)('ALI', 'player.' + ev + (e && e.paramData ? ' ' + safe(e.paramData) : ''));
+    });
+  });
+}
+
+function startSource() {
+  L.hi('ENGINE', '★ mode=source —— Aliplayer 播 URL：' + opt.src);
+  L.info('ENGINE', '这条路用的是基线那段 AES-128 标准加密流，② 仍然成立（密钥接口是我们自己的）');
+  var cfg = commonCfg();
+  cfg.source = opt.src;
+  new Aliplayer(cfg, afterCreated);
+}
+
+function startVid() {
+  if (!opt.vid) {
+    L.err('ENGINE', '★ mode=vid 但没给 ?vid=  —— 需要阿里云 VOD 里那条视频的 VideoId');
+    return;
+  }
+  L.hi('ENGINE', '★ mode=vid —— VidAuth + encryptType:1（私有加密）vid=' + opt.vid);
+  L.info('ENGINE', '注意：此模式下 ② 不存在（密钥由点播服务托管，无自建密钥接口）');
+  L.info('ENGINE', '向 /playauth 取凭证 ...');
+  fetch('playauth?videoId=' + encodeURIComponent(opt.vid))
+    .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+    .then(function (res) {
+      if (!res.ok || !res.j.playAuth) {
+        L.err('ENGINE', '★ 取 PlayAuth 失败：' + safe(res.j).slice(0, 300));
+        return;
+      }
+      L.ok('ENGINE', 'PlayAuth 已取到（长度 ' + res.j.playAuth.length + '，有效期 ' + (res.j.expire || '?') + '）');
+      var cfg = commonCfg();
+      cfg.vid = opt.vid;
+      cfg.playauth = res.j.playAuth;
+      cfg.encryptType = 1;          // ★ 私有加密必须显式打开
+      new Aliplayer(cfg, afterCreated);
+    })
+    .catch(function (e) { L.err('ENGINE', '★ 取 PlayAuth 异常', String(e)); });
+}
+
+if (window.Aliplayer) {
+  if (opt.mode === 'vid') startVid(); else startSource();
+}
+
+})();
+</script>
+</body>
+</html>
