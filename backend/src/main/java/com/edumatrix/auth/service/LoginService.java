@@ -128,9 +128,28 @@ public class LoginService {
      * <p>同样跑⑤⑥⑦⑧四步 —— <b>停用后不许续签</b>（§1.3 的错误码表里就有
      * {@code 10005} / {@code 10007} / {@code 10017}）。少跑这一段，被停用的账号
      * 就能靠 7 天有效期的 refreshToken 无限续命。
+     *
+     * <h2>原子消费之后的任何一步失败，旧 refreshToken 都已不可用 —— 这是有意的取舍</h2>
+     * <p>覆盖两类失败，不只是校验那一类：
+     * <ul>
+     *   <li>{@code assertLoginable} 抛出（租户到期、账号封禁、学籍归档、节点停用）；
+     *   <li>{@code openSession} 抛出（Redis 抖动、Sa-Token 装配问题）。
+     * </ul>
+     * 两者的结果相同：用户只能重新登录。
+     *
+     * <p><b>反过来「失败就把 token 放回去」会重新打开竞争窗口</b> ——
+     * 那等于把原子消费退化成「取值 → 干活 → 也许删也许还回去」，
+     * 并发的两个请求又能双双拿到有效值。
+     *
+     * <p>而这个取舍的代价很小：第一类失败的那些场景，<b>本来就意味着他登不进去</b>
+     * （重新登录同样会被同一条判定链拒掉，只是错误码更明确）；第二类是基础设施故障，
+     * 重新登录本就是合理处置。
      */
     public RefreshVO refresh(RefreshRequest request) {
-        TokenService.RefreshTokenRecord record = tokenService.resolveRefreshToken(request.getRefreshToken());
+        // 【第一步就把旧令牌原子消费掉】取值与删除在同一次 Redis 往返里完成，
+        // 并发的两个刷新只有一个拿得到值，另一个当场 10006 ——「一次性使用」（§2.2 规则 3）
+        // 是靠这一步成立的，而不是靠后面那句删除。完整推导见 TokenService#consumeRefreshToken
+        TokenService.RefreshTokenRecord record = tokenService.consumeRefreshToken(request.getRefreshToken());
         Long userId = record.userId();
 
         // 刷新是白名单接口，没有会话 —— 租户从令牌里显式取（契约 §2.8 规则 1「从数据显式取」），
@@ -142,8 +161,6 @@ public class LoginService {
         }
         loginCheckService.assertLoginable(user);
 
-        // 先作废旧的再发新的：反过来会有两个令牌同时有效的窗口（§2.2 规则 3「一次性使用，防重放」）
-        tokenService.revokeRefreshToken(userId, request.getRefreshToken());
         String refreshToken = tokenService.openSession(user);
 
         return new RefreshVO(
