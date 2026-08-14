@@ -34,6 +34,22 @@ import com.edumatrix.common.entity.TenantEntity;
  * {@code system/user} 改调对方 Service。届时检查③仍禁止直接 import 实体，
  * 所以对方 Service 要返回自己的 DTO（与 {@code AuthUser} 注释里写的合并条件一致）。
  *
+ * <p><b>交接清单在模块 04 之后扩到七个构件</b>（清单必须完整，否则删完前五个会误以为交接完毕）：
+ * <ol>
+ *   <li>本类、{@link SystemOrgNodeChangeLog}、{@code SystemOrgNodeMapper}、
+ *       {@code SystemOrgNodeChangeLogMapper}、{@code PlatformNodeWriter}（模块 03）；
+ *   <li>{@code system/user/mapper/StudentQuotaMapper}（模块 03，两条 {@code org_student} /
+ *       {@code sys_tenant} 窄只读，见其类注释）；
+ *   <li><b>{@code system/tenant/mapper/TenantOrgMapper}（模块 04）</b>——对 {@code org_node} /
+ *       {@code org_student} 的四条窄读写（子树节点数、在读学生数、根节点改名、租户删除时
+ *       整棵子树级联软删）。模块 06/07 建成后，它们分别对应 {@code org/node} 的节点查询与
+ *       改名、{@code org/member} 的学籍统计，届时删除本类并改调对方 Service。
+ * </ol>
+ * <p><b>{@code PlatformNodeWriter#createTenantRootNode}（模块 04 用）也在交接范围内</b>：
+ * 它对应模块 06 的"建节点"能力，只是多带两个写死的例外（节点 id = 租户 id、
+ * {@code tenant_id} 取新租户而非父节点）——契约 §2.1 的循环依赖决定的，
+ * 移交时这两条例外必须原样保留，否则整条 {@code tenant_id = 根节点 id} 的约定当场破掉且不报错。
+ *
  * <p><b>本类与将来 {@code org/node/entity/OrgNode} 并存期间会有两个 {@code org_node} 实体</b>
  * —— 这是已知代价，不是漏改。代价可控的原因是本类<b>只声明 {@code PlatformNodeWriter}
  * 真正读写的列</b>：{@code student_count} 等不在其中（口径见 {@code PlatformNodeWriter}）。
