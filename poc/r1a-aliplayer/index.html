@@ -363,6 +363,16 @@ function applyVideoAttrs(el) {
                 el.setAttribute('x5-video-player-fullscreen','false');
                 applied.push('x5-playsinline','x5-video-player-type=h5-page','x5-video-player-fullscreen=false'); }
   L.info('ATTR', '已加属性', applied.length ? applied : '(全部关闭)');
+
+  // 读回来核一遍，不靠"我设了所以它就是"。
+  // 播放器可能在初始化的别处也写同名属性，最终值以谁为准取决于时序 ——
+  // 这几行让实际生效的值直接进日志，省得事后为"到底哪个值起了作用"扯皮。
+  setTimeout(function () {
+    var actual = ['playsinline','webkit-playsinline','x5-playsinline',
+                  'x5-video-player-type','x5-video-player-fullscreen']
+      .map(function (a) { return a + '=' + (el.hasAttribute(a) ? (el.getAttribute(a) || '(空)') : '无'); });
+    L.info('ATTR', '1 秒后实际生效的属性', actual);
+  }, 1000);
 }
 
 // 全屏判定（与基线同口径）
@@ -455,7 +465,14 @@ if (!window.Aliplayer) {
 }
 
 function commonCfg() {
-  var c = {
+  // 这些键都在 2.25.1 的构建产物里能查到；老文章里的 useH5Prism 已经没有了，别再加。
+  //
+  // 刻意【不传】 x5_type / x5_fullscreen / x5_video_position：
+  // Aliplayer 的 x5_type 只接受 'h5'（拉起 X5 自己的全屏播放器），而基线三轮用的是
+  // 'h5-page'（同层渲染、页面内联）。两处都写会给同一个属性两个互相矛盾的值，
+  // 最终以谁为准取决于写入时序 —— 那样两边结论就不可比了。
+  // 统一由下面的 applyVideoAttrs() 一处写，和基线逐字一致。
+  return {
     id: 'playerbox',
     width: '100%',
     height: '100%',
@@ -463,17 +480,10 @@ function commonCfg() {
     isLive: false,
     rePlay: false,
     preload: true,
+    videoInit: true,
     playsinline: opt.inline,
-    controlBarVisibility: 'always',
-    useH5Prism: undefined   // 2.25.1 已无此选项，留个注释免得又被加回来
+    controlBarVisibility: 'always'
   };
-  delete c.useH5Prism;
-  if (opt.x5) {
-    c.x5_type = 'h5';                 // Aliplayer 侧的同层渲染开关
-    c.x5_fullscreen = false;
-    c.x5_video_position = 'center';
-  }
-  return c;
 }
 
 function afterCreated(p) {

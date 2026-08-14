@@ -44,16 +44,15 @@ const RING_MAX = 2000;
 const ring = [];
 function remember(e) { ring.push(e); if (ring.length > RING_MAX) ring.splice(0, ring.length - RING_MAX); }
 
+// 只列真会被请求到的类型：静态白名单只放行 index.html 与 vendor/，
+// 而 vendor 下就是 aliplayer 的 js / css / img（16 张 png，皮肤 CSS 里以 ./img/ 引用，
+// 不本地托管的话微信里控件图标会全部 404）。这里不留用不到的条目。
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'application/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
-  '.svg': 'image/svg+xml',
   '.png': 'image/png',
-  '.woff': 'font/woff', '.woff2': 'font/woff2', '.ttf': 'font/ttf',
-  '.m3u8': 'application/vnd.apple.mpegurl',
-  '.ts': 'video/mp2t',
 };
 
 const ts = () => new Date().toISOString();
