@@ -105,8 +105,35 @@ public class TokenService {
     // =====================================================================
 
     /**
-     * 校验 refreshToken 并返回它绑定的 {@code userId} 与 {@code tenantId}；
-     * 无效/过期/已被旋转作废一律 {@code 10006}。
+     * <b>本方法有副作用：取值即删除。</b>校验 refreshToken 并<b>原子地消费掉它</b>，
+     * 返回它绑定的 {@code userId} 与 {@code tenantId}；无效/过期/已被消费一律 {@code 10006}。
+     *
+     * <h2>为什么必须原子</h2>
+     * <p>00-通用约定 §2.2 规则 3：refreshToken <b>一次性使用，防重放</b>。
+     * 若「取值」与「删除」分成两步，中间隔着 {@code selectById} 与
+     * {@code assertLoginable}（租户 / 学籍 / 节点停用三项校验，至少三次数据库往返），
+     * 两个并发刷新会双双取到有效值、双双通过校验、双双签发新会话：
+     * <pre>
+     * 请求 1  GET → 有效 ┐
+     * 请求 2  GET → 有效 ┘ 还没人删
+     *         两者都通过 assertLoginable，都 DEL（第二次 no-op），都签发新令牌
+     * </pre>
+     *
+     * <p><b>这不是理论问题</b>：accessToken 过期的那一刻，前端若有两个业务请求在飞，
+     * <b>两个都会触发刷新</b>；弱网超时重发同理。这是刷新令牌机制最常见的并发形态。
+     *
+     * <p><b>后果分两层，第二层才是重点</b>：
+     * <ol>
+     *   <li><b>轻</b>：一个旧令牌换出两个新的，会话数翻倍，索引集合膨胀；
+     *   <li><b>重</b>：「一次性使用」的设计意图是 —— <b>令牌被盗时，攻击者与用户谁先用谁拿到新的，
+     *       另一个立刻失效，泄露由此暴露</b>。两边都能成功的话，<b>泄露永远不会被发现</b>。
+     *       这是个<b>安全属性</b>，不是性能问题。
+     * </ol>
+     *
+     * <p>实现用 Redis 的 {@code GETDEL}（{@code opsForValue().getAndDelete}，Redis 6.2+；
+     * 本项目 {@code deploy/docker-compose.dev.yml} 钉的是 {@code redis:7-alpine}）——
+     * 一次往返里取值并删除，<b>竞争的胜负就在这一行分出</b>：并发的两个请求只有一个拿得到非 null。
+     * <b>不用 {@code WATCH/MULTI} 重试循环</b>：那会把一个两行的问题变成一段需要单独测的状态机。
      *
      * <p>格式先行校验：不合形状的串直接拒，不去 Redis 转一圈 ——
      * 与 {@code CaptchaService} 校验 {@code captchaKey} 同源，
@@ -119,36 +146,35 @@ public class TokenService {
      * 全系统的 {@code ignore()} 因此仍然只有「登录按用户名查 sys_user」一处，
      * 与 {@code TenantHelper} 类注释里那句「现有的正当理由只有一类」保持一致。
      */
-    public RefreshTokenRecord resolveRefreshToken(String refreshToken) {
+    public RefreshTokenRecord consumeRefreshToken(String refreshToken) {
         if (refreshToken == null || !TOKEN_PATTERN.matcher(refreshToken).matches()) {
             throw new BizException(ErrorCode.REFRESH_TOKEN_INVALID);
         }
-        String value = redisTemplate.opsForValue().get(RedisKeys.refreshToken(hash(refreshToken)));
+        String tokenHash = hash(refreshToken);
+        // 竞争在这一行分胜负：GETDEL 一次往返取值并删除，并发者只有一个拿得到非 null
+        String value = redisTemplate.opsForValue().getAndDelete(RedisKeys.refreshToken(tokenHash));
         if (value == null) {
             throw new BizException(ErrorCode.REFRESH_TOKEN_INVALID);
         }
         String[] parts = value.split(":", 2);
         if (parts.length != 2) {
-            // 旧格式或被人工改过的值：按无效处理，而不是猜一个租户（契约 §2.8 规则 3）
+            // 旧格式或被人工改过的值：按无效处理，而不是猜一个租户（契约 §2.8 规则 3）。
+            //
+            // 【已知边界，不是漏写】这一支<b>无法</b>从索引集合里 SREM —— userId 就在这个坏值里，
+            // 解析不出来就没有 indexKey 可用。于是集合里会留一个孤儿 hash。无害：
+            // ① revokeOtherSessions 遍历到它时 delete 一个不存在的 key，是 no-op；
+            // ② 索引集合有 7 天 TTL（每次 issueRefreshToken 都会 expire 刷新），孤儿最终随集合过期消失。
             throw new BizException(ErrorCode.REFRESH_TOKEN_INVALID);
         }
-        return new RefreshTokenRecord(Long.valueOf(parts[0]), Long.valueOf(parts[1]));
+        Long userId = Long.valueOf(parts[0]);
+        // 索引集合的清理跟着走。它<b>不需要</b>与 GETDEL 原子 —— 那个 hash 此刻已经被删，
+        // 谁都换不出新令牌了；这一步只是别让集合里留下已失效的成员
+        forget(userId, tokenHash);
+        return new RefreshTokenRecord(userId, Long.valueOf(parts[1]));
     }
 
     /** refreshToken 在 Redis 里绑定的两项。 */
     public record RefreshTokenRecord(Long userId, Long tenantId) {
-    }
-
-    /**
-     * 作废一个 refreshToken（旋转时对旧令牌调用）。
-     *
-     * <p><b>先删旧再发新</b>：反过来的话，两个令牌会同时有效一小段时间，
-     * 而 §2.2 规则 3 的原话是「一次性使用，防重放」。
-     */
-    public void revokeRefreshToken(Long userId, String refreshToken) {
-        String tokenHash = hash(refreshToken);
-        redisTemplate.delete(RedisKeys.refreshToken(tokenHash));
-        redisTemplate.opsForSet().remove(RedisKeys.refreshTokenUserIndex(userId), tokenHash);
     }
 
     // =====================================================================
@@ -162,7 +188,13 @@ public class TokenService {
      * 而 §1.4 说的是「该用户当前会话的 accessToken 与 refreshToken 同时作废」。
      * 手机上登出顺手把电脑上也登出，是另一件事。
      *
-     * <p>对已失效 Token 调用同样返回成功（§1.4 原文），所以这里不做任何存在性断言。
+     * <p><b>这里不做任何存在性断言，理由是「失效 Token 根本到不了这里」</b> ——
+     * {@code /auth/logout} 不在免登录白名单里（00-通用约定 §2.3 穷举四条），
+     * Sa-Token 拦截器的 {@code checkLogin()} 先于本方法执行，
+     * Token 已失效或缺失时返回 <b>HTTP 401</b>（§1.4，F-18 定案）。
+     *
+     * <p>（§1.4 原先写的是「对已失效 Token 调用同样返回成功」，与 §2.3 的白名单穷举互斥；
+     * F-18 定案改的是措辞、<b>白名单一条未加</b>，行为本就是现在这样。）
      */
     public void closeCurrentSession() {
         Long userId = LoginHelper.getUserId();
@@ -171,8 +203,7 @@ public class TokenService {
         }
         String tokenHash = currentRefreshHash();
         if (tokenHash != null) {
-            redisTemplate.delete(RedisKeys.refreshToken(tokenHash));
-            redisTemplate.opsForSet().remove(RedisKeys.refreshTokenUserIndex(userId), tokenHash);
+            forget(userId, tokenHash);
         }
         StpUtil.logout();
     }
@@ -199,17 +230,33 @@ public class TokenService {
             }
         }
 
-        String indexKey = RedisKeys.refreshTokenUserIndex(userId);
-        Set<String> hashes = redisTemplate.opsForSet().members(indexKey);
+        Set<String> hashes = redisTemplate.opsForSet().members(RedisKeys.refreshTokenUserIndex(userId));
         if (hashes == null) {
             return;
         }
         for (String tokenHash : hashes) {
             if (!tokenHash.equals(currentHash)) {
-                redisTemplate.delete(RedisKeys.refreshToken(tokenHash));
-                redisTemplate.opsForSet().remove(indexKey, tokenHash);
+                forget(userId, tokenHash);
             }
         }
+    }
+
+    // =====================================================================
+
+    /**
+     * 让一个 refreshToken 从此不存在：删它的 key，并把它从该账号的索引集合里摘掉。
+     *
+     * <p><b>抽成一处不是为了少写几行</b>，而是这对动作有三个调用方
+     * （消费旋转 / 登出 / 改密踢其他会话），将来要改它时 —— 加审计日志、
+     * 索引集合换结构 —— <b>只有一个地方要改</b>。漏改一处的表现是「索引集合里留着已失效的 hash」，
+     * 不报错、也不影响功能，因此不会有人发现。
+     *
+     * <p>与 {@code TenantHelper.ignore()} 收敛到 1 处是同一个道理：
+     * <b>会静默出错的动作，出现次数越少越好。</b>
+     */
+    private void forget(Long userId, String tokenHash) {
+        redisTemplate.delete(RedisKeys.refreshToken(tokenHash));
+        redisTemplate.opsForSet().remove(RedisKeys.refreshTokenUserIndex(userId), tokenHash);
     }
 
     // =====================================================================
