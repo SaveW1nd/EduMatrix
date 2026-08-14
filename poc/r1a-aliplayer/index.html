@@ -532,7 +532,24 @@ function commonCfg() {
   };
 }
 
+// Aliplayer 在它判定不支持的环境里会【直接渲染错误 UI 而不调用 created 回调】——
+// 2026-08-15 iOS 微信实测：mse=false，afterCreated 一次都没执行，
+// 于是挂在回调里的 p.on('error') 也从未生效，日志里只剩水印自检在空转。
+// 所以错误捕获不能只依赖回调，这里主动把容器里渲染出来的文案抓回来。
+var lastFatalUI = '';
+function captureFatalUI(tag) {
+  var box = document.getElementById('playerbox');
+  if (!box) return;
+  var txt = (box.innerText || box.textContent || '').replace(/\s+/g, ' ').trim();
+  if (!txt || txt === lastFatalUI) return;
+  lastFatalUI = txt;
+  L.err('ALI', '★ 播放器容器内可见文案（' + tag + '）：' + txt.slice(0, 300) +
+               '  ｜ created 回调执行过=' + !!window.__aliCreated +
+               '  ｜ mse=' + env.mse + ' mms=' + env.mms);
+}
+
 function afterCreated(p) {
+  window.__aliCreated = true;
   player = p;
   window.__ali = p;
 
@@ -611,7 +628,21 @@ function startVid() {
       cfg.vid = opt.vid;
       cfg.playauth = res.j.playAuth;
       cfg.encryptType = 1;          // ★ 私有加密必须显式打开
-      new Aliplayer(cfg, afterCreated);
+
+      // 私有加密的解密在 JS 层做，解密后的数据只能经 MSE 喂给 video。
+      // iOS 的 WKWebView 不提供 MSE —— 这一行让"为什么播不了"在日志里一目了然。
+      if (!env.mse) {
+        L.err('ENGINE', '★ 本环境 MediaSource 不可用（mse=false, mms=' + env.mms +
+                        '）—— 私有加密依赖 MSE 解密，此处大概率播不了');
+      }
+
+      try {
+        new Aliplayer(cfg, afterCreated);
+      } catch (e) {
+        L.err('ENGINE', '★ new Aliplayer() 直接抛错：' + String(e).slice(0, 200));
+      }
+      setTimeout(function () { captureFatalUI('2.5s'); }, 2500);
+      setTimeout(function () { captureFatalUI('6s'); }, 6000);
     })
     .catch(function (e) { L.err('ENGINE', '★ 取 PlayAuth 异常', String(e)); });
 }
