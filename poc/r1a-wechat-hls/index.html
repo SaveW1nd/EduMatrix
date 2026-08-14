@@ -22,10 +22,17 @@
 
   /* #wm 是防篡改锚点：铺满 stage，样式【永不由脚本改动】，所以它身上任何属性变更
      都是篡改。漂移动画只作用在内层 #wmInner 上，避免水印自己触发自己的观察器。 */
-  #wm { position:absolute; left:0; top:0; right:0; bottom:0; z-index:2147483000; pointer-events:none; }
+  /* 边框是【诊断用】的：它让"H5 层到底有没有压在视频之上"一眼可辨。
+     全屏时若连这圈框都看不见，说明视频走了独立的原生层，DOM 再高的 z-index 也没用。 */
+  #wm { position:absolute; left:0; top:0; right:0; bottom:0; z-index:2147483000; pointer-events:none;
+        border:3px dashed rgba(255,60,60,.85); }
+  #wm::before { content:'H5 层'; position:absolute; left:4px; top:2px;
+        font:700 13px/1.2 -apple-system,sans-serif; color:#fff; background:rgba(255,60,60,.85);
+        padding:2px 6px; border-radius:3px; }
+  /* 字号跟着容器走：全屏时容器变成整屏，水印也要跟着变大，否则 190x12 那么小很容易看漏 */
   #wmInner { position:absolute; left:0; top:0; white-space:nowrap;
-        color:rgba(255,255,255,.62); font-size:15px; font-weight:600;
-        text-shadow:0 1px 3px rgba(0,0,0,.9);
+        color:rgba(255,255,255,.72); font-size:clamp(15px, 3.2vmin, 44px); font-weight:700;
+        text-shadow:0 2px 6px rgba(0,0,0,.95);
         transition:transform 2.6s linear; will-change:transform; }
 
   .btns { display:flex; gap:6px; flex-wrap:wrap; padding:8px 10px; background:#17171a;
@@ -88,7 +95,8 @@
  *
  * 模式开关（URL 参数），因为"不行"和"某个属性没加所以不行"是两回事：
  *   ?engine=auto|hlsjs|native   播放内核（默认 auto：能用 hls.js 就用）
- *   ?player=raw|dplayer         裸 hls.js / 叠 DPlayer（默认 raw，先排除干扰）
+ *   ?player=raw|dplayer|xg      裸 hls.js / 叠 DPlayer / 叠 xgplayer（默认 raw，先排除干扰）
+ *   ?xghls=hlsjs|xg             player=xg 时用哪个 HLS 实现（默认 hlsjs，即已验证过的那个内核）
  *   ?inline=on|off              playsinline / webkit-playsinline（默认 on）
  *   ?x5=on|off                  x5-video-player-type=h5-page 等同层渲染属性（默认 on）
  *   ?wm=on|off                  水印（默认 on）
@@ -108,7 +116,8 @@ var opt = {
   x5:        (Q.get('x5')        || 'on') === 'on',
   wm:        (Q.get('wm')        || 'on') === 'on',
   seekguard: (Q.get('seekguard') || 'on') === 'on',
-  src:       Q.get('src')       || 'media/index.m3u8'
+  src:       Q.get('src')       || 'media/index.m3u8',
+  xghls:     Q.get('xghls')     || 'hlsjs'
 };
 
 var SESSION = 'S' + Math.random().toString(36).slice(2, 8) + '-' + Date.now().toString(36);
@@ -250,7 +259,11 @@ if (!opt.wm) {
   // 【不能写 #wm 的 style】—— 那会被下面的观察器判成篡改，水印自己把自己关掉。
   (function drift() {
     if (!wmInner.isConnected) return;
-    var w = stage.clientWidth || 320, h = stage.clientHeight || 180;
+    // 范围要按【水印自己的容器】算，不能按 stage 算。
+    // dplayer 模式下水印被移进了 dpbox，全屏的也是 dpbox —— 继续用 stage 的尺寸
+    // 会把水印挤在左上角一小块里，全屏画面上很容易看漏，然后被误判成"水印没了"。
+    var w = wm.clientWidth || stage.clientWidth || 320;
+    var h = wm.clientHeight || stage.clientHeight || 180;
     var x = Math.random() * Math.max(10, w - wmInner.offsetWidth - 10);
     var y = Math.random() * Math.max(10, h - wmInner.offsetHeight - 10);
     wmInner.style.transform = 'translate(' + x.toFixed(0) + 'px,' + y.toFixed(0) + 'px)';
@@ -300,20 +313,47 @@ if (!opt.wm) {
       csOuter ? 'zIndex=' + csOuter.zIndex : '',
       r ? 'rect=' + Math.round(r.width) + 'x' + Math.round(r.height) : ''
     ].filter(Boolean).join(' ');
+    // 容器自身还没布局出尺寸时不判：播放器初始化的头一两帧里水印会瞬时 0x0，
+    // 若直接当成篡改，会在真机上把播放锁死，伪装成「③ 不成立」。
+    var host = wm.parentElement;
+    var hostR = host ? host.getBoundingClientRect() : null;
+    if (connected && hostR && (hostR.width < 1 || hostR.height < 1)) {
+      wmState.badStreak = 0;
+      return;
+    }
+
+    // 判定与计数【每次都做】，只有打日志才受"状态变化"限制 ——
+    // 若把计数也塞进变化分支里，持续为坏时报告字符串不变，计数会永远停在 1，
+    // "连续两次才认"就等于永远不认。
+    var bad = !connected || hidden(csOuter) || hidden(cs) || (r && r.width < 1);
+    wmState.badStreak = bad ? (wmState.badStreak || 0) + 1 : 0;
+
     if (report !== wmState.lastReport) {   // 只在状态变化时打，避免刷屏
       wmState.lastReport = report;
-      var bad = !connected || hidden(csOuter) || hidden(cs) || (r && r.width < 1);
       (bad ? L.err : L.ok)('WM', '自检 ' + report);
-      if (bad) onTamper('自检:' + report);
     }
+    // 连续两次才认，单次抖动不算 —— MutationObserver 那条路是即时的，
+    // 自检只负责补它抓不到的"节点还在但看不见"，慢一拍无所谓。
+    if (bad && wmState.badStreak === 2) onTamper('自检:' + report);
   }, 2000);
 }
 
 function onTamper(reason) {
   if (!wmState.alive) return;
   wmState.alive = false;
-  L.err('WM', '★ 水印被破坏 → 立即暂停播放', reason);
+  L.err('WM', '★ 水印被破坏 → 暂停并锁死', reason);
   try { activeVideo.pause(); } catch (e) {}
+}
+
+// 只暂停一次是拦不住的：2026-08-15 XWEB 实测，点一下播放就能一路看到片尾，
+// 且水印全程不可见。这里把 play 也接管，验证"在微信里技术上能不能真的按住"。
+// 至于 F2-6 该用哪种处置（暂停一次 / 锁死 / 上报 / 踢出），是产品决策，
+// 这里只回答"能不能"，不替谁选。
+function blockPlayIfTampered(el) {
+  if (wmState.alive || !opt.wm) return false;
+  L.err('WM', '★ 水印已被破坏，拒绝恢复播放');
+  try { el.pause(); } catch (e) {}
+  return true;
 }
 
 // =====================================================================
@@ -338,6 +378,9 @@ function pullBack(el) {
 function wireVideo(el) {
   activeVideo = el;
   lastT = el.currentTime || 0;
+
+  el.addEventListener('play', function () { blockPlayIfTampered(el); });
+  el.addEventListener('playing', function () { blockPlayIfTampered(el); });
 
   // 高水位【只认连续播放】造成的推进。
   //
@@ -420,12 +463,31 @@ wireVideo(video);
     // 水印不在这棵子树里，画面上就必然看不到它 —— 这是渲染模型决定的，可以直接判。
     var where = '进入全屏，元素=' + el.tagName + '#' + (el.id || '');
     if (!opt.wm) { L.hi('FS', where + '（水印已关闭，不判）'); return; }
-    if (el.contains(wm)) {
-      L.ok('FS', where + '｜水印在全屏层内 → 会跟着一起全屏，③ 这一项过（仍请截图确认层级）');
-    } else {
+
+    // DOM 包含关系只能【证否】：不在全屏子树里，就一定看不见。
+    // 反过来证不了"看得见"—— 视频若走独立的原生层合成，DOM 再高的 z-index 也压不上去。
+    // 所以这里只下"必然不可见"的结论，另一边留给尺寸实测 + 人眼。
+    if (!el.contains(wm)) {
       L.err('FS', where + '｜★ 水印【不在】全屏元素内 —— 全屏期间画面上必然没有水印。' +
                   '原生 controls 的全屏按钮全屏的是 video 自己，水印作为兄弟节点不在这一层');
+      return;
     }
+    L.hi('FS', where + '｜水印在全屏子树内（这只排除了"没渲染"，压不压得住原生视频层要看画面）');
+
+    // 等布局稳定后量一次真实尺寸：若水印框铺满了屏幕却还是看不到，
+    // 那就只剩一个解释 —— 视频在独立原生层之上，H5 盖不上去。
+    setTimeout(function () {
+      var r = wm.getBoundingClientRect();
+      var ri = wmInner.getBoundingClientRect();
+      var cover = Math.round(r.width) + 'x' + Math.round(r.height);
+      var screenSz = window.innerWidth + 'x' + window.innerHeight;
+      var full = r.width >= window.innerWidth * 0.9 && r.height >= window.innerHeight * 0.9;
+      L.hi('FS', '全屏实测：水印框=' + cover + '  屏幕=' + screenSz +
+                 '  水印文字=' + Math.round(ri.width) + 'x' + Math.round(ri.height) +
+                 '  ' + (full ? '框已铺满屏幕' : '★ 框没铺满屏幕（布局问题，不是层级问题）'));
+      L.hi('FS', '看画面：红色虚线框 + 左上角"H5 层"标签在不在？' +
+                 '框都看不到 = 视频走了独立原生层，H5 压不上去；框在但字太小 = 我这边的问题');
+    }, 400);
   });
 });
 document.addEventListener('x5videoenterfullscreen', function () { L.hi('FS', 'document 上的 x5videoenterfullscreen'); });
@@ -660,6 +722,105 @@ function withDPlayer() {
                    '四条判定以第 1 轮 player=raw 为准，本轮只回答"叠上去会不会引入新问题"');
 }
 
+// =====================================================================
+// xgplayer（字节 · 西瓜播放器 v3）
+//
+// 接它进来只为回答一个问题：**CSS 全屏能不能保住水印**。
+//
+// 2026-08-15 XWEB 实测：内联时水印可见，一进【原生全屏】就没了 —— 两次全屏元素
+// 分别是 VIDEO#video 和 DIV#dpbox，后者 DOM 上明明包含水印。合理的解释是
+// 调 Fullscreen API 会新建一个原生全屏层，X5 的同层渲染在那一层不成立。
+// xgplayer 的 cssFullscreen 是纯 CSS 铺满视口、【不调 Fullscreen API】，
+// 还留在普通文档流里，合成方式与内联一致 —— 若水印能活下来，③ 就不是死结。
+//
+// 注意 v3 与 v2 文档差别很大：v2 的 allowSeekPlayed / disableProgress 在
+// v3.0.26 里都不存在（禁快进要走 Progress 插件的 hooks）。所以本页仍用自己的
+// video 级守卫做判据，xgplayer 只负责提供 UI 与 cssFullscreen。
+// =====================================================================
+function withXgplayer() {
+  var box = document.createElement('div');
+  box.id = 'xgbox';
+  box.style.width = '100%';
+  // 高度必须自己定死：v3 传 height:'auto' 会让整个播放器塌成 0 高
+  // （实测 root/video/xgbox 全是 718x0，水印跟着只剩 6px，等于没盖住画面）。
+  // 测试片是 1280x720，给容器一个 16:9 的比例，播放器填满它。
+  box.style.aspectRatio = '16 / 9';
+  video.remove();
+  stage.insertBefore(box, wm.isConnected ? wm : null);
+
+  var useOwnHls = opt.xghls === 'xg';
+  var cfg = {
+    el: box,
+    url: opt.src,
+    width: '100%',
+    height: '100%',
+    fitVideoSize: 'fixWidth',
+    playsinline: opt.inline,
+    cssFullscreen: true,     // ★ 本轮的重点，页面内全屏，不调 Fullscreen API
+    fullscreen: true,        // 原生全屏按钮也留着，同一页面里两种全屏可以对照
+    videoInit: true
+  };
+  if (opt.x5) {
+    cfg['x5-video-player-type'] = 'h5-page';
+    cfg['x5-video-player-fullscreen'] = false;
+    cfg['x5-playsinline'] = true;
+    cfg['x5-video-orientation'] = 'portraint';
+  }
+
+  var p;
+  if (useOwnHls) {
+    if (typeof HlsPlayer === 'undefined') { L.err('ENGINE', '★ xgplayer-hls 没加载到'); return; }
+    p = new HlsPlayer(cfg);
+    window.__engineUsed = 'xgplayer + 自研HLS';
+    L.hi('ENGINE', '★ 走【xgplayer + 字节自研 HLS】—— ①② 要重新验，不能拿 hls.js 的结论套');
+  } else {
+    if (typeof HlsJsPlugin === 'undefined') { L.err('ENGINE', '★ xgplayer-hls.js 没加载到'); return; }
+    cfg.plugins = [HlsJsPlugin];
+    p = new Player(cfg);
+    window.__engineUsed = 'xgplayer + hls.js';
+    L.hi('ENGINE', '★ 走【xgplayer + hls.js】—— 内核仍是已验证过的那个，本轮只考察 UI 与全屏');
+  }
+  window.__xg = p;
+
+  p.on('error', function (e) { L.err('XG', '★ player error ' + safe(e)); });
+
+  p.on('ready', function () { L.ok('XG', 'ready'); });
+  p.on('playing', function () { L.ok('XG', 'playing'); });
+
+  // 播放器就绪后：装属性、搬守卫、把水印移进它的根节点
+  function attach() {
+    var root = p.root || box;
+    if (p.video) {
+      applyVideoAttrs(p.video);
+      wireVideo(p.video);
+    } else {
+      L.warn('XG', '取不到 p.video，守卫挂不上');
+    }
+    if (opt.wm && wm.isConnected) {
+      root.appendChild(wm);   // 与 DPlayer 同理：水印必须在播放器根节点内
+      L.info('WM', '已把水印移进 xgplayer 根节点内（' + (root.className || root.id) + '）');
+    }
+    L.info('XG', 'cssFullscreen 可用=' + (typeof p.getCssFullscreen === 'function'));
+  }
+  if (p.video) { attach(); } else { p.on('ready', attach); }
+
+  // ★ CSS 全屏的判据。它不会触发 fullscreenchange，必须单独听。
+  p.on('cssFullscreen_change', function (on) {
+    if (!on) { L.info('FS', 'CSS 全屏 → 退出'); return; }
+    var native = document.fullscreenElement || document.webkitFullscreenElement;
+    L.hi('FS', '★ 进入【CSS 全屏】（未调用 Fullscreen API：document.fullscreenElement=' +
+               (native ? native.tagName : 'null') + '）');
+    setTimeout(function () {
+      if (!opt.wm) return;
+      var r = wm.getBoundingClientRect();
+      L.hi('FS', 'CSS 全屏实测：水印框=' + Math.round(r.width) + 'x' + Math.round(r.height) +
+                 '  屏幕=' + window.innerWidth + 'x' + window.innerHeight);
+      L.hi('FS', '看画面：红色虚线框 + 左上角"H5 层"标签在不在？在 = CSS 全屏能保住水印，' +
+                 '③ 只是不能用原生全屏；不在 = X5 全屏一律压制 H5 层，③ 真撞车');
+    }, 400);
+  });
+}
+
 // 依次加载依赖后启动
 function loadScript(urls, done) {
   var i = 0;
@@ -683,7 +844,27 @@ loadScript(
       if (env.canPlayHlsNative) startNative('hls.js 不可用，回退原生');
       return;
     }
-    if (opt.player === 'dplayer') {
+    if (opt.player === 'xg') {
+      var xgcss = document.createElement('link');
+      xgcss.rel = 'stylesheet';
+      xgcss.href = 'vendor/xgplayer.min.css';
+      xgcss.onerror = function () { xgcss.href = 'https://cdn.jsdelivr.net/npm/xgplayer@3.0.26/dist/index.min.css'; };
+      document.head.appendChild(xgcss);
+      // 顺序不能反：xgplayer-hls 的 UMD 依赖已存在的全局 Player
+      loadScript(
+        ['vendor/xgplayer.min.js', 'https://cdn.jsdelivr.net/npm/xgplayer@3.0.26/dist/index.min.js'],
+        function (e1) {
+          if (e1) { L.err('LOAD', '★ xgplayer 加载失败，回退裸 hls.js'); return boot(); }
+          var hlsPkg = opt.xghls === 'xg'
+            ? ['vendor/xgplayer-hls.min.js', 'https://cdn.jsdelivr.net/npm/xgplayer-hls@3.0.26/dist/index.min.js']
+            : ['vendor/xgplayer-hlsjs.min.js', 'https://cdn.jsdelivr.net/npm/xgplayer-hls.js@3.0.26/dist/index.min.js'];
+          loadScript(hlsPkg, function (e2) {
+            if (e2) { L.err('LOAD', '★ xgplayer 的 HLS 包加载失败，回退裸 hls.js'); return boot(); }
+            withXgplayer();
+          });
+        }
+      );
+    } else if (opt.player === 'dplayer') {
       var css = document.createElement('link');
       css.rel = 'stylesheet';
       css.href = 'vendor/DPlayer.min.css';
