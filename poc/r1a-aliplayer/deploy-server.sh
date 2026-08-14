@@ -155,17 +155,13 @@ http://$DOMAIN {
 	}
 }
 
-# 同样的端点再挂一份在【任意 Host】上，这样可以用裸 IP 直接访问：
-#   http://<IP>/plain 通、http://<域名>/plain 不通  → DNS 问题
-#   两个都不通                                      → 网络路径根本到不了这台机器
-# 这一条能把「解析不对」和「连不上」分开，否则只能靠猜。
+# 裸 IP 访问：直接服务，不跳 https。
+# 起因：iOS 那台机器把 poc.hqtw.cn 解析错了（服务端日志里 host=域名 的请求一次都没到过，
+# 而 host=IP 的到了），DNS 修好前这是让 iOS 那轮跑起来的唯一通道。
+# 四项验证都不依赖 https：私有加密的流由阿里云 CDN 走 https 提供，PlayAuth 是同源请求，
+# 水印与拖拽守卫跟协议无关。域名走 http 时仍照常升级到 https，不受影响。
 :80 {
-	handle /plain* {
-		reverse_proxy localhost:$PORT
-	}
-	handle {
-		redir https://$DOMAIN{uri}
-	}
+	reverse_proxy localhost:$PORT
 }
 
 # R1a-Ali POC —— 一次性验证站，测完请按 README 清掉
