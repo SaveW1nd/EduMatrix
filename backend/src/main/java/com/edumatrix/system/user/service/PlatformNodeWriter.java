@@ -15,10 +15,21 @@ import com.edumatrix.system.user.mapper.SystemOrgNodeMapper;
 /**
  * 03-01 §2.2 / §2.4 的组织树副作用：<b>建号即建节点、删号即删节点</b>。
  *
- * <h2>⚠ 临时构件：{@code org} 领域建成后本类应删除</h2>
+ * <h2>⚠ 临时构件：{@code org} 领域建成<b>建人/删人接口</b>后本类应删除（模块 07）</h2>
  * <p>取舍理由与交接方式逐条见 {@link SystemOrgNode} 的类注释。一句话：
  * {@code org} 领域要到模块 06/07 才存在，而检查③禁止领域包互相 import，
  * 现在替模块 06 写一个通用的节点服务等于<b>在没有工单的情况下替它做设计决策</b>。
+ *
+ * <p><b>模块 06 已落地，本类原样保留</b> —— 它的六个接口是查询/详情/修改/移动/停用/
+ * 重置密码，<b>没有建节点与删节点</b>（03-02 §2.2：「建节点 = 建人，一律走接口 8/12/17」）。
+ * 退休时机是<b>模块 07</b>，届时 {@code system/user} 改调对方 Service；
+ * 检查③仍禁止直接 import 实体，故对方 Service 要返回自己的 DTO，
+ * 而 {@link #createTenantRootNode} 的两条例外必须<b>原样保留</b>。
+ *
+ * <p><b>{@link #assertParentAcceptsChild} 现在有一份同源的第二实现</b>：
+ * 模块 06 的 {@code org/node/service/NodeTypeRule}（02-数据库设计 §3.1.5 要求「所有入口共用」
+ * 的那个静态方法）。检查③挡着，两份在模块 07 之前必须并存 ——
+ * <b>改任一份都要同时改另一份，且不会有任何东西报错</b>。
  *
  * <h2>最小集边界 —— 多一点都不做</h2>
  * <table border="1">

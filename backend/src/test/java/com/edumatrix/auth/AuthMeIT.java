@@ -37,7 +37,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 class AuthMeIT extends AuthIntegrationTestBase {
 
     private static final int PERMS_ORG_ADMIN = 94;
-    private static final int PERMS_TEACHER = 61;
+    /**
+     * teacher 的 perms：<b>61 → 62</b>（模块 06 的迁移
+     * {@code V202608150000__bind_teacher_org_node_list.sql} 补了 {@code org:node:list}）。
+     *
+     * <p>基线 {@code V202608140000} 只把该菜单绑给了 {@code super_admin} 与 {@code org_admin}，
+     * 而 03-02 §3.1/§3.2 的权限栏都写着 {@code teacher}，§3.1 数据权限还专门写
+     * 「教师调用时树根即其教师节点，返回的子树就是名下学员列表」——照基线实现，
+     * 教师调组织树查询与节点详情会拿 403。
+     */
+    private static final int PERMS_TEACHER = 62;
     private static final int PERMS_SUPER_ADMIN = 31;
     private static final int PERMS_STUDENT = 0;
 
@@ -52,7 +61,7 @@ class AuthMeIT extends AuthIntegrationTestBase {
     }
 
     @Test
-    @DisplayName("判据 5｜teacher：roles 非空、perms 61")
+    @DisplayName("判据 5｜teacher：roles 非空、perms 62（模块 06 补了 org:node:list）")
     void teacherPerms() throws Exception {
         JsonNode me = me(AuthFixtures.TEACHER_USERNAME);
 
