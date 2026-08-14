@@ -161,6 +161,10 @@ function log(level, tag, msg, extra) {
   while (panel.childNodes.length > 500) panel.removeChild(panel.firstChild);
   lines.push(t + ' ' + level.toUpperCase() + ' ' + text);
   outbox.push({ t: t, level: level, tag: tag, msg: msg, extra: extra === undefined ? null : extra });
+
+  // ★ 开头的都是判据（拦截 / 水印被破坏 / 全屏判定 / 致命错误）—— 立刻回传，不攒。
+  // 攒着等 3 秒轮询或页面关闭，就会出现"人在手机上看到拦截了、服务端却没有记录"。
+  if (String(msg).indexOf('★') >= 0) { setTimeout(function () { flush(false); }, 0); return; }
   if (outbox.length >= 40) flush();
 }
 function safe(v) { try { return typeof v === 'string' ? v : JSON.stringify(v); } catch (e) { return String(v); } }
@@ -169,14 +173,40 @@ var L = {
   warn: function (a,b,c){ log('warn',a,b,c); }, err:  function (a,b,c){ log('err',a,b,c); },
   hi:   function (a,b,c){ log('hi',a,b,c); }
 };
+// 回传。2026-08-15 丢过一整轮 ④ 的证据（真机上人已确认拦截生效，服务端却是 0 条），
+// 复盘出两个成因，都在这个函数里：
+//
+//   1. splice 在【发送之前】就把事件取走了 —— sendBeacon 返回 false（队列满 / payload
+//      被拒）时没人放回去，那批事件永久丢失，而且是静默的。
+//   2. Blob 的 type 用了 application/json —— 它不在 CORS 安全列表里，部分 WebView
+//      会直接拒掉这个 beacon。改用 text/plain：服务端本来就是按 JSON 解析 body，
+//      不看 Content-Type。
+//
+// 没有日志的那一轮不算数 —— 这正是「人工说测过了」和「可采信的实测」之间的全部区别。
 function flush(useBeacon) {
   if (!outbox.length) return;
-  var body = JSON.stringify({ session: SESSION, opt: opt, href: location.href, events: outbox.splice(0) });
+  var batch = outbox.slice();          // 先复制，确认送出去了再清
+  var body = JSON.stringify({ session: SESSION, opt: opt, href: location.href, events: batch });
+
+  function drop() { outbox.splice(0, batch.length); }
+
   try {
-    if (useBeacon && navigator.sendBeacon) navigator.sendBeacon('log', new Blob([body], { type: 'application/json' }));
-    else fetch('log', { method:'POST', headers:{'Content-Type':'application/json'}, body:body, keepalive:true }).catch(function(){});
-  } catch (e) {}
+    if (useBeacon && navigator.sendBeacon) {
+      if (navigator.sendBeacon('log', new Blob([body], { type: 'text/plain;charset=UTF-8' }))) {
+        drop();
+      }
+      // 返回 false 就什么都不做：事件留在 outbox 里，等下一次 flush 再试
+      return;
+    }
+    fetch('log', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: body,
+      keepalive: true
+    }).then(drop).catch(function () { /* 留着下次重试 */ });
+  } catch (e) { /* 留着下次重试 */ }
 }
+
 setInterval(function () { flush(false); }, 3000);
 document.addEventListener('visibilitychange', function () { if (document.hidden) flush(true); });
 window.addEventListener('pagehide', function () { flush(true); });
