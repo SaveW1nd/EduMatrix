@@ -318,6 +318,36 @@ const server = http.createServer((req, res) => {
                          'Access-Control-Allow-Headers': 'Content-Type' });
     return res.end();
   }
+  // 连通性诊断：iOS 上 https 连不上时，用它把「请求到没到这台机器」变成服务端事实，
+  // 而不是靠用户描述"打不开 / 空白"。每次访问都记日志（含 IP、UA、走的是域名还是裸 IP）。
+  if (p === '/plain') {
+    const entry = {
+      t: ts(), kind: 'plain', host: req.headers.host || '', proto: req.headers['x-forwarded-proto'] || 'http',
+      ip: clientIp(req), ua: req.headers['user-agent'] || '', kernel: sniffKernel(req.headers['user-agent']),
+    };
+    remember(entry); append(CLIENT_LOG, entry);
+    console.log(`[PLAIN] ${entry.t} host=${entry.host} ip=${entry.ip} ${entry.kernel}`);
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+    return res.end(
+      '<!doctype html><meta charset="utf-8">' +
+      '<meta name="viewport" content="width=device-width,initial-scale=1">' +
+      '<title>连通性诊断</title>' +
+      '<body style="margin:0;background:#0b3d1e;color:#fff;font:16px/1.7 -apple-system,sans-serif">' +
+      '<div style="padding:40px 20px;text-align:center">' +
+      '<div style="font-size:64px;line-height:1">✅</div>' +
+      '<h1 style="font-size:26px;margin:14px 0">HTTP 通了</h1>' +
+      '<p style="opacity:.85">这台手机能访问到服务器。<br>说明网络路径没问题，问题只在 HTTPS/TLS。</p>' +
+      '<div style="margin-top:24px;padding:14px;background:rgba(0,0,0,.35);border-radius:8px;' +
+      'text-align:left;font:13px/1.7 ui-monospace,Menlo,monospace;word-break:break-all">' +
+      'Host: ' + String(entry.host).replace(/[<>&]/g, '') + '<br>' +
+      'IP: ' + String(entry.ip).replace(/[<>&]/g, '') + '<br>' +
+      'UA: ' + String(entry.ua).replace(/[<>&]/g, '').slice(0, 200) +
+      '</div>' +
+      '<p style="margin-top:22px;opacity:.7;font-size:14px">这次访问已记进服务端日志。</p>' +
+      '</div></body>'
+    );
+  }
+
   if (p === '/playauth') return handlePlayAuth(req, res, u);
   if (p === '/videoinfo') return handleVideoInfo(req, res, u);
   if (p === '/log' && req.method === 'POST') return handleLog(req, res);

@@ -148,10 +148,23 @@ NEW_CADDY="$(cat <<EOF
 # 其余路径照常跳 https。
 http://$DOMAIN {
 	handle /plain* {
-		respond "PLAIN-HTTP-OK" 200
+		reverse_proxy localhost:$PORT
 	}
 	handle {
 		redir https://{host}{uri}
+	}
+}
+
+# 同样的端点再挂一份在【任意 Host】上，这样可以用裸 IP 直接访问：
+#   http://<IP>/plain 通、http://<域名>/plain 不通  → DNS 问题
+#   两个都不通                                      → 网络路径根本到不了这台机器
+# 这一条能把「解析不对」和「连不上」分开，否则只能靠猜。
+:80 {
+	handle /plain* {
+		reverse_proxy localhost:$PORT
+	}
+	handle {
+		redir https://$DOMAIN{uri}
 	}
 }
 
