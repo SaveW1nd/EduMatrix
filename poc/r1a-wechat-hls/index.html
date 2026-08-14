@@ -321,37 +321,68 @@ function onTamper(reason) {
 // 全部收在 wireVideo 里，DPlayer 造出新 video 时能整套搬过去
 // =====================================================================
 var maxPosition = 0;
-var SEEK_TOL = 1.0;      // 容差：正常播放推进也会触发 seeking，别把自己拦了
-var guardBusy = false;
+var SEEK_TOL = 1.0;        // 容差：正常播放推进也会触发 seeking，别把自己拦了
+var PLAY_STEP_MAX = 1.5;   // 一次 timeupdate 的正常推进上限（1x 播放约 0.05~0.5s）
+var guardHits = 0;         // 拦截次数，打在 vitals 上，一眼能看出守卫有没有在干活
+var lastT = 0;
+
+function pullBack(el) {
+  try {
+    el.currentTime = maxPosition;
+    lastT = maxPosition;     // 别让这次写回被下一个 timeupdate 当成"播放推进"
+  } catch (e) {
+    L.err('SEEK', '拉回失败（currentTime 只读？）', String(e));
+  }
+}
 
 function wireVideo(el) {
   activeVideo = el;
+  lastT = el.currentTime || 0;
 
+  // 高水位【只认连续播放】造成的推进。
+  //
+  // 第一版写的是 `if (el.currentTime > maxPosition) maxPosition = el.currentTime`，
+  // 在真机上直接把守卫废掉了：拖动原生进度条时 timeupdate 会跟着手指一路触发，
+  // 在 seeking 判定之前就把 maxPosition 抬到目标位置，守卫回头一看"这地方早看过了"
+  // 就放行。2026-08-14 XWEB 实测三个会话里有一个全程零拦截，就是这么来的。
   el.addEventListener('timeupdate', function () {
-    if (el.currentTime > maxPosition) maxPosition = el.currentTime;
+    var t = el.currentTime;
+    var delta = t - lastT;
+    if (!el.seeking && delta > 0 && delta < PLAY_STEP_MAX && t > maxPosition) {
+      maxPosition = t;
+    }
+    lastT = t;
   });
 
   el.addEventListener('seeking', function () {
     var target = el.currentTime;
     if (!opt.seekguard) {
-      L.warn('SEEK', 'seeking → ' + target.toFixed(2) + '（守卫已关闭 seekguard=off）');
+      L.warn('SEEK', 'seeking → ' + target.toFixed(2) + 's（守卫已关闭 seekguard=off）');
       return;
     }
     if (target > maxPosition + SEEK_TOL) {
-      if (guardBusy) return;
-      guardBusy = true;
-      L.hi('SEEK', '★ 拦截向前拖拽：目标 ' + target.toFixed(2) + 's > maxPosition ' + maxPosition.toFixed(2) + 's → 拉回');
-      try { el.currentTime = maxPosition; }
-      catch (e) { L.err('SEEK', '拉回失败（只读？）', String(e)); }
-      setTimeout(function () { guardBusy = false; }, 60);
-    } else if (guardBusy) {
-      L.info('SEEK', 'seeking → ' + target.toFixed(2) + 's（守卫拉回引起的二次 seek，非用户操作）');
+      guardHits++;
+      L.hi('SEEK', '★ 拦截 #' + guardHits + '：目标 ' + target.toFixed(2) + 's > maxPosition ' + maxPosition.toFixed(2) + 's → 拉回');
+      pullBack(el);
     } else {
-      L.info('SEEK', 'seeking → ' + target.toFixed(2) + 's（允许，回看）');
+      L.info('SEEK', 'seeking → ' + target.toFixed(2) + 's（允许，maxPosition=' + maxPosition.toFixed(2) + 's）');
     }
   });
+
+  // 终判放在 seeked 上。
+  //
+  // 原生控件拖拽期间浏览器会持续下发 seek，seeking 里写回的 currentTime 会被
+  // 下一次拖拽立刻覆盖 —— 2026-08-14 实测连拦 7 次仍落在 22.67s。
+  // 只有松手后的最后一次 seeked 才代表用户真正的落点，在这里兜一次才拦得住。
   el.addEventListener('seeked', function () {
-    L.info('SEEK', 'seeked 落点 ' + el.currentTime.toFixed(2) + 's  maxPosition=' + maxPosition.toFixed(2) + 's');
+    var landed = el.currentTime;
+    if (opt.seekguard && landed > maxPosition + SEEK_TOL) {
+      guardHits++;
+      L.hi('SEEK', '★ 落点仍超限：' + landed.toFixed(2) + 's > maxPosition ' + maxPosition.toFixed(2) + 's → 再次拉回');
+      pullBack(el);
+      return;
+    }
+    L.info('SEEK', 'seeked 落点 ' + landed.toFixed(2) + 's  maxPosition=' + maxPosition.toFixed(2) + 's');
   });
 
   // iOS 原生全屏：视频被交给系统播放器，DOM 水印必然盖不上去
@@ -400,6 +431,7 @@ function renderVitals() {
     '<span>readyState=<b>' + v.readyState + '</b></span>' +
     '<span>t=<b>' + v.currentTime.toFixed(1) + '</b>/' + (isFinite(v.duration) ? v.duration.toFixed(1) : '?') + '</span>' +
     '<span>max=<b>' + maxPosition.toFixed(1) + '</b></span>' +
+    '<span>拦截=<b>' + guardHits + '</b></span>' +
     '<span>paused=<b>' + v.paused + '</b></span>' +
     '<span>全屏=<b>' + (el ? 'YES' : 'no') + '</b></span>' +
     '<span>水印=<b>' + (!opt.wm ? 'off' : (wm.isConnected && wmInner.isConnected ? (wmState.alive ? '在' : '已告警') : '丢失')) + '</b></span>' +
@@ -575,6 +607,31 @@ function withDPlayer() {
   // 否则第 3 轮只能回答"能不能加载"，回答不了 ③④
   applyVideoAttrs(d.video);
   wireVideo(d.video);
+
+  // ★ 模块 14 的真实挂点：包住 DPlayer.seek()
+  //
+  // DPlayer 自绘控件（video 上没有 controls），拖动过程中只改进度条视觉、不碰
+  // currentTime，松手才提交一次 seek；而进度条、快捷键 ←/→、切集三个入口
+  // 全部汇聚到 player.seek(time)，函数体里只有一行 this.video.currentTime = time。
+  //   references/DPlayer/src/js/player.js:194、controller.js:117-125、hotkey.js:30,38
+  // 所以这里包一层就拦住了全部入口，且不会出现原生控件那种
+  // "拖拽持续下发 seek、写回被覆盖"的搏斗 —— 这才是产品形态该测的那条路。
+  if (typeof d.seek === 'function') {
+    var rawSeek = d.seek.bind(d);
+    d.seek = function (time) {
+      if (opt.seekguard && time > maxPosition + SEEK_TOL) {
+        guardHits++;
+        L.hi('SEEK', '★ DPlayer.seek 拦截 #' + guardHits + '：目标 ' + Number(time).toFixed(2) +
+                     's > maxPosition ' + maxPosition.toFixed(2) + 's → 夹到 maxPosition');
+        return rawSeek(maxPosition);
+      }
+      return rawSeek(time);
+    };
+    L.info('ENGINE', '已包住 DPlayer.seek()（进度条/快捷键/切集三个入口都走它）');
+  } else {
+    L.warn('ENGINE', 'DPlayer 上找不到 seek()，只能靠 video 元素级守卫兜底');
+  }
+
   L.info('ENGINE', '已将属性装配 / 拖拽守卫 / 事件监听搬到 DPlayer 的 video 上；水印仍由本页覆盖在其上');
   L.warn('ENGINE', 'DPlayer 有自己的一套控件与全屏实现，行为可能与裸 hls.js 不同；' +
                    '四条判定以第 1 轮 player=raw 为准，本轮只回答"叠上去会不会引入新问题"');
