@@ -269,7 +269,9 @@ const ADMIN_HTML = `<!doctype html><meta charset="utf-8"><title>R1a-Ali 日志</
 let since=0; const out=document.getElementById('out');
 async function tick(){
   if(!document.getElementById('auto').checked) return;
-  const r=await fetch('admin/logs.json?since='+since); const d=await r.json(); since=d.next;
+  // 必须用【绝对路径】：本页地址是 /admin/logs，相对路径 "admin/logs.json" 会按
+  // 目录 /admin/ 解析成 /admin/admin/logs.json → 404，页面永远空着（实测踩过）
+  const r=await fetch('/admin/logs.json?since='+since); const d=await r.json(); since=d.next;
   for(const e of d.items){
     const div=document.createElement('div'); div.className='e '+e.kind;
     div.innerHTML='<span class="tag '+e.kind+'">'+e.kind.toUpperCase()+'</span><span class="t">'+e.t+'  '+(e.kernel||'')+'</span>\\n';

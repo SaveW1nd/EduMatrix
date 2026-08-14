@@ -124,9 +124,42 @@ ok "$SERVICE 已运行"
 # ---------------------------------------------------------------------------
 step "Caddy 反代到 $PORT"
 # ---------------------------------------------------------------------------
+# iOS 上微信报「网络出错」、Safari 报「无法与服务器建立安全的连接」，而同一地址
+# Android 正常。已排查到的事实（截至 2026-08-15）：
+#   - 服务端 TLS 1.2 / 1.3 均正常，密码套件标准，服务器自身验链 Verify OK
+#   - 默认 ECDSA 链：YE2 → Root YE → 交叉签 ISRG Root X2
+#   - 改 key_type rsa2048 后：YR1/YR2 → Root YR，【没有】交叉签到老根
+#   - 加 preferred_chains root_common_name "ISRG Root X1" 无效——
+#     Let's Encrypt 在此时点已不提供 X1 结尾的备用链
+# 也就是说【换链这条路走不通】，两种密钥类型都终结于 Apple 可能尚未信任的新 ISRG 根。
+# 保留 rsa2048 只因它兼容面更广，不构成修复。真正的成因待下面 /plain 端点取证后再定。
+# 关掉 HTTP/3 同样是为 iOS：Safari 会优先走 QUIC，网络上 QUIC 被干扰时
+# 它的报错恰好也是「无法与服务器建立安全的连接」，与证书问题难以区分。
+# POC 不需要 h3，关掉可以直接排除这一整类嫌疑。
 NEW_CADDY="$(cat <<EOF
+{
+	servers {
+		protocols h1 h2
+	}
+}
+
+# 明文 HTTP 上留一个诊断端点：iOS 报「无法建立安全连接」时，用它区分
+# 「网络根本到不了这台机器」和「能到但 TLS 被拒」—— 这两者的处置完全不同。
+# 其余路径照常跳 https。
+http://$DOMAIN {
+	handle /plain* {
+		respond "PLAIN-HTTP-OK" 200
+	}
+	handle {
+		redir https://{host}{uri}
+	}
+}
+
 # R1a-Ali POC —— 一次性验证站，测完请按 README 清掉
 $DOMAIN {
+	tls {
+		key_type rsa2048
+	}
 	reverse_proxy localhost:$PORT
 }
 EOF
