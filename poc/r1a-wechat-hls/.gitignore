@@ -1,0 +1,9 @@
+# 一次性验证物：产物一律不进 git，用 make-hls.sh 本地重新生成
+media/
+logs/
+vendor/
+*.key
+*.keyinfo
+*.mp4
+*.ts
+*.m3u8

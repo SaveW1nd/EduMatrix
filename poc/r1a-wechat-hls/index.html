@@ -1,0 +1,628 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="format-detection" content="telephone=no">
+<title>R1a POC · 微信内置浏览器加密 HLS 验证</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body { margin:0; background:#0e0e10; color:#e6e6e6;
+         font:14px/1.55 -apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",sans-serif; }
+  .bar { padding:8px 10px; background:#17171a; border-bottom:1px solid #2a2a30;
+         display:flex; gap:8px; flex-wrap:wrap; align-items:center; font-size:12px; }
+  .bar b { color:#fff; }
+  .pill { background:#26262c; border:1px solid #3a3a44; border-radius:10px; padding:1px 7px; color:#bbb; }
+  .pill.on { background:#14532d; border-color:#22c55e; color:#bbf7d0; }
+  .pill.off{ background:#3f1d1d; border-color:#ef4444; color:#fecaca; }
+
+  /* stage：video 与水印同属这一层，水印绝对定位盖在 video 之上 */
+  #stage { position:relative; width:100%; background:#000; overflow:hidden; }
+  #video { width:100%; display:block; background:#000; max-height:56vh; }
+
+  /* #wm 是防篡改锚点：铺满 stage，样式【永不由脚本改动】，所以它身上任何属性变更
+     都是篡改。漂移动画只作用在内层 #wmInner 上，避免水印自己触发自己的观察器。 */
+  #wm { position:absolute; left:0; top:0; right:0; bottom:0; z-index:2147483000; pointer-events:none; }
+  #wmInner { position:absolute; left:0; top:0; white-space:nowrap;
+        color:rgba(255,255,255,.62); font-size:15px; font-weight:600;
+        text-shadow:0 1px 3px rgba(0,0,0,.9);
+        transition:transform 2.6s linear; will-change:transform; }
+
+  .btns { display:flex; gap:6px; flex-wrap:wrap; padding:8px 10px; background:#17171a;
+          border-bottom:1px solid #2a2a30; }
+  button { font:13px/1.2 inherit; color:#e6e6e6; background:#2a2a32; border:1px solid #3d3d48;
+           border-radius:6px; padding:8px 10px; }
+  button:active { background:#3a3a46; }
+  button.danger { background:#4a1f1f; border-color:#7f2a2a; }
+  button.primary{ background:#123d2a; border-color:#1f7a4d; }
+
+  #vitals { padding:8px 10px; background:#121216; border-bottom:1px solid #2a2a30;
+            font:12px/1.5 ui-monospace,Menlo,Consolas,monospace; color:#9fb3c8; }
+  #vitals span { display:inline-block; margin-right:12px; }
+  #vitals b { color:#fff; }
+
+  #panel { padding:6px 8px 40px; font:12px/1.45 ui-monospace,Menlo,Consolas,monospace; }
+  .row { padding:3px 4px; border-bottom:1px solid #1c1c22; white-space:pre-wrap; word-break:break-all; }
+  .t { color:#666; }
+  .ok   { color:#7ee787; }
+  .info { color:#9fb3c8; }
+  .warn { color:#f0b429; }
+  .err  { color:#ff7b72; }
+  .hi   { color:#fff; background:#2d2d38; }
+</style>
+</head>
+<body>
+
+<div class="bar" id="modebar"><b>R1a POC</b></div>
+
+<div id="stage">
+  <!-- video 的属性在 JS 里按 URL 参数装配：这些属性本身就是验证对象之一 -->
+  <video id="video" controls preload="metadata"></video>
+  <div id="wm"><span id="wmInner">R1a-POC · 138****0000 · <span id="wmclock">00:00</span></span></div>
+</div>
+
+<div class="btns">
+  <button class="primary" id="btnPlay">播放</button>
+  <button id="btnPause">暂停</button>
+  <button id="btnFs">请求全屏</button>
+  <button id="btnSeek">前跳 +30s（测④）</button>
+  <button class="danger" id="btnKillWm">删除水印（测③）</button>
+  <button class="danger" id="btnHideWm">隐藏水印（测③）</button>
+  <button id="btnFlush">上报日志</button>
+  <button id="btnCopy">复制日志</button>
+</div>
+
+<div id="vitals"></div>
+<div id="panel"></div>
+
+<script>
+/* =====================================================================
+ * R1a POC 测试页
+ *
+ * 四件事，逐条对应到页面上的可观测点：
+ *   ① AES-128 加密 HLS 能否播 —— 看 MANIFEST_PARSED / KEY_LOADED / playing
+ *   ② key 请求带不带得动 URL 参数 —— 页面这侧只能看到 m3u8 里的 URI 长什么样，
+ *      真正的判据在【服务端 /key 日志】。页面会把它读到的 EXT-X-KEY 行打出来对照。
+ *   ③ 水印在同层渲染 / 全屏下有没有效 —— MutationObserver + 定时自检 + 人眼截图
+ *   ④ 向前拖拽拦不拦得住 —— maxPosition 守卫 + seeking/seeked 日志
+ *
+ * 模式开关（URL 参数），因为"不行"和"某个属性没加所以不行"是两回事：
+ *   ?engine=auto|hlsjs|native   播放内核（默认 auto：能用 hls.js 就用）
+ *   ?player=raw|dplayer         裸 hls.js / 叠 DPlayer（默认 raw，先排除干扰）
+ *   ?inline=on|off              playsinline / webkit-playsinline（默认 on）
+ *   ?x5=on|off                  x5-video-player-type=h5-page 等同层渲染属性（默认 on）
+ *   ?wm=on|off                  水印（默认 on）
+ *   ?seekguard=on|off           禁止向前拖拽（默认 on）
+ *   ?src=<m3u8 地址>            换源（默认 media/index.m3u8）
+ * ===================================================================== */
+
+(function () {
+'use strict';
+
+// ---------- 参数 ----------
+var Q = new URLSearchParams(location.search);
+var opt = {
+  engine:    Q.get('engine')    || 'auto',
+  player:    Q.get('player')    || 'raw',
+  inline:    (Q.get('inline')    || 'on') === 'on',
+  x5:        (Q.get('x5')        || 'on') === 'on',
+  wm:        (Q.get('wm')        || 'on') === 'on',
+  seekguard: (Q.get('seekguard') || 'on') === 'on',
+  src:       Q.get('src')       || 'media/index.m3u8'
+};
+
+var SESSION = 'S' + Math.random().toString(36).slice(2, 8) + '-' + Date.now().toString(36);
+
+// ---------- 屏幕内日志 ----------
+var panel = document.getElementById('panel');
+var lines = [];
+var outbox = [];
+
+function log(level, tag, msg, extra) {
+  var now = new Date();
+  var t = now.toTimeString().slice(0, 8) + '.' + String(now.getMilliseconds()).padStart(3, '0');
+  var text = '[' + tag + '] ' + msg + (extra !== undefined ? '  ' + safe(extra) : '');
+
+  var div = document.createElement('div');
+  div.className = 'row ' + level;
+  div.innerHTML = '<span class="t">' + t + '</span> ';
+  div.appendChild(document.createTextNode(text));
+  panel.appendChild(div);
+  // 保持在底部，但用户手动往上滚时不抢焦点
+  if (window.scrollY + window.innerHeight > document.body.scrollHeight - 160) {
+    window.scrollTo(0, document.body.scrollHeight);
+  }
+  while (panel.childNodes.length > 500) panel.removeChild(panel.firstChild);
+
+  lines.push(t + ' ' + level.toUpperCase() + ' ' + text);
+  outbox.push({ t: t, level: level, tag: tag, msg: msg, extra: extra === undefined ? null : extra });
+  if (outbox.length >= 40) flush();
+}
+function safe(v) {
+  try { return typeof v === 'string' ? v : JSON.stringify(v); }
+  catch (e) { return String(v); }
+}
+var L = {
+  ok:   function (tag, m, x) { log('ok', tag, m, x); },
+  info: function (tag, m, x) { log('info', tag, m, x); },
+  warn: function (tag, m, x) { log('warn', tag, m, x); },
+  err:  function (tag, m, x) { log('err', tag, m, x); },
+  hi:   function (tag, m, x) { log('hi', tag, m, x); }
+};
+
+// ---------- 回传服务端（微信里打不开开发者工具，这是唯一的观察窗口） ----------
+function flush(useBeacon) {
+  if (!outbox.length) return;
+  var body = JSON.stringify({ session: SESSION, opt: opt, href: location.href, events: outbox.splice(0) });
+  try {
+    if (useBeacon && navigator.sendBeacon) {
+      navigator.sendBeacon('/log', new Blob([body], { type: 'application/json' }));
+    } else {
+      fetch('/log', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body, keepalive: true })
+        .catch(function (e) { /* 回传失败不影响测试本身 */ });
+    }
+  } catch (e) {}
+}
+setInterval(function () { flush(false); }, 3000);
+document.addEventListener('visibilitychange', function () { if (document.hidden) flush(true); });
+window.addEventListener('pagehide', function () { flush(true); });
+
+window.onerror = function (m, s, l, c, e) {
+  L.err('JS', 'window.onerror: ' + m + ' @' + s + ':' + l, e && e.stack ? String(e.stack).slice(0, 400) : null);
+};
+window.addEventListener('unhandledrejection', function (ev) {
+  L.err('JS', 'unhandledrejection', String(ev.reason).slice(0, 400));
+});
+
+// ---------- 模式条 ----------
+(function () {
+  var bar = document.getElementById('modebar');
+  function pill(name, on, label) {
+    var s = document.createElement('span');
+    s.className = 'pill ' + (on === null ? '' : on ? 'on' : 'off');
+    s.textContent = label;
+    bar.appendChild(s);
+  }
+  pill('engine', null, 'engine=' + opt.engine);
+  pill('player', null, 'player=' + opt.player);
+  pill('inline', opt.inline, 'inline ' + (opt.inline ? 'ON' : 'OFF'));
+  pill('x5', opt.x5, 'x5同层 ' + (opt.x5 ? 'ON' : 'OFF'));
+  pill('wm', opt.wm, '水印 ' + (opt.wm ? 'ON' : 'OFF'));
+  pill('sg', opt.seekguard, '禁拖拽 ' + (opt.seekguard ? 'ON' : 'OFF'));
+  pill('s', null, SESSION);
+})();
+
+// ---------- 环境快照 ----------
+var video = document.getElementById('video');
+var stage = document.getElementById('stage');
+var wm = document.getElementById('wm');
+
+var env = {
+  ua: navigator.userAgent,
+  wechat: /MicroMessenger/i.test(navigator.userAgent),
+  wechatVer: (navigator.userAgent.match(/MicroMessenger\/([\d.]+)/i) || [])[1] || null,
+  xweb: (navigator.userAgent.match(/XWEB\/([\d.]+)/i) || [])[1] || null,
+  tbs: (navigator.userAgent.match(/TBS\/(\d+)/i) || [])[1] || null,
+  platform: navigator.platform,
+  screen: screen.width + 'x' + screen.height + ' @' + (window.devicePixelRatio || 1),
+  mse: typeof window.MediaSource !== 'undefined',
+  mms: typeof window.ManagedMediaSource !== 'undefined',   // iOS 17.1+ 才有，决定 iOS 上 hls.js 能否走 MSE
+  canPlayHlsNative: video.canPlayType('application/vnd.apple.mpegurl') || '(空)',
+  href: location.href
+};
+
+// activeVideo：当前真正在播的 video 元素。
+// player=dplayer 时 DPlayer 会自己造一个，守卫与事件监听要跟着搬过去，
+// 否则第 3 轮什么也测不到。
+var activeVideo = video;
+
+// ---------- video 属性装配（这些属性本身就是验证对象） ----------
+function applyVideoAttrs(el) {
+  var applied = [];
+  if (opt.inline) {
+    el.setAttribute('playsinline', '');            // 标准
+    el.setAttribute('webkit-playsinline', 'true'); // 旧 iOS / 微信
+    applied.push('playsinline', 'webkit-playsinline');
+  }
+  if (opt.x5) {
+    el.setAttribute('x5-playsinline', 'true');
+    el.setAttribute('x5-video-player-type', 'h5-page'); // h5-page = 同层渲染；写 h5 会拉起 X5 全屏播放器
+    el.setAttribute('x5-video-player-fullscreen', 'false');
+    el.setAttribute('x5-video-orientation', 'portraint');
+    applied.push('x5-playsinline', 'x5-video-player-type=h5-page', 'x5-video-player-fullscreen=false');
+  }
+  el.setAttribute('preload', 'metadata');
+  L.info('ATTR', '已加属性', applied.length ? applied : '(全部关闭)');
+}
+applyVideoAttrs(video);
+
+// =====================================================================
+// ③ 水印：漂移 + MutationObserver + 定时自检
+// =====================================================================
+var wmInner = document.getElementById('wmInner');
+var wmState = { alive: true, lastReport: '' };
+
+if (!opt.wm) {
+  wm.remove();
+  L.warn('WM', '水印按参数关闭（wm=off）');
+} else {
+  // 漂移：只写 #wmInner 的 transform。
+  // 【不能写 #wm 的 style】—— 那会被下面的观察器判成篡改，水印自己把自己关掉。
+  (function drift() {
+    if (!wmInner.isConnected) return;
+    var w = stage.clientWidth || 320, h = stage.clientHeight || 180;
+    var x = Math.random() * Math.max(10, w - wmInner.offsetWidth - 10);
+    var y = Math.random() * Math.max(10, h - wmInner.offsetHeight - 10);
+    wmInner.style.transform = 'translate(' + x.toFixed(0) + 'px,' + y.toFixed(0) + 'px)';
+    setTimeout(drift, 2800);
+  })();
+  setInterval(function () {
+    var el = document.getElementById('wmclock');
+    if (el) el.textContent = new Date().toTimeString().slice(3, 8);
+  }, 1000);
+
+  // MutationObserver：节点被删 / 锚点属性被改 → 立即暂停
+  var mo = new MutationObserver(function (muts) {
+    var hit = null;
+    for (var i = 0; i < muts.length && !hit; i++) {
+      var m = muts[i];
+      if (m.type === 'childList') {
+        // 不逐个比对被删节点：只要 stage 子树动过，就直接看两个节点还在不在。
+        // 这样"删外层"和"掏空内层"都盖得住。
+        if (!wm.isConnected || !wmInner.isConnected) {
+          hit = 'childList:水印节点被移除（wm=' + wm.isConnected + ' inner=' + wmInner.isConnected + '）';
+        }
+      } else if (m.type === 'attributes' && m.target === wm) {
+        // #wm 的属性脚本从不改动，动了就是篡改
+        hit = 'attributes:锚点 #wm 的 ' + m.attributeName + ' 被改（新值=' + wm.getAttribute(m.attributeName) + '）';
+      }
+    }
+    if (hit) onTamper(hit);
+  });
+  mo.observe(stage, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class', 'id', 'hidden'] });
+  L.info('WM', 'MutationObserver 已挂载（锚点 #wm，漂移在 #wmInner 上，不会自触发）');
+
+  // 定时自检：MutationObserver 抓不到"节点还在但看不见"，也抓不到层级被压
+  setInterval(function () {
+    // 锚点与内层都要看：#wm 被 display:none 时，#wmInner 的 computedStyle 仍是 block，
+    // 只看内层会得出"一切正常"的假象
+    var connected = wm.isConnected && wmInner.isConnected;
+    var csOuter = connected ? getComputedStyle(wm) : null;
+    var cs = connected ? getComputedStyle(wmInner) : null;
+    var r = connected ? wmInner.getBoundingClientRect() : null;
+    function hidden(s) {
+      return s && (s.display === 'none' || s.visibility === 'hidden' || Number(s.opacity) < 0.05);
+    }
+    var report = [
+      'connected=' + connected,
+      csOuter ? '外层display=' + csOuter.display + '/vis=' + csOuter.visibility + '/op=' + csOuter.opacity : '',
+      cs ? '内层display=' + cs.display : '',
+      csOuter ? 'zIndex=' + csOuter.zIndex : '',
+      r ? 'rect=' + Math.round(r.width) + 'x' + Math.round(r.height) : ''
+    ].filter(Boolean).join(' ');
+    if (report !== wmState.lastReport) {   // 只在状态变化时打，避免刷屏
+      wmState.lastReport = report;
+      var bad = !connected || hidden(csOuter) || hidden(cs) || (r && r.width < 1);
+      (bad ? L.err : L.ok)('WM', '自检 ' + report);
+      if (bad) onTamper('自检:' + report);
+    }
+  }, 2000);
+}
+
+function onTamper(reason) {
+  if (!wmState.alive) return;
+  wmState.alive = false;
+  L.err('WM', '★ 水印被破坏 → 立即暂停播放', reason);
+  try { activeVideo.pause(); } catch (e) {}
+}
+
+// =====================================================================
+// ④ 禁止向前拖拽 + video 事件 + 全屏事件
+// 全部收在 wireVideo 里，DPlayer 造出新 video 时能整套搬过去
+// =====================================================================
+var maxPosition = 0;
+var SEEK_TOL = 1.0;      // 容差：正常播放推进也会触发 seeking，别把自己拦了
+var guardBusy = false;
+
+function wireVideo(el) {
+  activeVideo = el;
+
+  el.addEventListener('timeupdate', function () {
+    if (el.currentTime > maxPosition) maxPosition = el.currentTime;
+  });
+
+  el.addEventListener('seeking', function () {
+    var target = el.currentTime;
+    if (!opt.seekguard) {
+      L.warn('SEEK', 'seeking → ' + target.toFixed(2) + '（守卫已关闭 seekguard=off）');
+      return;
+    }
+    if (target > maxPosition + SEEK_TOL) {
+      if (guardBusy) return;
+      guardBusy = true;
+      L.hi('SEEK', '★ 拦截向前拖拽：目标 ' + target.toFixed(2) + 's > maxPosition ' + maxPosition.toFixed(2) + 's → 拉回');
+      try { el.currentTime = maxPosition; }
+      catch (e) { L.err('SEEK', '拉回失败（只读？）', String(e)); }
+      setTimeout(function () { guardBusy = false; }, 60);
+    } else if (guardBusy) {
+      L.info('SEEK', 'seeking → ' + target.toFixed(2) + 's（守卫拉回引起的二次 seek，非用户操作）');
+    } else {
+      L.info('SEEK', 'seeking → ' + target.toFixed(2) + 's（允许，回看）');
+    }
+  });
+  el.addEventListener('seeked', function () {
+    L.info('SEEK', 'seeked 落点 ' + el.currentTime.toFixed(2) + 's  maxPosition=' + maxPosition.toFixed(2) + 's');
+  });
+
+  // iOS 原生全屏：视频被交给系统播放器，DOM 水印必然盖不上去
+  el.addEventListener('webkitbeginfullscreen', function () {
+    L.err('FS', '★ webkitbeginfullscreen —— iOS 原生全屏接管，DOM 水印与自定义控件在此期间【均不可见】');
+  });
+  el.addEventListener('webkitendfullscreen', function () {
+    L.info('FS', 'webkitendfullscreen —— 退出 iOS 原生全屏');
+  });
+  ['x5videoenterfullscreen', 'x5videoexitfullscreen'].forEach(function (ev) {
+    el.addEventListener(ev, function () { L.hi('FS', 'X5 事件 ' + ev); });
+  });
+
+  ['loadstart','loadedmetadata','loadeddata','canplay','canplaythrough','play','playing','pause','waiting','stalled','suspend','ended','emptied','ratechange','volumechange']
+  .forEach(function (ev) {
+    el.addEventListener(ev, function () {
+      L.info('VID', ev + '  rs=' + el.readyState + ' ns=' + el.networkState +
+                     ' t=' + el.currentTime.toFixed(2) + ' dur=' + (isFinite(el.duration) ? el.duration.toFixed(2) : 'NaN'));
+    });
+  });
+  el.addEventListener('error', function () {
+    var e = el.error || {};
+    L.err('VID', '★ video error code=' + e.code + ' msg=' + (e.message || '(无)') +
+                 '  【MEDIA_ERR: 1中止 2网络 3解码 4源不支持】');
+  });
+}
+wireVideo(video);
+
+['fullscreenchange', 'webkitfullscreenchange'].forEach(function (ev) {
+  document.addEventListener(ev, function () {
+    var el = document.fullscreenElement || document.webkitFullscreenElement;
+    (el ? L.hi : L.info)('FS', ev + ' → ' + (el ? '进入全屏，元素=' + el.tagName + '#' + (el.id || '') : '退出全屏'));
+  });
+});
+document.addEventListener('x5videoenterfullscreen', function () { L.hi('FS', 'document 上的 x5videoenterfullscreen'); });
+
+// =====================================================================
+// vitals 面板
+// =====================================================================
+var vitals = document.getElementById('vitals');
+function renderVitals() {
+  var el = document.fullscreenElement || document.webkitFullscreenElement;
+  var v = activeVideo;
+  vitals.innerHTML =
+    '<span>engine=<b>' + (window.__engineUsed || '?') + '</b></span>' +
+    '<span>readyState=<b>' + v.readyState + '</b></span>' +
+    '<span>t=<b>' + v.currentTime.toFixed(1) + '</b>/' + (isFinite(v.duration) ? v.duration.toFixed(1) : '?') + '</span>' +
+    '<span>max=<b>' + maxPosition.toFixed(1) + '</b></span>' +
+    '<span>paused=<b>' + v.paused + '</b></span>' +
+    '<span>全屏=<b>' + (el ? 'YES' : 'no') + '</b></span>' +
+    '<span>水印=<b>' + (!opt.wm ? 'off' : (wm.isConnected && wmInner.isConnected ? (wmState.alive ? '在' : '已告警') : '丢失')) + '</b></span>' +
+    '<span>buffered=<b>' + (v.buffered.length ? v.buffered.end(v.buffered.length - 1).toFixed(1) : 0) + '</b></span>';
+}
+setInterval(renderVitals, 500);
+
+// =====================================================================
+// 按钮
+// =====================================================================
+document.getElementById('btnPlay').onclick = function () {
+  var p = activeVideo.play();
+  L.info('ACT', '调用 video.play()');
+  if (p && p.then) {
+    p.then(function () { L.ok('ACT', 'play() promise resolved'); })
+     .catch(function (e) { L.err('ACT', '★ play() promise rejected：' + e.name + ' — ' + e.message); });
+  } else {
+    L.warn('ACT', 'play() 未返回 promise（老内核）');
+  }
+};
+document.getElementById('btnPause').onclick = function () { activeVideo.pause(); L.info('ACT', '调用 pause()'); };
+document.getElementById('btnFs').onclick = function () {
+  L.info('ACT', '请求全屏');
+  try {
+    if (activeVideo.webkitEnterFullscreen) { activeVideo.webkitEnterFullscreen(); L.info('ACT', '走 video.webkitEnterFullscreen()（iOS 原生全屏）'); }
+    else if (stage.requestFullscreen) { stage.requestFullscreen(); L.info('ACT', '走 stage.requestFullscreen()（水印随容器一起全屏）'); }
+    else if (stage.webkitRequestFullscreen) { stage.webkitRequestFullscreen(); L.info('ACT', '走 stage.webkitRequestFullscreen()'); }
+    else { L.warn('ACT', '没有任何全屏 API 可用'); }
+  } catch (e) { L.err('ACT', '全屏调用抛错', String(e)); }
+};
+document.getElementById('btnSeek').onclick = function () {
+  var target = activeVideo.currentTime + 30;
+  L.info('ACT', '脚本置 currentTime = ' + target.toFixed(2) + '（模拟向前拖拽）');
+  activeVideo.currentTime = target;
+  setTimeout(function () { L.hi('ACT', '0.5s 后实际落点 = ' + activeVideo.currentTime.toFixed(2) + 's'); }, 500);
+};
+document.getElementById('btnKillWm').onclick = function () {
+  if (!opt.wm) { L.warn('ACT', '水印已关闭，无从删起'); return; }
+  L.info('ACT', '手动删除水印节点，看 MutationObserver 抓不抓得到');
+  wm.remove();
+};
+document.getElementById('btnHideWm').onclick = function () {
+  if (!opt.wm) { L.warn('ACT', '水印已关闭'); return; }
+  L.info('ACT', '手动置 #wm display:none —— 比删除更接近真实的篡改手法');
+  wm.style.display = 'none';
+};
+document.getElementById('btnFlush').onclick = function () { flush(false); L.ok('ACT', '已手动上报日志'); };
+document.getElementById('btnCopy').onclick = function () {
+  var text = lines.join('\n');
+  try {
+    var ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.left = '-9999px';
+    document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove();
+    L.ok('ACT', '日志已复制到剪贴板（' + lines.length + ' 行）');
+  } catch (e) { L.err('ACT', '复制失败', String(e)); }
+};
+
+// =====================================================================
+// 启动
+// =====================================================================
+L.hi('ENV', '会话 ' + SESSION);
+Object.keys(env).forEach(function (k) { L.info('ENV', k + ' = ' + env[k]); });
+L.info('OPT', JSON.stringify(opt));
+
+// 先把 m3u8 抓下来看一眼 —— ② 的前置证据：EXT-X-KEY 的 URI 到底长什么样
+fetch(opt.src, { cache: 'no-store' }).then(function (r) {
+  L.info('M3U8', 'HTTP ' + r.status + '  Content-Type=' + r.headers.get('content-type'));
+  return r.text();
+}).then(function (txt) {
+  var keyLine = (txt.match(/^#EXT-X-KEY:.*$/m) || [])[0];
+  if (!keyLine) {
+    L.err('M3U8', '★ m3u8 里没有 #EXT-X-KEY —— 这不是加密流，验的就不是要验的东西');
+  } else {
+    L.hi('M3U8', 'EXT-X-KEY = ' + keyLine);
+    var uri = (keyLine.match(/URI="([^"]+)"/) || [])[1] || '';
+    if (/[?&]token=/.test(uri)) L.ok('M3U8', 'key URI 上带着 token 参数 → 服务端应能收到；判据看 /admin/logs');
+    else L.err('M3U8', '★ key URI 上没有 token 参数，② 无从验起：' + uri);
+  }
+}).catch(function (e) { L.err('M3U8', '拉取 m3u8 失败', String(e)); });
+
+function startNative(reason) {
+  window.__engineUsed = 'native';
+  L.hi('ENGINE', '★ 走【原生 HLS】：' + reason);
+  L.warn('ENGINE', '原生路径下 key 请求由系统发起，页面这侧观测不到；判据只能看服务端 /key 日志');
+  video.src = opt.src;
+  video.load();
+}
+
+function startHlsJs() {
+  window.__engineUsed = 'hls.js ' + (window.Hls && Hls.version ? Hls.version : '?');
+  L.hi('ENGINE', '★ 走【hls.js + MSE】 ' + window.__engineUsed);
+
+  var hls = new Hls({ debug: false, enableWorker: true, lowLatencyMode: false });
+  window.__hls = hls;
+
+  var E = Hls.Events;
+  hls.on(E.MEDIA_ATTACHED, function () { L.ok('HLS', 'MEDIA_ATTACHED'); });
+  hls.on(E.MANIFEST_LOADED, function (_, d) { L.ok('HLS', 'MANIFEST_LOADED url=' + (d && d.url)); });
+  hls.on(E.MANIFEST_PARSED, function (_, d) {
+    L.ok('HLS', '★ MANIFEST_PARSED levels=' + (d && d.levels ? d.levels.length : '?') + ' —— ① 的第一关过了');
+  });
+  if (E.KEY_LOADING) hls.on(E.KEY_LOADING, function (_, d) {
+    var uri = d && d.frag && d.frag.decryptdata && d.frag.decryptdata.uri;
+    L.hi('HLS', '★ KEY_LOADING 即将请求密钥：' + (uri || '(取不到 uri)'));
+  });
+  if (E.KEY_LOADED) hls.on(E.KEY_LOADED, function (_, d) {
+    var uri = d && d.frag && d.frag.decryptdata && d.frag.decryptdata.uri;
+    L.ok('HLS', '★ KEY_LOADED 密钥已到手 —— ①② 的核心一关过了  uri=' + (uri || '(未知)'));
+  });
+  var fragCount = 0;
+  hls.on(E.FRAG_LOADED, function (_, d) {
+    fragCount++;
+    if (fragCount <= 3 || fragCount % 5 === 0) {
+      L.info('HLS', 'FRAG_LOADED #' + fragCount + ' sn=' + (d && d.frag ? d.frag.sn : '?'));
+    }
+  });
+  hls.on(E.ERROR, function (_, d) {
+    var line = 'type=' + d.type + ' details=' + d.details + ' fatal=' + d.fatal;
+    if (d.response) line += ' http=' + d.response.code;
+    if (d.reason) line += ' reason=' + d.reason;
+    if (d.error) line += ' err=' + (d.error.message || d.error);
+    (d.fatal ? L.err : L.warn)('HLS', (d.fatal ? '★ 致命错误 ' : '非致命 ') + line);
+    if (d.details === 'keyLoadError' || d.details === 'keySystemNoKeys') {
+      L.err('HLS', '★ 密钥加载失败 —— ①② 在这里断了，去 /admin/logs 看 /key 到底有没有被请求到');
+    }
+  });
+
+  hls.attachMedia(video);
+  hls.on(E.MEDIA_ATTACHED, function () { hls.loadSource(opt.src); });
+}
+
+function boot() {
+  var hlsSupported = !!(window.Hls && Hls.isSupported && Hls.isSupported());
+  L.info('ENGINE', 'Hls.isSupported()=' + hlsSupported +
+                   '  MediaSource=' + env.mse +
+                   '  ManagedMediaSource=' + env.mms +
+                   '  canPlayType(hls)="' + env.canPlayHlsNative + '"');
+
+  if (opt.engine === 'native') return startNative('engine=native 强制');
+  if (opt.engine === 'hlsjs') {
+    if (!hlsSupported) {
+      L.err('ENGINE', '★ engine=hlsjs 但 Hls.isSupported()=false —— 这个内核不支持 MSE，hls.js 路线在此机型上直接不成立');
+      return;
+    }
+    return startHlsJs();
+  }
+  // auto
+  if (hlsSupported) return startHlsJs();
+  if (env.canPlayHlsNative) return startNative('Hls.isSupported()=false，退化为原生 HLS（iOS 上这是常态）');
+  L.err('ENGINE', '★ 既不支持 hls.js 也不支持原生 HLS —— 这台机器播不了 HLS');
+}
+
+function withDPlayer() {
+  // DPlayer 会清空它的 container，所以【不能】把 stage 直接给它 —— 那样水印会被它一起清掉，
+  // 观察器立刻误报"水印被破坏"，第 3 轮就什么也测不到了。
+  // 正确做法：stage 里单开一个盒子给 DPlayer，水印仍是 stage 的子节点、盖在它之上。
+  var box = document.createElement('div');
+  box.id = 'dpbox';
+  box.style.width = '100%';
+  video.remove();                          // 移除本页的裸 video（wm 仍在，不触发告警）
+  stage.insertBefore(box, wm.isConnected ? wm : null);
+
+  var d = new DPlayer({
+    container: box,
+    video: { url: opt.src, type: 'customHls',
+      customType: { customHls: function (v) { var h = new Hls(); h.loadSource(v.src); h.attachMedia(v); window.__hls = h; } } }
+  });
+  window.__dp = d;
+  window.__engineUsed = 'DPlayer+hls.js';
+  L.hi('ENGINE', '★ 走【DPlayer + hls.js】');
+
+  // 把属性装配与四项守卫整套搬到 DPlayer 造出来的 video 上，
+  // 否则第 3 轮只能回答"能不能加载"，回答不了 ③④
+  applyVideoAttrs(d.video);
+  wireVideo(d.video);
+  L.info('ENGINE', '已将属性装配 / 拖拽守卫 / 事件监听搬到 DPlayer 的 video 上；水印仍由本页覆盖在其上');
+  L.warn('ENGINE', 'DPlayer 有自己的一套控件与全屏实现，行为可能与裸 hls.js 不同；' +
+                   '四条判定以第 1 轮 player=raw 为准，本轮只回答"叠上去会不会引入新问题"');
+}
+
+// 依次加载依赖后启动
+function loadScript(urls, done) {
+  var i = 0;
+  (function next() {
+    if (i >= urls.length) return done(new Error('全部来源都加载失败'));
+    var u = urls[i++];
+    var s = document.createElement('script');
+    s.src = u;
+    s.onload = function () { L.ok('LOAD', '已加载 ' + u); done(null); };
+    s.onerror = function () { L.warn('LOAD', '加载失败 ' + u + ' → 试下一个'); next(); };
+    document.head.appendChild(s);
+  })();
+}
+
+loadScript(
+  ['vendor/hls.min.js', 'https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js', 'https://unpkg.com/hls.js@1/dist/hls.min.js'],
+  function (err) {
+    if (err) {
+      L.err('LOAD', '★ hls.js 加载失败（本地 vendor 与 CDN 都没拿到）—— 先把 vendor/hls.min.js 放好，见 README');
+      // 仍然尝试原生路径，至少能验 iOS 的 ①②
+      if (env.canPlayHlsNative) startNative('hls.js 不可用，回退原生');
+      return;
+    }
+    if (opt.player === 'dplayer') {
+      var css = document.createElement('link');
+      css.rel = 'stylesheet';
+      css.href = 'vendor/DPlayer.min.css';
+      css.onerror = function () { css.href = 'https://cdn.jsdelivr.net/npm/dplayer@1/dist/DPlayer.min.css'; };
+      document.head.appendChild(css);
+      loadScript(
+        ['vendor/DPlayer.min.js', 'https://cdn.jsdelivr.net/npm/dplayer@1/dist/DPlayer.min.js', 'https://unpkg.com/dplayer@1/dist/DPlayer.min.js'],
+        function (e2) {
+          if (e2) { L.err('LOAD', 'DPlayer 加载失败，回退裸 hls.js'); return boot(); }
+          withDPlayer();
+        }
+      );
+    } else {
+      boot();
+    }
+  }
+);
+
+})();
+</script>
+</body>
+</html>
