@@ -18,7 +18,28 @@
   .pill.off{ background:#3f1d1d; border-color:#ef4444; color:#fecaca; }
 
   #stage { position:relative; width:100%; background:#000; overflow:hidden; }
-  #playerbox { width:100%; aspect-ratio:16 / 9; }
+
+  /* #playerbox 就是 Aliplayer 的根节点（它把 prism-player 类加在传进去的元素上，
+     不另建 root），video 与控件都是它的直接子节点。 */
+  #playerbox { position:relative; width:100%; aspect-ratio:16 / 9; overflow:hidden; background:#000; }
+
+  /* Aliplayer 会往根节点写行内 height:100%，而父容器的高度又依赖它 —— 循环解析下
+     实测计算高度塌成 0px（整个播放区消失）。这里强制 height:auto 让 aspect-ratio 说了算。
+     :not(:fullscreen) 是为了全屏时不干预：那时该由 UA 的 :fullscreen 规则铺满屏幕。 */
+  #playerbox:not(:fullscreen) { height:auto !important; }
+  #playerbox:not(:-webkit-full-screen) { height:auto !important; }
+
+  /* video 必须钉死在容器里。
+     Aliplayer 用【行内样式】管 video 尺寸，退出全屏时会把行内高度留在全屏时的像素值
+     （实测 height: 775px 没还原），video 就溢出容器，看起来是"退出全屏后视频被无限拉长"。
+     这里用 !important 覆盖它的行内值；全屏时 UA 的 :fullscreen 规则本身带 !important
+     且优先级高于作者样式，所以不会影响全屏铺满。 */
+  /* 只压尺寸，【不改定位】：加过 position:absolute，画面会缩到左上角一小块
+     （基线页同尺寸下是铺满的，对比出来的），所以让 video 留在正常流里。 */
+  #playerbox > video {
+    width:100% !important; height:100% !important;
+    object-fit:contain;
+  }
 
   /* 与基线同一套结构：#wm 是防篡改锚点（样式永不由脚本改动），漂移只作用在 #wmInner。
      红色虚线框是诊断用的 —— 全屏时若连这圈框都看不见，说明视频走了独立原生层。 */
