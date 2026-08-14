@@ -50,7 +50,12 @@ class RefreshTokenAtomicityIT extends AuthIntegrationTestBase {
 
         assertThat(refreshIndexSize()).as("登录后索引集合里只有这一个令牌").isEqualTo(1);
 
-        // 两个线程在同一个栅栏上等，尽量让 GETDEL 真的撞上
+        // 两个线程在同一个栅栏上等，尽量让 GETDEL 真的撞上。
+        //
+        // 【子线程里 TenantHelper 的 ThreadLocal 是空的】本用例不受影响 —— refresh() 走的是
+        // runWithTenant(record.tenantId())，租户从令牌里显式取，不依赖调用线程的上下文。
+        // 但下一个人在这里加并发用例时要留意：若在子线程里调需要会话上下文的方法，
+        // 会撞上 TenantContextMissingException，而那与被测逻辑无关。
         CountDownLatch startLine = new CountDownLatch(1);
         ExecutorService pool = Executors.newFixedThreadPool(2);
         try {
