@@ -185,6 +185,52 @@ async function handlePlayAuth(req, res, u) {
 }
 
 // ---------------------------------------------------------------------------
+// GET /videoinfo?videoId=xxx —— 诊断用：这条视频到底是不是加密的 HLS
+//
+// 契约 §1 的挑选规则是 Format=="m3u8" && Encrypt==true。转码模板组若没开加密，
+// 转出来就是明文流，拿它测 ① 等于什么都没验 —— 上真机前先在这里确认一次，
+// 比在手机上对着"能播"傻乐一轮划算。
+// ---------------------------------------------------------------------------
+async function handleVideoInfo(req, res, u) {
+  const videoId = u.searchParams.get('videoId') || '';
+  if (!AK_ID || !AK_SECRET) {
+    res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+    return res.end(JSON.stringify({ error: '没有配置 AccessKey' }));
+  }
+  if (!videoId) {
+    res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+    return res.end(JSON.stringify({ error: '缺少 videoId' }));
+  }
+  try {
+    // ResultType=Multiple：不加这个，私有加密视频会被直接拒掉
+    // （Forbidden.AliyunVoDEncryption：only the AliyunVoDEncryption stream exists）
+    const r = await httpsGetJson(signedVodUrl('GetPlayInfo', { VideoId: videoId, ResultType: 'Multiple' }));
+    const j = r.json || {};
+    const list = (j.PlayInfoList && j.PlayInfoList.PlayInfo) || [];
+    const summary = list.map((p) => ({
+      Format: p.Format,
+      Encrypt: p.Encrypt,
+      EncryptType: p.EncryptType,
+      Definition: p.Definition,
+      Width: p.Width, Height: p.Height,
+      Duration: p.Duration,
+      Size: p.Size,
+      JobId: p.JobId,
+      hasPlayURL: !!p.PlayURL,   // 不回传 URL 本身
+    }));
+    res.writeHead(r.status === 200 ? 200 : 502, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify({
+      videoBase: j.VideoBase ? { Title: j.VideoBase.Title, Status: j.VideoBase.Status, Duration: j.VideoBase.Duration } : null,
+      streams: summary,
+      code: j.Code, message: j.Message, requestId: j.RequestId,
+    }, null, 1));
+  } catch (e) {
+    res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ error: String(e) }));
+  }
+}
+
+// ---------------------------------------------------------------------------
 function handleLog(req, res) {
   let body = '', tooBig = false;
   req.on('data', (c) => { body += c; if (body.length > 512 * 1024) { tooBig = true; req.destroy(); } });
@@ -270,6 +316,7 @@ const server = http.createServer((req, res) => {
     return res.end();
   }
   if (p === '/playauth') return handlePlayAuth(req, res, u);
+  if (p === '/videoinfo') return handleVideoInfo(req, res, u);
   if (p === '/log' && req.method === 'POST') return handleLog(req, res);
   if (p === '/admin/logs') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
