@@ -1,0 +1,138 @@
+package com.edumatrix.auth;
+
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+
+import com.edumatrix.auth.support.AuthFixtures;
+import com.edumatrix.auth.support.AuthIntegrationTestBase;
+import com.fasterxml.jackson.databind.JsonNode;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+/**
+ * {@code GET /auth/me} 的验收（判据 5）。
+ *
+ * <h2>四角色 perms 计数：以<b>迁移脚本落库后的实测值</b>为准</h2>
+ * <pre>
+ * org_admin 94 ｜ teacher 61 ｜ super_admin 31 ｜ student 0
+ * </pre>
+ * <p>04-实施计划.md §B 模块 02 规则 11 原先写的是 {@code 93 / 61 / 31 / 2}，
+ * 那是<b>同一份文档内部的陈旧复述</b>，两处差异都能在 §E 里找到解释：
+ * <ul>
+ *   <li><b>student 0</b> —— F-1 定案②：「{@code student} 不绑任何菜单行……
+ *       {@code sys_role_menu} 中 {@code student} 的 2 条绑定已删除（201 → 200 行）」，
+ *       库里正好 200 行；
+ *   <li><b>org_admin 94</b> —— F-2 定案：「菜单 A14 的 {@code visible} 由 0 改 1
+ *       <b>并绑 {@code org_admin}</b>」，93 + 1 = 94。
+ * </ul>
+ * 规则 11 的数字已按实测值订正（本模块唯一一处文档改动）。
+ *
+ * <h2>空数组有两种成因，必须能分辨</h2>
+ * <p>{@code perms: []} 既可能是 F-1 定案②的<b>设计意图</b>（学生），
+ * 也可能是<b>租户插件的平台级放行失效</b>（契约 §2.9 那个「接口 200、字段齐全、
+ * 数组为空」的不报错故障）。两者的外部表现完全一样。
+ * 区分方法写死在下面的用例里：<b>看 {@code roles}</b> —— 里面有那一行，
+ * 就说明 {@code tenant_id = 0} 的放行是通的。
+ */
+class AuthMeIT extends AuthIntegrationTestBase {
+
+    private static final int PERMS_ORG_ADMIN = 94;
+    private static final int PERMS_TEACHER = 61;
+    private static final int PERMS_SUPER_ADMIN = 31;
+    private static final int PERMS_STUDENT = 0;
+
+    @Test
+    @DisplayName("判据 5｜org_admin：roles 非空、perms 94")
+    void orgAdminPerms() throws Exception {
+        JsonNode me = me(AuthFixtures.ADMIN_USERNAME);
+
+        assertThat(me.path("data").path("roles")).hasSize(1);
+        assertThat(me.path("data").path("roles").get(0).path("roleKey").asText()).isEqualTo("org_admin");
+        assertThat(me.path("data").path("perms")).hasSize(PERMS_ORG_ADMIN);
+    }
+
+    @Test
+    @DisplayName("判据 5｜teacher：roles 非空、perms 61")
+    void teacherPerms() throws Exception {
+        JsonNode me = me(AuthFixtures.TEACHER_USERNAME);
+
+        assertThat(me.path("data").path("roles").get(0).path("roleKey").asText()).isEqualTo("teacher");
+        assertThat(me.path("data").path("perms")).hasSize(PERMS_TEACHER);
+    }
+
+    @Test
+    @DisplayName("判据 5｜super_admin：perms 31；tenant / nodeType 为 null，nodePath 为空串")
+    void superAdminPermsAndEmptyOrgFields() throws Exception {
+        JsonNode data = me(AuthFixtures.SUPER_ADMIN_USERNAME).path("data");
+
+        assertThat(data.path("roles").get(0).path("roleKey").asText()).isEqualTo("super_admin");
+        assertThat(data.path("perms")).hasSize(PERMS_SUPER_ADMIN);
+
+        assertThat(data.path("nodeId").asText())
+                .as("§1.5 字段说明：平台超管的 nodeId 为树根标识 \"0\"")
+                .isEqualTo("0");
+        assertThat(data.path("nodeType").isNull())
+                .as("§1.5 字段说明：平台超管的 nodeType 为 null")
+                .isTrue();
+        assertThat(data.path("tenant").isNull())
+                .as("§1.5 字段说明：平台超管的 tenant 为 null")
+                .isTrue();
+        assertThat(data.path("nodePath").asText())
+                .as("面包屑的口径是「自机构根节点起」，超管不属于任何机构 —— "
+                        + "空串而不是 null，前端可直接渲染成「无」")
+                .isEmpty();
+        assertThat(data.path("nodePathIds")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("判据 5｜student：roles 非空但 perms 为空 —— 这是 F-1 定案②，不是插件失效")
+    void studentHasRolesButNoPerms() throws Exception {
+        JsonNode data = me(AuthFixtures.STUDENT1_USERNAME).path("data");
+
+        assertThat(data.path("roles"))
+                .as("读得到 tenant_id = 0 的内置角色行，说明平台级放行生效 —— "
+                        + "若这里也是空的，那就是契约 §2.9 那个「全员零权限」故障，"
+                        + "去看 PlatformRowTenantLineInnerInterceptor，不要在 auth 里 workaround")
+                .hasSize(1);
+        assertThat(data.path("roles").get(0).path("roleKey").asText()).isEqualTo("student");
+        assertThat(data.path("perms"))
+                .as("F-1 定案②：student 不绑任何菜单行，学生端接口一律不加 @SaCheckPermission")
+                .hasSize(PERMS_STUDENT);
+    }
+
+    @Test
+    @DisplayName("nodePath 自机构根节点起、不含虚拟根 0，且与 nodePathIds 同序")
+    void nodePathStartsFromTenantRoot() throws Exception {
+        JsonNode data = me(AuthFixtures.STUDENT2_USERNAME).path("data");
+
+        assertThat(data.path("nodePath").asText())
+                .as("§1.5：自机构根节点起、以 / 拼接至本节点")
+                .isEqualTo("IT 测试机构/教师/学生二");
+
+        JsonNode ids = data.path("nodePathIds");
+        assertThat(ids).hasSize(3);
+        assertThat(ids.get(0).asText()).isEqualTo(String.valueOf(AuthFixtures.ROOT_NODE));
+        assertThat(ids.get(1).asText()).isEqualTo(String.valueOf(AuthFixtures.TEACHER_NODE));
+        assertThat(ids.get(2).asText()).isEqualTo(String.valueOf(AuthFixtures.STUDENT2_NODE));
+        assertThat(data.path("nodeId").asText())
+                .as("00-通用约定 §5：所有 bigint ID 序列化为字符串")
+                .isEqualTo(String.valueOf(AuthFixtures.STUDENT2_NODE));
+    }
+
+    @Test
+    @DisplayName("tenant 三个字段与 sys_tenant 一致（rootNodeId 与 tenantId 同值，契约 §2.1）")
+    void tenantBlockIsFilled() throws Exception {
+        JsonNode tenant = me(AuthFixtures.TEACHER_USERNAME).path("data").path("tenant");
+
+        assertThat(tenant.path("tenantId").asText()).isEqualTo(String.valueOf(AuthFixtures.TENANT_ID));
+        assertThat(tenant.path("rootNodeId").asText()).isEqualTo(String.valueOf(AuthFixtures.ROOT_NODE));
+        assertThat(tenant.path("name").asText()).isEqualTo("IT 测试机构");
+    }
+
+    private JsonNode me(String username) throws Exception {
+        String token = client.loginForToken(username, AuthFixtures.PASSWORD);
+        JsonNode response = client.getWithToken("/api/v1/auth/me", token);
+        assertThat(response.path("code").asInt()).isEqualTo(200);
+        return response;
+    }
+}

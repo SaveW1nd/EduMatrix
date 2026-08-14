@@ -4,6 +4,8 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
+import com.edumatrix.auth.session.AuthSessionGuard;
+
 import cn.dev33.satoken.interceptor.SaInterceptor;
 import cn.dev33.satoken.stp.StpUtil;
 
@@ -35,11 +37,20 @@ import cn.dev33.satoken.stp.StpUtil;
  *       其中三条不写业务表、第四条只读 —— <b>这个面越小越好</b>。
  * </ol>
  *
- * <h2>本类在模块 01 只铺骨架</h2>
+ * <h2>本类在模块 01 只铺骨架；模块 02 已按预告接上</h2>
  * <p>登录/登出/刷新令牌归模块 02；<b>冻结集校验</b>（每请求取 {@code node:anc:{myNodeId}}
  * 拆祖先链与 {@code frozen:{tenantId}} 求交，命中返回 {@code 10017}）也归模块 02，
  * 它会往这里的拦截器里加一段。模块 01 先把「拦截器装在哪、白名单排除哪几条」定死，
  * 免得模块 02 另起一套。
+ *
+ * <p><b>模块 02 的落地</b>：{@link AuthSessionGuard#check()} 在 {@code checkLogin()}
+ * 之后执行两段业务校验 —— 冻结集（{@code 10017}）与强制改密门禁（403）。
+ * 这里出现一处 {@code common → auth} 的 import，是<b>本类独有的例外</b>，
+ * 05-工程结构.md §D 明写模块 02「同时触及 {@code common/config/}（Sa-Token 装配与白名单）」。
+ * 它不违反 §A1 的检查③（那条约束的对象是<b>八个领域包之间</b>互相 import，
+ * {@code common} 不在其中），也不与 {@code CurrentContextProvider} 那个 SPI 冲突 ——
+ * 那个 SPI 存在的理由是<b>租户插件与 {@code TenantHelper} 跑在无 Spring 上下文的地方</b>
+ * （MyBatis 拦截器内部），而本类是 Spring 装配代码，能直接注入 Bean。
  */
 @Configuration
 public class SaTokenConfig implements WebMvcConfigurer {
@@ -63,9 +74,30 @@ public class SaTokenConfig implements WebMvcConfigurer {
             "/error",
     };
 
+    private final AuthSessionGuard authSessionGuard;
+
+    public SaTokenConfig(AuthSessionGuard authSessionGuard) {
+        this.authSessionGuard = authSessionGuard;
+    }
+
+    /**
+     * 一个拦截器，三段校验，顺序不可换：
+     *
+     * <ol>
+     *   <li>{@code checkLogin()} —— 未登录/Token 失效 → 401；
+     *   <li><b>冻结集</b> —— 本人节点或其上级被停用 → {@code 10017}（契约 §2.3）；
+     *   <li><b>强制改密门禁</b> —— {@code pwd_reset_flag = 1} 访问其他接口 → 403。
+     * </ol>
+     *
+     * <p>②在③之前：被停用的账号连「改密」这条路也不该走通 —— 反过来的话，
+     * 一个所在分支已被冻结的账号还能改自己的密码。
+     */
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
-        registry.addInterceptor(new SaInterceptor(handle -> StpUtil.checkLogin()))
+        registry.addInterceptor(new SaInterceptor(handle -> {
+                    StpUtil.checkLogin();
+                    authSessionGuard.check();
+                }))
                 .addPathPatterns("/**")
                 .excludePathPatterns(AUTH_WHITELIST)
                 .excludePathPatterns(INFRA_PATHS);

@@ -16,6 +16,7 @@ import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 
 import com.edumatrix.common.errorcode.ErrorCode;
+import com.edumatrix.common.redis.RedisKeys;
 import com.edumatrix.common.response.BizException;
 import com.edumatrix.common.tenant.TenantHelper;
 import com.edumatrix.common.trace.TraceIdHolder;
@@ -96,8 +97,12 @@ public class IdempotentAspect {
 
     private static final Logger log = LoggerFactory.getLogger(IdempotentAspect.class);
 
-    /** 幂等键前缀。00-通用约定 §7.2 写死为 {@code idem:{userId}:{requestId}}。 */
-    public static final String KEY_PREFIX = "idem:";
+    /**
+     * 幂等键前缀。00-通用约定 §7.2 写死为 {@code idem:{userId}:{requestId}}。
+     *
+     * <p>字面量已收口到 {@link RedisKeys}（模块 02 新增）。本类的使用点未变。
+     */
+    public static final String KEY_PREFIX = RedisKeys.IDEMPOTENT_PREFIX;
 
     /** 请求头名。 */
     public static final String HEADER_REQUEST_ID = "X-Request-Id";

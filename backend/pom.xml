@@ -102,6 +102,21 @@
             <artifactId>sa-token-spring-boot3-starter</artifactId>
             <version>${sa-token.version}</version>
         </dependency>
+        <!--
+          BCrypt（PRD §7.3 安全条款 1：sys_user.password 一律 BCrypt 存储，cost ≥ 10）。
+          模块 02 新增。
+
+          【为什么是 spring-security-crypto 而不是 spring-boot-starter-security】
+          前者是纯算法库：PasswordEncoder 及其实现，无自动装配、无过滤器链。
+          后者会引入 Spring Security 的整条 FilterChain，与 Sa-Token 的鉴权入口重叠——
+          本项目的鉴权权威是 Sa-Token 拦截器（05-工程结构.md §G1），
+          再来一套过滤器只会产生第二个说了算的地方。
+          版本由 spring-boot-starter-parent 统一管理，此处不写死。
+        -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-crypto</artifactId>
+        </dependency>
 
         <!-- ============ 调度：XXL-Job ============ -->
         <!--
