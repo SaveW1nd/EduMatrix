@@ -291,8 +291,11 @@ function notFound(res, what) {
 function serveStatic(req, res, pathname) {
   let rel = decodeURIComponent(pathname);
   if (rel === '/' || rel === '') rel = '/index.html';
+  if (rel === '/guide') rel = '/guide.html';   // 测试指引，手机上边测边看
   const abs = path.normalize(path.join(ROOT, rel));
-  const allowed = abs === path.join(ROOT, 'index.html') || abs.startsWith(path.join(ROOT, 'vendor') + path.sep);
+  const allowed = abs === path.join(ROOT, 'index.html') ||
+                  abs === path.join(ROOT, 'guide.html') ||
+                  abs.startsWith(path.join(ROOT, 'vendor') + path.sep);
   if (!allowed) return notFound(res, rel);
   fs.stat(abs, (err, st) => {
     if (err || !st.isFile()) return notFound(res, rel);

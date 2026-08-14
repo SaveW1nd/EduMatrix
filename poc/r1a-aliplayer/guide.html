@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>R1a 测试指引</title>
+<style>
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{margin:0;background:#0e0e10;color:#e6e6e6;
+       font:15px/1.7 -apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",sans-serif;
+       padding:0 0 60px}
+  header{position:sticky;top:0;z-index:10;background:#17171a;border-bottom:1px solid #2a2a30;
+         padding:12px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  header h1{font-size:16px;margin:0;color:#fff}
+  .go{display:inline-block;padding:5px 12px;border-radius:6px;font-size:13px;text-decoration:none;
+      background:#123d2a;border:1px solid #1f7a4d;color:#bbf7d0}
+  .go.alt{background:#26262c;border-color:#3a3a44;color:#bbb}
+  main{padding:0 16px}
+  h2{font-size:17px;margin:28px 0 10px;padding-top:14px;border-top:1px solid #2a2a30;color:#fff}
+  h2 .n{display:inline-block;min-width:26px;height:26px;line-height:26px;text-align:center;
+        background:#2d5bd7;color:#fff;border-radius:50%;font-size:14px;margin-right:8px}
+  h3{font-size:15px;margin:18px 0 6px;color:#cfd8e3}
+  p{margin:8px 0}
+  ol,ul{margin:8px 0;padding-left:22px}
+  li{margin:5px 0}
+  code{background:#26262c;border:1px solid #3a3a44;border-radius:4px;padding:1px 5px;
+       font:13px ui-monospace,Menlo,Consolas,monospace;word-break:break-all}
+  pre{background:#121216;border:1px solid #2a2a30;border-radius:6px;padding:10px 12px;
+      overflow-x:auto;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;color:#9fb3c8}
+  .rule{background:#3a2a12;border:1px solid #8a6420;border-radius:8px;padding:12px 14px;margin:16px 0}
+  .rule b{color:#ffd180}
+  .pass{color:#7ee787;font-weight:700}
+  .fail{color:#ff7b72;font-weight:700}
+  table{width:100%;border-collapse:collapse;margin:10px 0;font-size:14px}
+  th,td{border:1px solid #2a2a30;padding:7px 9px;text-align:left;vertical-align:top}
+  th{background:#1c1c22;color:#fff;font-weight:600}
+  .step{background:#141419;border:1px solid #2a2a30;border-radius:8px;padding:12px 14px;margin:12px 0}
+  .chk{display:flex;align-items:flex-start;gap:9px;margin:9px 0;cursor:pointer}
+  .chk input{margin-top:4px;width:17px;height:17px;flex:0 0 auto}
+  .chk.done span{color:#666;text-decoration:line-through}
+  .warn{color:#f0b429}
+  footer{margin-top:34px;padding-top:14px;border-top:1px solid #2a2a30;color:#888;font-size:13px}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>R1a 测试指引</h1>
+  <a class="go" href="/?mode=vid&vid=60444ee2980371f1b15b7511978f0102">打开测试页</a>
+  <a class="go alt" href="/admin/logs">看日志</a>
+</header>
+
+<main>
+
+<div class="rule">
+  <b>一条贯穿全程的铁律：每测一项之前，先刷新页面。</b><br>
+  「已看过的最高位置」会累积——先把 52 秒看完，之后跳到任何位置都算"回看"，
+  ④ 就永远测不出来。上一轮正是栽在这里。
+</div>
+
+<p>电脑上开着 <code>/admin/logs</code>：<b>手机测、电脑看</b>。手机屏幕下半部分也有同样日志，
+但电脑上更好读，也不会被手滑划走。日志<b>自动上传</b>，不用点「上报日志」，也不用关页面。</p>
+
+<h2><span class="n">0</span>Android 先跑（1 分钟）</h2>
+
+<p>这步不是为了测 ④，是<b>验证日志回传在微信内核下确实生效</b>。
+不先做，iOS 那轮可能又是一轮没有证据的结论。</p>
+
+<div class="step">
+<label class="chk"><input type="checkbox"><span>用<b>安卓</b>微信扫码打开测试页</span></label>
+<label class="chk"><input type="checkbox"><span>点播放，<b>只播 5 秒</b></span></label>
+<label class="chk"><input type="checkbox"><span>按住进度条<b>往右拖到 40 秒</b>左右，松手</span></label>
+<label class="chk"><input type="checkbox"><span>屏上出现红色 <code>★ Aliplayer.seek 拦截</code>，进度条弹回 5 秒附近</span></label>
+<label class="chk"><input type="checkbox"><span>在<b>电脑</b>的 <code>/admin/logs</code> 上看到同一条</span></label>
+</div>
+
+<p><span class="pass">过</span>：电脑上能看到这三行，且 <code>落点</code> 等于 <code>maxPosition</code>。</p>
+<pre>★ Aliplayer.seek 拦截 #1：目标 40.00s &gt; maxPosition 4.68s → 夹到 maxPosition
+seeking → 4.68s（允许，maxPosition=4.68s）
+seeked 落点 4.68s  maxPosition=4.68s</pre>
+<p class="warn">电脑上看不到就别往下走——先反馈，回传还有问题。</p>
+
+<h2><span class="n">①</span>iOS：能不能播</h2>
+
+<p>用 <b>iPhone 微信</b>扫同一个码。刷新 → 点中间的播放按钮 → <b>让它播到底</b>（52 秒）。</p>
+
+<table>
+<tr><th>判定</th><th>依据</th></tr>
+<tr><td class="pass">过</td><td>画面动了、有声音，日志走到 <code>[VID] ended</code></td></tr>
+<tr><td class="fail">不过</td><td><code>[ALI] player.error</code>，或 <code>[VID] ★ video error code=</code>（1中止 2网络 3解码 <b>4源不支持</b>）</td></tr>
+</table>
+
+<p>iOS 上额外留意开头这两行，它们决定后面几项还测不测得了：</p>
+<pre>[ENV] mse = ?               ← false 说明没有 MSE
+[ENV] canPlayHlsNative = ?</pre>
+
+<p class="warn">① 直接挂了就<b>停下来反馈</b>，别急着往下测。<code>player.error</code> 的错误码能定位是
+私有加密解不了还是别的原因——这本身就是能推翻方案的结论。</p>
+
+<h2><span class="n">②</span>PlayAuth</h2>
+
+<p>顺带确认，页面一打开就发生了。</p>
+<p><span class="pass">过</span>：日志开头有 <code>[ENGINE] PlayAuth 已取到（长度 2288…）</code>。</p>
+<p class="warn">「过期后拒播」这半条 POC 里不好造——PlayAuth 有效期约 100 秒，
+而页面一拿到就立刻用掉了。要真测得加个"延迟使用"开关；不加则标注为
+"由模块 12 联调覆盖"。</p>
+
+<h2><span class="n">③</span>水印（三小步，每步之间刷新）</h2>
+
+<h3>第 1 步 · 内联时看得见吗</h3>
+<div class="step">
+<label class="chk"><input type="checkbox"><span>刷新 → 播放。画面上应有：<b>红色虚线框</b>、左上角红底白字「<b>H5 层</b>」标签、一行来回漂的水印文字</span></label>
+</div>
+
+<h3>第 2 步 · 篡改抓不抓得到</h3>
+<div class="step">
+<label class="chk"><input type="checkbox"><span>点「<b>删除水印</b>」→ 视频应<b>立即暂停</b></span></label>
+<label class="chk"><input type="checkbox"><span>再点播放 → 应该<b>拉不动</b>（已锁死）</span></label>
+<label class="chk"><input type="checkbox"><span>刷新，点「<b>隐藏水印</b>」重来一次，表现应相同</span></label>
+</div>
+
+<h3>第 3 步 · 全屏 —— iOS 最可能挂的地方</h3>
+<div class="step">
+<label class="chk"><input type="checkbox"><span>刷新 → 播几秒 → 点<b>播放器右下角自己的全屏按钮</b></span></label>
+<label class="chk"><input type="checkbox"><span><b>截图</b>（这一项日志判不了层级，只有画面能作证）</span></label>
+</div>
+
+<table>
+<tr><th>判定</th><th>依据</th></tr>
+<tr><td class="pass">过</td><td>全屏画面上<b>仍看得见</b>红框与「H5 层」标签，且日志为 <code>进入全屏，元素=DIV#playerbox…｜水印在全屏子树内</code></td></tr>
+<tr><td class="fail">不过</td><td>日志出现 <code>★ webkitbeginfullscreen</code> —— <b>iOS 系统播放器接管</b>，DOM 水印与守卫一并失效</td></tr>
+<tr><td class="fail">也不过</td><td>日志说在全屏子树内，但<b>画面上就是看不见</b> —— 视频被提到独立原生层了</td></tr>
+</table>
+
+<h2><span class="n">④</span>禁前跳（内联、全屏各一次）</h2>
+
+<div class="step">
+<b>内联</b>
+<label class="chk"><input type="checkbox"><span>刷新 → 只播 5 秒 → 往<b>右</b>拖到 40 秒 → 应弹回并出 <code>★ 拦截</code></span></label>
+<label class="chk"><input type="checkbox"><span>再往<b>左</b>拖一下 → <b>必须放行</b>（拦住了是误伤，也算不过）</span></label>
+</div>
+
+<div class="step">
+<b>全屏</b>
+<label class="chk"><input type="checkbox"><span>刷新 → 播 5 秒 → 进全屏 → 在全屏里往<b>右</b>拖 → 同样应被拦</span></label>
+</div>
+
+<p><span class="pass">过</span>：<code>/admin/logs</code> 上有 <code>★ 拦截</code>，
+紧随其后的 <code>seeked 落点</code> 等于 <code>maxPosition</code>。</p>
+
+<h2>测完</h2>
+<p>日志自动上传，不用做别的。说一声「测完了」，会按 <code>RESULT.md</code> 的四条判过标准
+逐条核对并填表。<b>可行/不可行两个勾由你判。</b></p>
+<p class="warn">任何一步现象和上面对不上，<b>中途停下来反馈</b>。上次 ③ 的「全屏水印消失」
+就是因为当时水印太小看漏了，差点写死成一个错误结论。</p>
+
+<footer>
+R1a POC · 一次性验证物，测完请按 RESULT.md 收尾（取回日志 → 停服务 → 删目录 → 删 RAM 子账号）。
+</footer>
+
+</main>
+
+<script>
+// 勾选状态存本地，刷新页面不丢——手机上要反复刷新测试页，指引这边的进度不该跟着清空
+var KEY = 'r1a-guide-checks';
+var boxes = Array.prototype.slice.call(document.querySelectorAll('.chk input'));
+var saved = {};
+try { saved = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch (e) {}
+boxes.forEach(function (b, i) {
+  b.checked = !!saved[i];
+  b.parentElement.classList.toggle('done', b.checked);
+  b.addEventListener('change', function () {
+    b.parentElement.classList.toggle('done', b.checked);
+    saved[i] = b.checked;
+    try { localStorage.setItem(KEY, JSON.stringify(saved)); } catch (e) {}
+  });
+});
+</script>
+</body>
+</html>

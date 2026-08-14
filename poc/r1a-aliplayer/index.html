@@ -221,6 +221,11 @@ window.addEventListener('unhandledrejection', function (ev) { L.err('JS', 'unhan
     s.className = 'pill ' + (on === null ? '' : on ? 'on' : 'off');
     s.textContent = label; bar.appendChild(s);
   }
+  var g = document.createElement('a');
+  g.href = '/guide'; g.textContent = '测试指引';
+  g.style.cssText = 'background:#123d2a;border:1px solid #1f7a4d;color:#bbf7d0;' +
+                    'border-radius:10px;padding:1px 8px;font-size:12px;text-decoration:none';
+  bar.appendChild(g);
   pill(null, 'mode=' + opt.mode);
   pill(opt.inline, 'inline ' + (opt.inline ? 'ON' : 'OFF'));
   pill(opt.x5, 'x5同层 ' + (opt.x5 ? 'ON' : 'OFF'));
