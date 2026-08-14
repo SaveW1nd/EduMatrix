@@ -122,9 +122,12 @@
 
 var Q = new URLSearchParams(location.search);
 var opt = {
-  mode:      Q.get('mode')      || 'source',
+  mode:      Q.get('mode')      || 'vid',   // 主用法就是私有加密，source 只是对照
   vid:       Q.get('vid')       || '',
-  src:       Q.get('src')       || 'https://poc.hqtw.cn/media/index.m3u8',
+  // 不给默认值：默认源原本指向基线 POC 的那段流，基线删掉后再留着就是个悬空依赖，
+  // 会以"播不了"的形式静默失败 —— 而那正好和「①不成立」长得一模一样。
+  // 现在 mode=source 必须显式传 ?src=，不传就明确报错。
+  src:       Q.get('src')       || '',
   inline:    (Q.get('inline')    || 'on') === 'on',
   x5:        (Q.get('x5')        || 'on') === 'on',
   wm:        (Q.get('wm')        || 'on') === 'on',
@@ -531,8 +534,15 @@ function afterCreated(p) {
 }
 
 function startSource() {
+  if (!opt.src) {
+    L.err('ENGINE', '★ mode=source 需要显式给 ?src=<m3u8 地址>');
+    L.info('ENGINE', '本 POC 只保留阿里云私有加密那条路，不再自带测试流。' +
+                     '主用法是 ?mode=vid&vid=<VideoId>；source 模式留作对照，' +
+                     '想用就自己传一个 m3u8 地址进来');
+    return;
+  }
   L.hi('ENGINE', '★ mode=source —— Aliplayer 播 URL：' + opt.src);
-  L.info('ENGINE', '这条路用的是基线那段 AES-128 标准加密流，② 仍然成立（密钥接口是我们自己的）');
+  L.info('ENGINE', '对照用：同一个播放器换成非私有加密的源，用来区分"播放器不行"与"私有加密不行"');
   var cfg = commonCfg();
   cfg.source = opt.src;
   new Aliplayer(cfg, afterCreated);

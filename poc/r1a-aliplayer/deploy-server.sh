@@ -2,13 +2,13 @@
 #
 # R1a-Ali POC —— 部署（Ubuntu 24.04 / 阿里云轻量应用服务器）
 #
-# 它【不动】基线那套：基线仍跑在 8080、根路径 https://poc.hqtw.cn/ 原样可用。
-# 本 POC 跑在 8081，挂到 https://poc.hqtw.cn/ali/ 下。
+# 挂在 https://poc.hqtw.cn/ 根路径。基线 POC（hls.js/DPlayer/xgplayer）已删除，
+# 需要时从 git 标签 poc-r1a-hlsjs-baseline 取回。
 #
-# 前置：基线的 deploy-server.sh 已经跑过（node / Caddy / 证书都就绪）。
+# 前置：机器上已有 node 与 Caddy（证书也已签好）。
 #
 # 用法： sudo ./deploy-server.sh
-# 可覆盖： DOMAIN=poc.hqtw.cn  PORT=8081  BASE_PORT=8080
+# 可覆盖： DOMAIN=poc.hqtw.cn  PORT=8081
 #
 # AccessKey 不由本脚本设置。mode=vid 那条路需要你自己填（见末尾提示）。
 #
@@ -16,7 +16,6 @@ set -Eeuo pipefail
 
 DOMAIN="${DOMAIN:-poc.hqtw.cn}"
 PORT="${PORT:-8081}"
-BASE_PORT="${BASE_PORT:-8080}"
 SERVICE="r1a-ali"
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CADDYFILE="/etc/caddy/Caddyfile"
@@ -33,15 +32,15 @@ trap 'echo; echo "!!!! 脚本在步骤 $STEP 处失败。修掉后重跑即可�
 if [ "$(id -u)" -ne 0 ]; then SUDO="sudo"; command -v sudo >/dev/null || die "需要 root 或 sudo"; else SUDO=""; fi
 
 echo "R1a-Ali 部署"
-echo "  域名      https://$DOMAIN/ali/"
+echo "  域名      https://$DOMAIN/"
 echo "  应用目录  $APP_DIR"
-echo "  端口      $PORT（基线仍在 $BASE_PORT，不动它）"
+echo "  端口      $PORT"
 
 # ---------------------------------------------------------------------------
 step "前置检查"
 # ---------------------------------------------------------------------------
-command -v node >/dev/null || die "没有 node —— 先跑基线的 deploy-server.sh"
-command -v caddy >/dev/null || die "没有 caddy —— 先跑基线的 deploy-server.sh"
+command -v node >/dev/null || die "没有 node，先装：apt-get install -y nodejs"
+command -v caddy >/dev/null || die "没有 caddy，见 README"
 ok "node $(node -v)  caddy 已装"
 
 [ -f "$APP_DIR/vendor/aliplayer-min.js" ] || warn "vendor/aliplayer-min.js 不在，下一步会下载"
@@ -62,6 +61,19 @@ fetch() {
 }
 fetch aliplayer-min.js  "$ALI_BASE/aliplayer-min.js"
 fetch aliplayer-min.css "$ALI_BASE/skins/default/aliplayer-min.css"
+
+# 皮肤图片也必须本地化：aliplayer 的 CSS 以 ./img/*.png 引用它们，
+# 不托管的话播放/暂停/全屏/音量图标在微信里全部 404 —— 而 ④ 要靠拖那条进度条来测。
+mkdir -p "$APP_DIR/vendor/img"
+for f in bigplay.png cc.png dragcursorhover.png fullscreen.png pauseanimation.png \
+         playanimation.png setting.png smallpause.png smallplay.png smallscreen.png \
+         snapshot.png unmutevolume.png volume.png volumehover.png volumemute.png volumemutehover.png; do
+  dest="$APP_DIR/vendor/img/$f"
+  [ -s "$dest" ] && continue
+  curl -fsSL -o "$dest.tmp" "$ALI_BASE/skins/default/img/$f" && mv "$dest.tmp" "$dest" \
+    || warn "皮肤图片 $f 下载失败（控件图标会缺一个，不影响判定）"
+done
+ok "皮肤图片 $(ls -1 "$APP_DIR/vendor/img" | wc -l | tr -d ' ')/16"
 
 # ---------------------------------------------------------------------------
 step "systemd 服务 $SERVICE"
@@ -110,20 +122,12 @@ $SUDO systemctl is-active --quiet "$SERVICE" || die "服务没起来： journalc
 ok "$SERVICE 已运行"
 
 # ---------------------------------------------------------------------------
-step "Caddy 加一条 /ali 路由"
+step "Caddy 反代到 $PORT"
 # ---------------------------------------------------------------------------
-# handle_path 会把 /ali 前缀剥掉，所以页面里的相对路径（vendor/、log、playauth）
-# 原样可用；根路径继续交给基线的 $BASE_PORT，两套互不影响。
 NEW_CADDY="$(cat <<EOF
-# R1a POC —— 一次性验证站，测完请按 README 清掉
+# R1a-Ali POC —— 一次性验证站，测完请按 README 清掉
 $DOMAIN {
-	redir /ali /ali/
-	handle_path /ali/* {
-		reverse_proxy localhost:$PORT
-	}
-	handle {
-		reverse_proxy localhost:$BASE_PORT
-	}
+	reverse_proxy localhost:$PORT
 }
 EOF
 )"
@@ -149,31 +153,25 @@ step "自检"
 T=(--connect-timeout 5 --max-time 10)
 curl -fsS "${T[@]}" -o /dev/null "http://127.0.0.1:$PORT/health" && ok "本机 /health 通" \
   || die "后端不通： journalctl -u $SERVICE -n 50 --no-pager"
-curl -fsS "${T[@]}" -o /dev/null "http://127.0.0.1:$BASE_PORT/health" && ok "基线 $BASE_PORT 仍在跑（没被影响）" \
-  || warn "基线服务不通，去看 journalctl -u r1a-poc"
-
 for i in 1 2 3 4 5 6; do
-  curl -fsS "${T[@]}" -o /dev/null "https://$DOMAIN/ali/" 2>/dev/null && { ok "https://$DOMAIN/ali/ 通"; break; }
-  [ "$i" = 6 ] && warn "https://$DOMAIN/ali/ 还不通，看 journalctl -u caddy -n 30 --no-pager"
+  curl -fsS "${T[@]}" -o /dev/null "https://$DOMAIN/" 2>/dev/null && { ok "https://$DOMAIN/ 通"; break; }
+  [ "$i" = 6 ] && warn "https://$DOMAIN/ 还不通，看 journalctl -u caddy -n 30 --no-pager"
   sleep 3
 done
-curl -fsS "${T[@]}" -o /dev/null "https://$DOMAIN/" 2>/dev/null && ok "基线根路径 https://$DOMAIN/ 未受影响" \
-  || warn "基线根路径不通了 —— 检查 Caddyfile"
-
 trap - ERR
 echo
 echo "════ 完成 ════"
 echo
-echo "  source 模式（零阿里云依赖，现在就能测）："
-echo "      https://$DOMAIN/ali/"
+echo "  主用法（阿里云私有加密）："
+echo "      https://$DOMAIN/?mode=vid&vid=你的VideoId"
 echo
 echo "  vid 模式（私有加密）还需要两步，都在你这边："
 echo "    1) 服务器上写 $APP_DIR/.env （chmod 600），内容："
 echo "         ALIYUN_ACCESS_KEY_ID=你的AK"
 echo "         ALIYUN_ACCESS_KEY_SECRET=你的SK"
-echo "         ALIYUN_VOD_REGION=cn-shanghai"
+echo "         ALIYUN_VOD_REGION=cn-shenzhen（按你的点播区域填）"
 echo "       然后： systemctl restart $SERVICE"
-echo "    2) 用 VideoId 打开： https://$DOMAIN/ali/?mode=vid&vid=你的VideoId"
+echo "    2) 用 VideoId 打开： https://$DOMAIN/?mode=vid&vid=你的VideoId"
 echo
-echo "  日志： https://$DOMAIN/ali/admin/logs   或   journalctl -u $SERVICE -f"
+echo "  日志： https://$DOMAIN/admin/logs   或   journalctl -u $SERVICE -f"
 echo

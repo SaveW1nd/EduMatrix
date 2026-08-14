@@ -306,8 +306,7 @@ function serveStatic(req, res, pathname) {
 
 const server = http.createServer((req, res) => {
   const u = new URL(req.url, 'http://' + (req.headers.host || 'localhost'));
-  // Caddy 用 handle_path 剥掉了 /ali 前缀，这里再兜一层，本地直连也能用
-  const p = u.pathname.replace(/^\/ali(?=\/|$)/, '') || '/';
+  const p = u.pathname;
 
   if (req.method === 'OPTIONS') {
     res.writeHead(204, { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
