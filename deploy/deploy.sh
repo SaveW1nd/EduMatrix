@@ -6,6 +6,7 @@
 #     bash deploy/deploy.sh provision   # 首次：装环境（JDK/Redis/Caddy/swap/日志轮转）
 #     bash deploy/deploy.sh build       # 本地构建 jar
 #     bash deploy/deploy.sh ship        # 传 jar + 配置，装/更新 systemd 与 Caddy
+#     bash deploy/deploy.sh ensure-database  # 幂等建库（必须在 start 之前，见下）
 #     bash deploy/deploy.sh start       # 启动并等健康检查
 #     bash deploy/deploy.sh verify      # 冒烟：健康检查 + 登录 + /auth/me
 #     bash deploy/deploy.sh all         # build + ship + start + verify
@@ -23,12 +24,21 @@
 #   基线 V202608120000 第 77 行是 CREATE DATABASE IF NOT EXISTS `edumatrix`
 #   DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci，普通账号建不了库。
 #
-#   ⚠【不要在 RDS 控制台手工建这个库】41 张表【没有一张】显式指定字符集，
-#     全部继承库默认值。库若已存在，那句 IF NOT EXISTS 会静默跳过，
-#     表就继承了控制台给的排序规则 —— 迁移照样 success、应用照样启动，
-#     但唯一索引的「算不算重复」判定会变（uk_perms / uk_tenant_role_key /
-#     同父下 node_name 唯一 / username 唯一 全受影响）。让基线自己建库。
-#     首次迁移后用 `verify-charset` 子命令核对，它会把这两条查出来。
+#   ⚠【库必须带显式 charset 子句被创建 —— 谁建都行，但那个子句不能少】
+#     41 张表【没有一张】显式指定字符集，全部继承库默认值。库的排序规则一旦错了，
+#     迁移照样 success、应用照样启动，但唯一索引的「算不算重复」判定会变
+#     （uk_perms / uk_tenant_role_key / 同父下 node_name 唯一 / username 唯一 全受影响），
+#     且 utf8mb3 存不下 4 字节字符（emoji、部分生僻字）。
+#
+#     【基线第 77 行的 CREATE DATABASE 在 Flyway 下永远不会执行】——这是 F-31：
+#     Flyway 必须【先连上目标库】才能跑脚本，库要么被 JDBC 的
+#     createDatabaseIfNotExist 建、要么被 Flyway 自己按 flyway.schemas 建，
+#     两条路都用【服务端默认】。等 Flyway 能跑基线时，库早就存在了，
+#     那句 IF NOT EXISTS 静默跳过。
+#     本地长期为绿是因为 Docker MySQL 8 的 character_set_server 恰好是 utf8mb4；
+#     阿里云 RDS 实测 utf8mb3 / utf8mb3_general_ci，才把这条暴露出来。
+#
+#     所以 `ensure-database` 这一步【不可省略】，且必须在 start 之前。
 # ============================================================================
 set -euo pipefail
 
@@ -150,6 +160,31 @@ REMOTE
 }
 
 # ---------------------------------------------------------------------------
+# 幂等建库。【必须在 start 之前】，理由见头注释的 F-31。
+# 语句是基线 V202608120000 第 77 行的【原文】，一个字不改 —— charset 子句的来源
+# 是基线本身，不是谁的控制台默认值。
+ensure_database() {
+  log "③.5 幂等建库（带显式 charset 子句；基线第 77 行在 Flyway 下不会执行，故此处必须显式建）"
+  $SSH bash -s <<'REMOTE'
+set -euo pipefail
+set -a; . /etc/edumatrix/db.env; set +a
+HOSTPORT=$(echo "$MYSQL_URL" | sed -E 's#^jdbc:mysql://([^/]+)/.*#\1#')
+DBHOST=${HOSTPORT%%:*}; DBPORT=${HOSTPORT##*:}; [ "$DBPORT" = "$DBHOST" ] && DBPORT=3306
+
+# 客户端可能是 MariaDB 版（--skip-ssl）或 Oracle 版（--ssl-mode=DISABLED）。
+# 走 VPC 内网，关掉 SSL 只影响这几条管理命令；应用侧仍按 MYSQL_URL 的 useSSL 走
+if mysql --version | grep -qi mariadb; then SSLFLAG="--skip-ssl"; else SSLFLAG="--ssl-mode=DISABLED"; fi
+M="mysql -h$DBHOST -P$DBPORT -u$MYSQL_USER -p$MYSQL_PASSWORD $SSLFLAG"
+
+# 基线第 77 行原文
+$M -e "CREATE DATABASE IF NOT EXISTS \`edumatrix\` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;" 2>&1 | grep -v "Using a password" || true
+
+echo "--- 建库后的默认字符集（必须 utf8mb4 / utf8mb4_0900_ai_ci）---"
+$M -N -B -e "SELECT DEFAULT_CHARACTER_SET_NAME, DEFAULT_COLLATION_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='edumatrix';" 2>&1 | grep -v "Using a password" || true
+REMOTE
+}
+
+# ---------------------------------------------------------------------------
 start() {
   log "④ 启动并等健康检查"
   $SSH bash -s <<'REMOTE'
@@ -181,18 +216,25 @@ set -euo pipefail
 set -a; . /etc/edumatrix/db.env; set +a
 HOSTPORT=$(echo "$MYSQL_URL" | sed -E 's#^jdbc:mysql://([^/]+)/.*#\1#')
 DBHOST=${HOSTPORT%%:*}; DBPORT=${HOSTPORT##*:}; [ "$DBPORT" = "$DBHOST" ] && DBPORT=3306
+if mysql --version | grep -qi mariadb; then SSLFLAG="--skip-ssl"; else SSLFLAG="--ssl-mode=DISABLED"; fi
+# 每条查询后面的 `|| true` 不可省：grep 在【无输出】时返回 1，
+# 而「0 行」恰恰是检查 ② 的【通过】条件 —— 不加就会被 set -e 杀在通过的那一步上，
+# 表现是脚本跑到 ② 就无声结束，后面三条根本没执行（第一版就是这样）
+M="mysql -h$DBHOST -P$DBPORT -u$MYSQL_USER -p$MYSQL_PASSWORD $SSLFLAG -N -B"
 echo "--- ① 库默认字符集（必须 utf8mb4 / utf8mb4_0900_ai_ci）---"
-mysql -h"$DBHOST" -P"$DBPORT" -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" -N -B -e \
-  "SELECT DEFAULT_CHARACTER_SET_NAME, DEFAULT_COLLATION_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='edumatrix';"
+$M -e "SELECT DEFAULT_CHARACTER_SET_NAME, DEFAULT_COLLATION_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='edumatrix';" 2>&1 | grep -v "Using a password" || true
 echo "--- ② 排序规则不一致的表（必须 0 行）---"
-mysql -h"$DBHOST" -P"$DBPORT" -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" -N -B -e \
-  "SELECT TABLE_NAME, TABLE_COLLATION FROM information_schema.TABLES WHERE TABLE_SCHEMA='edumatrix' AND TABLE_COLLATION <> 'utf8mb4_0900_ai_ci';"
-echo "--- ③ Flyway 迁移记录 ---"
-mysql -h"$DBHOST" -P"$DBPORT" -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" -N -B -e \
-  "SELECT installed_rank, version, description, success FROM edumatrix.flyway_schema_history ORDER BY installed_rank;"
-echo "--- ④ 表数量（应为 41 + flyway_schema_history = 42）---"
-mysql -h"$DBHOST" -P"$DBPORT" -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" -N -B -e \
-  "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='edumatrix';"
+$M -e "SELECT TABLE_NAME, TABLE_COLLATION FROM information_schema.TABLES WHERE TABLE_SCHEMA='edumatrix' AND TABLE_COLLATION <> 'utf8mb4_0900_ai_ci';" 2>&1 | grep -v "Using a password" || true
+echo "--- ③ Flyway 迁移记录（应 6 条全 success）---"
+$M -e "SELECT installed_rank, version, description, success FROM edumatrix.flyway_schema_history ORDER BY installed_rank;" 2>&1 | grep -v "Using a password" || true
+echo "--- ④ 连接级字符集（表对了，传输层未必对）---"
+# 服务端默认是 utf8mb3，而 URL 写的是 characterEncoding=utf8 ——
+# 要确认实际协商到 utf8mb4，否则 4 字节字符（emoji、部分生僻字）会在【传输层】
+# 被截断，而表本身是对的，查起来非常难。若不是 utf8mb4，把 URL 的
+# characterEncoding 显式改成 utf8mb4 再验。
+$M -e "SHOW VARIABLES WHERE Variable_name IN ('character_set_client','character_set_connection','character_set_results','character_set_database','collation_connection');" 2>&1 | grep -v "Using a password" || true
+echo "--- ⑤ 表数量（应为 41 + flyway_schema_history = 42）---"
+$M -e "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='edumatrix';" 2>&1 | grep -v "Using a password" || true
 REMOTE
 }
 
@@ -231,10 +273,11 @@ case "${1:-}" in
   provision)      provision ;;
   build)          build ;;
   ship)           ship ;;
+  ensure-database) ensure_database ;;
   start)          start ;;
   verify)         verify ;;
   verify-charset) verify_charset ;;
   status)         status ;;
-  all)            build; ship; start; verify ;;
+  all)            build; ship; ensure_database; start; verify; verify_charset ;;
   *) sed -n '3,20p' "$0"; exit 1 ;;
 esac

@@ -24,6 +24,10 @@ WorkingDirectory=/opt/edumatrix
 
 EnvironmentFile=/etc/edumatrix/db.env
 Environment="TZ=Asia/Shanghai"
+# logback-spring.xml 的日志目录（默认 logs，相对工作目录）。指到 /var/log/edumatrix，
+# 与下面的 ReadWritePaths 和 logrotate 配置同一个目录 —— 三者必须一致，
+# 否则真正会长大的那个文件没人轮转
+Environment="LOG_PATH=/var/log/edumatrix"
 Environment="LANG=C.UTF-8"
 
 # -Xmx1g：4G 机器（实际 3.4G 可用）跑单 JVM，留出余量给 Redis(512M 上限) 与系统。
