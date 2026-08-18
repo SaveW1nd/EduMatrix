@@ -12,6 +12,19 @@
 <configuration>
     <springProperty scope="context" name="APP_NAME" source="spring.application.name" defaultValue="edumatrix"/>
 
+    <!--
+      日志目录。默认 logs（相对工作目录），保持本地开发与既有行为不变；
+      生产用环境变量 LOG_PATH 指到 /var/log/edumatrix。
+
+      【为什么要可配】systemd 单元用 ProtectSystem=strict 把文件系统挂成只读，
+      只有 ReadWritePaths 列出的目录可写。写死相对路径时应用启动即抛
+      FileNotFoundException: logs/edumatrix-backend.log (No such file or directory) ——
+      而更麻烦的是「把 /opt/edumatrix 也开成可写」这条路：应用日志会落在
+      /opt/edumatrix/logs/，而 logrotate 配置管的是 /var/log/edumatrix/，
+      于是【真正会长大的那个文件没人轮转】——这台 2 核 4G 机器上它是唯一会失控增长的东西。
+    -->
+    <property name="LOG_PATH" value="${LOG_PATH:-logs}"/>
+
     <property name="LOG_PATTERN"
               value="%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%X{traceId:-}%X{parentTraceId:- }] %logger{40} - %msg%n"/>
 
@@ -23,9 +36,9 @@
     </appender>
 
     <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-        <file>logs/${APP_NAME}.log</file>
+        <file>${LOG_PATH}/${APP_NAME}.log</file>
         <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
-            <fileNamePattern>logs/${APP_NAME}.%d{yyyy-MM-dd}.%i.log</fileNamePattern>
+            <fileNamePattern>${LOG_PATH}/${APP_NAME}.%d{yyyy-MM-dd}.%i.log</fileNamePattern>
             <maxFileSize>100MB</maxFileSize>
             <!--
               保留 180 天。契约 §7.2 第 5 条要求 sys_login_log / sys_oper_log 保留 ≥ 6 个月

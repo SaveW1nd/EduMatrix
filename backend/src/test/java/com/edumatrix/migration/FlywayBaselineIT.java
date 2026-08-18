@@ -76,31 +76,44 @@ class FlywayBaselineIT {
     }
 
     @Test
-    @DisplayName("四个 Flyway 脚本全部 success，且基线版本号是 202608120000")
+    @DisplayName("六个 Flyway 脚本全部 success，且基线版本号是 202608120000")
     void allMigrationsSucceeded() {
         List<String> versions = jdbcTemplate.queryForList(
                 "SELECT version FROM flyway_schema_history WHERE success = 1 ORDER BY installed_rank",
                 String.class);
 
-        // 202608150000 是模块 06 补的 teacher → org:node:list 角色绑定
+        // 202608120000 基线（41 张表）
+        // 202608140000 菜单与角色绑定初始化（F-1）
+        // 202608140100 sys_menu.perms 唯一索引（F-12）
+        // 202608150000 模块 06：补 teacher → org:node:list 绑定
+        // 202608160000 模块 07：拆 org:staff:list → org:admin:list / org:teacher:list（F-30）
+        // 202608160100 模块 07：订正 org_student.anonymized_at 列注释 400 → 10209（F-28）
+        //
+        // 【本断言用 containsExactly 而不是 contains】新增迁移必须显式登记在这里 ——
+        // 一个「多跑了一个没人知道的脚本」的环境与「少跑了一个」同样危险，
+        // 而 Flyway 自己只保证顺序与幂等，不保证【清单是谁批准的】
         assertThat(versions).containsExactly(
-                "202608120000", "202608140000", "202608140100", "202608150000");
+                "202608120000", "202608140000", "202608140100",
+                "202608150000", "202608160000", "202608160100");
     }
 
     @Test
-    @DisplayName("菜单与角色绑定初始化数据已就位（F-1 定案 124 菜单 / 117 唯一 perms；绑定 200 + 模块 06 补的 1 行）")
+    @DisplayName("菜单与角色绑定初始化数据已就位（126 菜单 / 119 唯一 perms / 206 绑定）")
     void menuAndRoleMenuInitialized() {
         Integer menus = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM sys_menu", Integer.class);
         Integer bindings = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM sys_role_menu", Integer.class);
         Integer perms = jdbcTemplate.queryForObject(
                 "SELECT COUNT(DISTINCT perms) FROM sys_menu WHERE perms IS NOT NULL", Integer.class);
 
-        assertThat(menus).as("契约 §10 附表 A 与 V202608140000 由同一份数据源生成").isEqualTo(124);
+        // 124 → 126：模块 07 的 V202608160000 把 org:staff:list 拆成三个（F-30 定案），
+        // 新增「管理员列表」org:admin:list 与「教师列表」org:teacher:list 两行
+        assertThat(menus).as("契约 §10 附表 A 与迁移脚本由同一份数据源生成").isEqualTo(126);
         assertThat(bindings)
                 .as("F-1 ② 定案 student 不绑任何菜单行，故基线是 200；"
-                        + "模块 06 的 V202608150000 补了 teacher → org:node:list，共 201")
-                .isEqualTo(201);
-        assertThat(perms).isEqualTo(117);
+                        + "模块 06 的 V202608150000 补了 teacher → org:node:list（201）；"
+                        + "模块 07 的 V202608160000 为拆出的两个 perms 补了 5 条（2 + 3），共 206")
+                .isEqualTo(206);
+        assertThat(perms).as("117 + org:admin:list + org:teacher:list").isEqualTo(119);
     }
 
     @Test

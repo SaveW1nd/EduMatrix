@@ -35,6 +35,18 @@ public class OrgNodeChangeLog extends TenantEntity {
     public static final int CHANGE_TYPE_TRANSFER_ADMIN = 3;
     /** 4 教师调岗：教师（2）→ 管理员（1）。其名下学员子树整体跟随，但只写这一条。 */
     public static final int CHANGE_TYPE_TEACHER_REASSIGN = 4;
+    /**
+     * 5 毕业归档（模块 07 写，本模块不写）。<b>节点不移动</b>，
+     * 故 {@code from_parent_id} 与 {@code to_parent_id} 相同（03-02 §6.9）。
+     */
+    public static final int CHANGE_TYPE_GRADUATE = 5;
+    /** 6 归档恢复（模块 07 写）。恢复时若同时重新挂载，那次移动<b>另有一条</b>轨迹（§6.10）。 */
+    public static final int CHANGE_TYPE_UNARCHIVE = 6;
+    /**
+     * 7 退课（模块 07 写）。<b>节点不移动</b>——学员仍留在原导师节点下，
+     * 便于原责任人复盘与召回（PRD F1-7 规则 4）。
+     */
+    public static final int CHANGE_TYPE_QUIT = 7;
     /** 8 节点移动：管理员（1）→ 管理员（1），即整个分支换上级。 */
     public static final int CHANGE_TYPE_NODE_MOVE = 8;
 

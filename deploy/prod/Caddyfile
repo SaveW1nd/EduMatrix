@@ -1,0 +1,59 @@
+# ============================================================================
+# Caddy 反向代理
+#
+# 【备案未做接入变更前，域名被拦】所以同时保留 :80 的 IP 直连块。
+#   ⚠ 实测：带 Host 头【恰恰是触发拦截的条件】——
+#     curl -H "Host: api.hqtw.cn" http://47.110.142.8/  → 403，阿里云备案拦截页，
+#     请求到不了 Caddy（访问日志里没有这一条）；
+#     curl http://47.110.142.8/（裸 IP，不带 Host）    → 直达下面的 :80 块。
+#   联调一律用裸 IP。
+#
+# 【暂不签 HTTPS】Caddy 自动签证书要求域名能从公网回源到本机，而备案未通过时
+#   80/443 可能被运营商拦截 —— 签发失败会让 Caddy 反复重试并写满日志。
+#   备案通过后把 `http://api.hqtw.cn` 改成 `api.hqtw.cn` 即自动签发。
+#
+# 【poc.hqtw.cn 不配路由】r1a-ali POC 已停用（本轮 F5）。代码在 git 的
+#   poc/r1a-wechat-hls 分支 poc/r1a-aliplayer/ 下，不需要从服务器抢救。
+# ============================================================================
+# 【admin off 的连带后果：systemctl reload caddy 不可用】
+# reload 是 Caddy 通过本机 admin API（:2019）热加载配置实现的，关掉 API 后它会报
+#   Post "http://localhost:2019/load": connection refused
+# 而 `caddy validate` 仍然通过 —— 配置没问题，是重载通道没了。改配置一律用 restart。
+# 保留 admin off 是有意的：这台机器只跑一个反代，不需要一个能改运行时配置的本地端口。
+{
+	admin off
+	servers {
+		timeouts {
+			read_body 30s
+			idle 120s
+		}
+	}
+}
+
+http://api.hqtw.cn {
+	encode gzip
+	# 后端按 X-Forwarded-For 取客户端 IP（登录限流、sys_login_log 都要）；
+	# X-Forwarded-For / -Proto 是 Caddy 的默认行为，显式写会被它 warn，故只补 X-Real-IP
+	reverse_proxy localhost:8080 {
+		header_up X-Real-IP {remote_host}
+	}
+	log {
+		output file /var/log/caddy/api.hqtw.cn.log {
+			roll_size 50MiB
+			roll_keep 7
+		}
+	}
+}
+
+# IP 直连（备案期间联调用；带 Host 头的请求由上面的块接管）
+:80 {
+	reverse_proxy localhost:8080 {
+		header_up X-Real-IP {remote_host}
+	}
+	log {
+		output file /var/log/caddy/ip-direct.log {
+			roll_size 50MiB
+			roll_keep 7
+		}
+	}
+}

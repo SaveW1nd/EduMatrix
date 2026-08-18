@@ -19,10 +19,11 @@ import com.edumatrix.common.subtree.NodeAncestorCache;
 import com.edumatrix.common.subtree.NodePath;
 import com.edumatrix.common.subtree.SubtreeScopeHelper;
 import com.edumatrix.common.tenant.TenantHelper;
+import com.edumatrix.org.member.mapper.OrgStudentMapper;
+import com.edumatrix.org.member.mapper.OrgTeacherMapper;
 import com.edumatrix.org.node.entity.OrgNode;
 import com.edumatrix.org.node.entity.OrgNodeChangeLog;
 import com.edumatrix.org.node.mapper.NodeGrantScopeMapper;
-import com.edumatrix.org.node.mapper.NodeMemberMapper;
 import com.edumatrix.org.node.mapper.OrgNodeMapper;
 import com.edumatrix.org.node.vo.NodeMovedVO;
 import com.edumatrix.org.node.vo.OutOfScopeGrantVO;
@@ -66,7 +67,8 @@ public class NodeMoveService {
     private static final Logger log = LoggerFactory.getLogger(NodeMoveService.class);
 
     private final OrgNodeMapper nodeMapper;
-    private final NodeMemberMapper memberMapper;
+    private final OrgStudentMapper studentMapper;
+    private final OrgTeacherMapper teacherMapper;
     private final NodeGrantScopeMapper grantScopeMapper;
     private final NodeChangeLogWriter changeLogWriter;
     private final SubtreeScopeHelper subtreeScopeHelper;
@@ -75,7 +77,8 @@ public class NodeMoveService {
     private final MeterRegistry meterRegistry;
 
     public NodeMoveService(OrgNodeMapper nodeMapper,
-                           NodeMemberMapper memberMapper,
+                           OrgStudentMapper studentMapper,
+                           OrgTeacherMapper teacherMapper,
                            NodeGrantScopeMapper grantScopeMapper,
                            NodeChangeLogWriter changeLogWriter,
                            SubtreeScopeHelper subtreeScopeHelper,
@@ -83,7 +86,8 @@ public class NodeMoveService {
                            CurrentNodeResolver currentNodeResolver,
                            MeterRegistry meterRegistry) {
         this.nodeMapper = nodeMapper;
-        this.memberMapper = memberMapper;
+        this.studentMapper = studentMapper;
+        this.teacherMapper = teacherMapper;
         this.grantScopeMapper = grantScopeMapper;
         this.changeLogWriter = changeLogWriter;
         this.subtreeScopeHelper = subtreeScopeHelper;
@@ -191,7 +195,7 @@ public class NodeMoveService {
         Long oldParentId = moving.getParentId();
 
         // 迁移的在读学生数：必须在【重算之前】用旧前缀数，否则子树已经不在 oldP 之下了
-        int movedStudentCount = (int) memberMapper.countActiveStudentsInSubtree(movingNodeId, oldPrefix);
+        int movedStudentCount = (int) studentMapper.countActiveStudentsInSubtree(movingNodeId, oldPrefix);
 
         // =================================================================
         // 步骤 4：更新被移动节点自身
@@ -220,14 +224,15 @@ public class NodeMoveService {
             nodeMapper.addStudentCount(ancestorChainOf(moving.getAncestors(), oldParentId), -movedStudentCount);
             nodeMapper.addStudentCount(ancestorChainOf(target.getAncestors(), toParentId), movedStudentCount);
 
-            // 【本项不在 §3.1.3 的 7 步模板里，是有意增补，不是照抄遗漏】
+            // 【本项不在 §3.1.3 的 7 步模板里，是有意增补，不是照抄遗漏】理由逐条见
+            // OrgTeacherMapper#addStudentCount（模块 07 接手 NodeMemberMapper 后迁到了那里）
             // 依据两条：① DDL 对 org_teacher.student_count 的列注释「与 org_node.student_count
             // 同源同步；分配/转交/调岗时维护」；② 04-实施计划.md 模块 07「对外产出 · 冗余维护」
             // 那一行：「统一在 06 的移动事务与本模块建删事务内」。
             // 而分配导师/转交/调岗全是本方法的封装，模块 07 没有别的钩子能补这一笔。
             // 父节点不是教师时匹配 0 行、静默无事发生（org_teacher 有 uk_node_id）
-            memberMapper.addTeacherStudentCount(oldParentId, -movedStudentCount);
-            memberMapper.addTeacherStudentCount(toParentId, movedStudentCount);
+            teacherMapper.addStudentCount(oldParentId, -movedStudentCount);
+            teacherMapper.addStudentCount(toParentId, movedStudentCount);
         }
 
         // =================================================================
@@ -246,7 +251,18 @@ public class NodeMoveService {
             // 【本模块不执行回收】04-实施计划.md 模块 06 规则 8 逐字：「本模块先把字段与开关
             // 做出来，级联回收动作在模块 11 接上」，且工单「涉及表」把 org_resource_grant
             // 列在【只读】栏。在这里写一段撤销就是越过工单替模块 11 做设计。
-            // 留一条 WARN 而不是静默：调用方传了 true 却什么都没发生，必须有人看得见
+            // 留一条 WARN 而不是静默：调用方传了 true 却什么都没发生，必须有人看得见。
+            //
+            // 【F-27 已定案（选项 b）：不改实现，改分册措辞】03-02 §3.4 的三处
+            //（说明段 / 请求参数表 revokeOutOfScopeGrants / 响应字段说明 outOfScopeGrants）
+            // 已改成与本实现一致，并各带一个「〔模块 11 落地后本段恢复为…〕」的显式标记。
+            //
+            // 【接手时看这里】验收标准写在
+            //   04-实施计划.md §B「11 资源授权引擎」→「做完什么算做完」的【最后一条】，
+            // 逐字给了 true / false 两条 Given-When-Then，并要求同步还原 §3.4 那三处措辞、
+            // 删除本段 WARN 与这段注释。
+            // 【那一条才是强制检查点】——F 清单会越来越长没人逐条回看，
+            // 而「做完什么算做完」是模块 11 完工的判据，必须被逐条对照
             log.warn("revokeOutOfScopeGrants=true 但本模块只做字段与开关，未执行回收"
                             + "（04-实施计划.md 模块 06 规则 8，级联回收在模块 11）："
                             + "nodeId={} 跨管辖授权 {} 条，可经 03-02 接口 39 手动撤销",
@@ -315,7 +331,7 @@ public class NodeMoveService {
         if (moving.getNodeType() == null || moving.getNodeType() != NodePath.NODE_TYPE_STUDENT) {
             return;
         }
-        Integer status = memberMapper.selectStudentStatus(moving.getId());
+        Integer status = studentMapper.selectStudentStatus(moving.getId());
         if (status != null && status != 0) {
             throw new BizException(ErrorCode.STUDENT_ARCHIVED_OR_QUIT);
         }

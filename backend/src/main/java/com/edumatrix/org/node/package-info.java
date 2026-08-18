@@ -5,7 +5,7 @@
  * 转交管理员、教师调岗都是 {@code NodeMoveService} 的语义化封装，
  * <b>不得另写一套改父逻辑</b>（04-实施计划.md 模块 06 规则 1、模块 07 规则 5）。
  *
- * <h2>⚠ 模块 06 的临时构件清单（模块 07 / 11 请照此交接）</h2>
+ * <h2>⚠ 模块 06 的临时构件清单（模块 07 已处理，剩余交模块 11）</h2>
  *
  * <p>本模块要读写三张<b>属于别的子域</b>的表。它们与
  * {@code system/user/entity/SystemOrgNode} 那张清单<b>不是一回事</b>，两张清单必须分开看：
@@ -27,24 +27,61 @@
  * <p><b>混在一张清单里会把两件事搅成一件</b> —— 模块 07 删完 {@code system} 那七个
  * 就会以为交接完毕。所以 {@code SystemOrgNode} 的清单末尾只留一行指到这里。
  *
- * <h3>清单（四个）</h3>
+ * <h3>清单（四个）—— 逐条三态：<b>已交接 / 未到期 / 经核对不交接</b></h3>
  * <ol>
- *   <li>{@code mapper/NodeMemberMapper} —— {@code org_student} 的学籍状态与在读计数、
- *       {@code org_teacher.student_count} 的增减。<b>交给模块 07 的 {@code org/member}</b>；
- *   <li>{@code mapper/NodeGrantScopeMapper} —— {@code org_resource_grant} 的窄只读，
- *       算移动响应的 {@code outOfScopeGrants}。<b>交给模块 11 的 {@code org/grant}</b>，
+ *   <li><b>【已交接，模块 07】</b>{@code mapper/NodeMemberMapper} —— {@code org_student} 的
+ *       学籍状态与在读计数、{@code org_teacher.student_count} 的增减。
+ *       模块 07 建成 {@code org/member} 的真实体后，三条方法分别迁入
+ *       {@code org/member/mapper/OrgStudentMapper}（前两条）与
+ *       {@code org/member/mapper/OrgTeacherMapper#addStudentCount}（第三条），
+ *       <b>SQL 与整段注释逐字保留</b>，本类已删除。{@code NodeMoveService} 改注入那两个 Mapper；
+ *   <li><b>【未到期，交模块 11】</b>{@code mapper/NodeGrantScopeMapper} ——
+ *       {@code org_resource_grant} 的窄只读，算移动响应的 {@code outOfScopeGrants}。
  *       届时连同 {@code revokeOutOfScopeGrants=true} 的级联回收动作一起实现
- *       （本模块只做字段与开关，契约 §2.5 规则 9、04-实施计划.md 模块 06 规则 8）；
- *   <li>{@code mapper/NodeAccountMapper} —— {@code sys_user} 的窄读写（§3.1/§3.2 的
- *       {@code refUserName}/{@code refUserPhone}、§3.3 的姓名同步、§3.6 的重置密码）。
- *       <b>这一条在工单的「涉及表」里已明确授权</b>（模块 06 写 {@code sys_user}（重置密码）），
- *       不是越界；但它跨的是 {@code system} 领域的表，交接对象是
- *       {@code system/user} 将来对外暴露的 Service，形态与 {@code StudentQuotaMapper} 互为镜像；
- *   <li>{@code service/NodeTypeRule} —— <b>不是临时构件，但有一份同源的第二实现</b>：
+ *       （本模块只做字段与开关，契约 §2.5 规则 9、04-实施计划.md 模块 06 规则 8）。
+ *       <b>模块 07 已核对：本条不到期，一个字未动。</b>
+ *       模块 11 接手时另见 03-02 §6.12（接口 52 归属变更影响面预检）——
+ *       它的签名在模块 07 敲定、实现落在模块 11，依赖的正是本 Mapper 缺的那一半判定；
+ *   <li><b>【经核对不交接，常驻】</b>{@code mapper/NodeAccountMapper} —— {@code sys_user}
+ *       的窄读写（§3.1/§3.2 的 {@code refUserName}/{@code refUserPhone}、§3.3 的姓名同步、
+ *       §3.6 的重置密码）。<b>原登记的交接对象是「{@code system/user} 将来对外暴露的 Service」，
+ *       模块 07 核对后判定这条不成立</b>，理由两条：
+ *       <ul>
+ *         <li><b>工单已授权</b>：04-实施计划.md 模块 07 的「涉及表」写栏逐字列着
+ *             {@code sys_user}、{@code sys_user_role} —— {@code org} 领域读写 {@code sys_user}
+ *             是模块 07 工单明确授权的（建人要插账号、绑角色），<b>不是越界</b>。
+ *             当初「表在对方领域、对方 Service 还没有」这个成因，在模块 07 之后反而消失了：
+ *             {@code org} 本来就要直连这张表；
+ *         <li><b>反向 SPI 会形成双向 Bean 依赖</b>：把这 5 条推给 {@code system} 侧的 SPI，
+ *             方向与 {@code system} 消费 {@code org} 的那条 SPI（{@code PlatformNodeWriter}
+ *             退休后要建的 {@code OrgNodeGateway}）相反，两端都是 Bean，构造器循环风险是真的。
+ *       </ul>
+ *       <b>模块 07 的 {@code org/member} 因此不另开第二个 {@code sys_user} Mapper</b>，
+ *       建人所需的账号写能力并入本类 —— 一张表在 {@code org} 领域内只有一个入口；
+ *   <li><b>【常驻，非临时构件】</b>{@code service/NodeTypeRule} —— 承载规则的唯一判定。
+ *       它<b>有一份同源的第二实现</b>：
  *       {@code system/user/service/PlatformNodeWriter#assertParentAcceptsChild}。
- *       检查③禁止 {@code system} import {@code org}，在模块 07 把 {@code PlatformNodeWriter}
- *       退休之前，两份必须并存。<b>改任一份都要同时改另一份，且不会有任何东西报错。</b>
+ *       检查③禁止 {@code system} import {@code org}，两份必须并存到
+ *       {@code PlatformNodeWriter} 退休为止。<b>改任一份都要同时改另一份，且不会有任何东西报错。</b>
+ *       <b>退休时机已由模块 07 重新定过，见下。</b>
  * </ol>
+ *
+ * <h2>⚠ {@code SystemOrgNode} 那张七个构件的清单：模块 07 <b>没有</b>处理，已重新定时机</h2>
+ * <p>模块 07 核实出一件当初写清单时没考虑到的事：<b>检查③ 拦的是 import 语句本身，
+ * 不区分 import 的是实体还是 Service</b>（{@code check_backend_conventions.sh} 第 56~65 行的
+ * grep 是 {@code ^import com\.edumatrix\.($OTHERS)\.}）。所以那张清单里写的
+ * 「{@code system/user} 改调对方 Service」<b>照字面做会当场触发检查③</b> ——
+ * 只让对方 Service 返回自己的 DTO 解决不了这一点，{@code import} 那个 Service 类型本身就命中。
+ *
+ * <p><b>正解是既有先例</b>：{@code common/account/PasswordHasher} 与 {@code SessionRevoker}
+ * ——接口声明在 {@code common/}、实现在提供方领域、消费方跨领域注入。
+ * 交接方案因此是：新增 {@code common/orgnode/OrgNodeGateway}（SPI）+ {@code NodeBrief}（DTO），
+ * 实现落 {@code org/node}，七个构件全部删除。
+ *
+ * <p><b>但模块 07 没有做它</b>，原因不是技术上不成立，而是<b>改动面与模块 06 的整改高度重叠</b>
+ * （两边同时改 {@code NodeMoveService} / {@code OrgNodeMapper} / {@code NodeGrantScopeMapper} /
+ * 本文件，合并时极易把注释合掉一半）。<b>新的到期时机：单独一轮，排在模块 06 整改合入之后。</b>
+ * 在那之前 {@code NodeTypeRule} 的第二份实现原样并存。
  *
  * <h2>本包与 {@code common/subtree} 的分工</h2>
  * <p>「我能看到哪些数据」一律走 {@code common/subtree/SubtreeScopeHelper}（模块 01 产出，
