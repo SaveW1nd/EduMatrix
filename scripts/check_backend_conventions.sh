@@ -8,6 +8,9 @@
 # 【为什么需要它】§A1 定案「单模块 Maven，不拆多模块」，代价是没有编译期的分层护栏。
 # 那一节写明：代价的处置不是引入构建工具，而是三条可 grep 的硬约束。这个脚本就是它们。
 #
+# 【④ 为什么在这里】前三条全部依赖 grep 逐行输出，而 grep 遇到含 NUL 的文件会退化成
+# 「Binary file ... matches」——不给行号，剔注释也失效。④ 守的就是前三条的【前提】。
+#
 # 【为什么剔除注释行】公共层的类注释里大量引用 "OR tenant_id = 0" 与 "FIND_IN_SET"
 # 来解释「为什么不能这么写」——那正是规则本身所在的地方。裸 grep 会把这些解释算成违规，
 # 于是检查每次都红，最后没人看。检查的对象是【代码】，不是讲代码的话。
@@ -64,7 +67,25 @@ done
 check "领域包之间无直接 import（跨领域一律走对方的 Service）" \
       "$(printf '%s' "$CROSS" | grep -c . || true)" "$CROSS"
 
-# --- ④ ignore() 逃生舱可审计（契约 §2.8）-----------------------------------
+# --- ④ 源码不得含 NUL 字节 ---------------------------------------------------
+# 【为什么这也是一条硬检查】值相同、编译照过，但含裸 NUL 的 .java 会被 grep 与 git
+# 判成【二进制文件】，于是上面三条 grep 对它只输出一行 "Binary file ... matches"：
+#   ① 没有行号，违规在第几行看不出来；
+#   ② strip_comments 是按行剔除注释的，拿不到行就整个失效 ——
+#      该文件里【仅在注释中提及】FIND_IN_SET / OR tenant_id = 0 也会被算成违规。
+# 也就是说，一个裸 NUL 同时制造【假阳性】与【看不见的真阳性】，而检查本身不会报错。
+# 实际发生过一次：common/subtree/NodeAncestorCache.java 的 EMPTY_MARKER 哨兵
+# 被写成了原始 0x00 字节而不是转义的 "\0"（两者值完全相同）。
+NUL_FILES=""
+while IFS= read -r f; do
+  if LC_ALL=C tr -d '\000' < "$f" | cmp -s - "$f"; then :; else
+    NUL_FILES="$NUL_FILES$f: 含 NUL 字节（字符串里的 NUL 请写成转义 \\0）"$'\n'
+  fi
+done < <(find "$ROOT/backend/src" -type f \( -name '*.java' -o -name '*.xml' -o -name '*.sql' -o -name '*.yml' \) 2>/dev/null)
+check "backend/src 下源码不含 NUL 字节（否则 grep 把它当二进制，上面三条检查对它全部失灵）" \
+      "$(printf '%s' "$NUL_FILES" | grep -c . || true)" "$NUL_FILES"
+
+# --- ⑤ ignore() 逃生舱可审计（契约 §2.8）-----------------------------------
 # 不是违规检查，是清单：每一处都必须能说清「为什么这个查询非跨租户不可」。
 IGNORES=$(grep -rn "TenantHelper\.ignore(" "$JAVA_SRC" --include='*.java' 2>/dev/null | strip_comments || true)
 IGNORE_COUNT=$(printf '%s' "$IGNORES" | grep -c . || true)
