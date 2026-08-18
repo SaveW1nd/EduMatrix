@@ -33,12 +33,28 @@ import jakarta.validation.Valid;
  * <p>与 {@code OrgNodeController} / {@code SysUserController} 立的规矩一致：
  * <b>权限的真相只有一份</b>，在 {@code sys_role_menu} 的初始化数据里。
  *
- * <p><b>{@code org:staff:list} 同时管着接口 7 与接口 11</b>（契约 §10 附表 A 的
- * 「人员管理」是一个页面级 {@code :list}，按 §3.1 边界 2 两个列表都挂在它下面），
- * 绑给 {@code super_admin} / {@code org_admin}。这与 §5.1 写的「教师可查本人一条」冲突，
- * <b>已登记为 04-实施计划.md §E 的 F-30</b>：那不是「哪一侧写错了」，
- * 是 perms 粒度不足以表达分册要的角色集，只能由需方在「加一个 perms」与「订正分册」之间选。
- * 实现按契约（权威），教师调接口 11 返回 403。
+ * <h2>本轮把 {@code org:staff:list} 拆成了三个（F-30 定案：拆）</h2>
+ * <p>拆之前，契约 §10 附表 A 的「人员管理」是一个<b>页面级</b> {@code org:staff:list}，
+ * 接口 7 与接口 11 都挂在它下面 —— 而 03-02 给这两个接口的角色集<b>不同</b>
+ * （§4.1 仅 {@code org_admin}；§5.1 还包含 {@code teacher}）。
+ * <b>一个开关管两盏灯</b>：绑 teacher 会让教师列出全机构管理员（违反 §4.1），
+ * 不绑则教师调接口 11 拿 403（违反 §5.1）。两条要求两两不可兼得。
+ *
+ * <table border="1">
+ *   <caption>拆后的三个 perms（迁移 {@code V202608160000}）</caption>
+ *   <tr><th>perms</th><th>管什么</th><th>绑给谁</th></tr>
+ *   <tr><td>{@code org:staff:list}</td><td>能不能进「人员管理」页面（<b>保留</b>）</td>
+ *       <td>super_admin、org_admin</td></tr>
+ *   <tr><td>{@code org:admin:list}</td><td>接口 7 管理员分页列表</td>
+ *       <td>super_admin、org_admin</td></tr>
+ *   <tr><td>{@code org:teacher:list}</td><td>接口 11 教师分页列表</td>
+ *       <td>super_admin、org_admin、<b>teacher</b></td></tr>
+ * </table>
+ *
+ * <p><b>教师调接口 11 只看到自己一行，不需要任何特判</b>：教师子树里只可能有学生，
+ * 按 {@code node_type = 2} 一过滤就只剩本人，而 {@code pageTeachers} 的
+ * {@code (n.id = #{rootId} OR ...)} 分支把本人那行包含在内 ——
+ * 这是数据权限自然的结果，代码里没有、也不该有一句「if 是教师则只返回自己」。
  *
  * <h2>三个写接口都标了 {@code @OperLog}</h2>
  * <p>PRD F1-2 规则 13：「所有结构变更（建/移/停/删）写 {@code sys_oper_log}」。
@@ -59,9 +75,15 @@ public class OrgAdminController {
         this.adminService = adminService;
     }
 
-    /** 接口 7 §4.1 管理员分页列表。仅 {@code org_admin}（超管亦绑定）。 */
+    /**
+     * 接口 7 §4.1 管理员分页列表。仅 {@code org_admin}（超管亦绑定）。
+     *
+     * <p><b>{@code org:admin:list} 是本轮从 {@code org:staff:list} 拆出来的</b>（见类注释）。
+     * 拆之前这一个 perms 同时管着本接口与接口 11，而两者的角色集不同 ——
+     * 绑 teacher 会让教师列出全机构管理员，不绑则教师调不了接口 11。
+     */
     @GetMapping
-    @SaCheckPermission("org:staff:list")
+    @SaCheckPermission("org:admin:list")
     public R<PageResult<AdminVO>> page(AdminPageQuery query) {
         return R.ok(adminService.page(query));
     }

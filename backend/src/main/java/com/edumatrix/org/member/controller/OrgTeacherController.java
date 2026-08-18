@@ -30,8 +30,8 @@ import jakarta.validation.Valid;
  * <p><b>本节路径 {@code {id}} 是教师<b>档案 ID</b>（{@code org_teacher.id}）</b>，
  * 不是节点 ID —— §5 导语逐字写着这一句。与 §4（管理员用节点 ID）相反。
  *
- * <p>接口 11 的 perms 与教师角色的冲突（F-30）见 {@code OrgAdminController} 类注释。
- * <b>接口 15 用的是 {@code org:student:list}</b>（已绑 teacher）而不是 {@code org:staff:list} ——
+ * <p>接口 11 的 perms 拆分（F-30 定案）见 {@code OrgAdminController} 类注释。
+ * <b>接口 15 用的是 {@code org:student:list}</b>（已绑 teacher）而不是人员管理那一组 ——
  * §5.5 逐字：「与接口 16（学生分页列表）传 {@code nodeId=教师节点ID} +
  * {@code directOnly=true} <b>等价</b>」，它返回的是学员不是教师，
  * 归「学员管理」那个页面的 {@code :list}。<b>这一处没有冲突，不属于 F-30。</b>
@@ -46,9 +46,18 @@ public class OrgTeacherController {
         this.teacherService = teacherService;
     }
 
-    /** 接口 11 §5.1 教师分页列表。 */
+    /**
+     * 接口 11 §5.1 教师分页列表。{@code org_admin}；{@code teacher}（仅本人一条）。
+     *
+     * <p><b>{@code org:teacher:list} 是本轮从 {@code org:staff:list} 拆出来的</b>，
+     * 拆的理由与三个 perms 的分工见 {@code OrgAdminController} 的类注释（F-30 定案）。
+     *
+     * <p><b>教师只看到自己一行是数据权限自然的结果，没有特判</b>：教师子树里只可能有学生，
+     * 按 {@code node_type = 2} 过滤后只剩本人，而 SQL 的 {@code (n.id = #{rootId} OR ...)}
+     * 分支把本人那行包含在内。
+     */
     @GetMapping
-    @SaCheckPermission("org:staff:list")
+    @SaCheckPermission("org:teacher:list")
     public R<PageResult<TeacherVO>> page(TeacherPageQuery query) {
         return R.ok(teacherService.page(query));
     }

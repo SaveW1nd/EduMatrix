@@ -1,0 +1,59 @@
+# ============================================================================
+# systemd 单元：EduMatrix 后端（单实例，契约 §J1）
+#
+# 【为什么不做多实例】Sa-Token 会话存在【进程内存】里（04-实施计划.md §E F-19、
+#   05-工程结构.md §J2 ②）。多实例下 PRD §7.3「登出/改密即时失效」不成立：
+#   在 A 实例登出，B 实例的会话还活着。§J2 那张清单没处理完之前不得部署第二个实例。
+#   SNOWFLAKE_WORKER_ID 固定 0 与此同源 —— 两个实例同 workerId 会生成重复雪花 ID。
+#
+# 【口令从 EnvironmentFile 注入，不写进本文件】本文件进仓库，/etc/edumatrix/db.env 不进。
+#   systemd 读 EnvironmentFile 时不会把内容写进 journal。
+# ============================================================================
+[Unit]
+Description=EduMatrix Backend
+Documentation=https://github.com/SaveW1nd/EduMatrix
+After=network-online.target redis-server.service
+Wants=network-online.target
+Requires=redis-server.service
+
+[Service]
+Type=simple
+User=edumatrix
+Group=edumatrix
+WorkingDirectory=/opt/edumatrix
+
+EnvironmentFile=/etc/edumatrix/db.env
+Environment="TZ=Asia/Shanghai"
+Environment="LANG=C.UTF-8"
+
+# -Xmx1g：4G 机器（实际 3.4G 可用）跑单 JVM，留出余量给 Redis(512M 上限) 与系统。
+# 另有 2G swap 兜底，防 OOM Killer 直接杀进程。
+# -XX:+ExitOnOutOfMemoryError：宁可退出让 systemd 拉起，也不要一个半死不活的 JVM ——
+# 后者会持续返回 500 而健康检查可能还是通的。
+ExecStart=/usr/bin/java \
+    -Xms512m -Xmx1g \
+    -XX:+UseG1GC \
+    -XX:+ExitOnOutOfMemoryError \
+    -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/var/log/edumatrix/ \
+    -Duser.timezone=Asia/Shanghai \
+    -Dfile.encoding=UTF-8 \
+    -jar /opt/edumatrix/edumatrix-backend.jar \
+    --spring.profiles.active=prod
+
+Restart=on-failure
+RestartSec=10
+SuccessExitStatus=143
+TimeoutStopSec=30
+
+StandardOutput=append:/var/log/edumatrix/stdout.log
+StandardError=append:/var/log/edumatrix/stderr.log
+
+# 最小权限：只允许写日志目录
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/edumatrix
+
+[Install]
+WantedBy=multi-user.target

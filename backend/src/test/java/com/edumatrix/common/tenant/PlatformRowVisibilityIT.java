@@ -124,9 +124,10 @@ class PlatformRowVisibilityIT {
         assertThat(probeMapper.countRoleMenus())
                 .as("/auth/me 的链路是 sys_user_role → sys_role → sys_role_menu，"
                         + "放行断在任何一环，结果都是 perms=[]")
-                // 200 → 201：模块 06 的 V202608150000 补了 teacher → org:node:list 一行。
+                // 200 → 201（模块 06 的 V202608150000 补 teacher → org:node:list）
+                //     → 206（模块 07 的 V202608160000 拆 org:staff:list，补 5 条）。
                 // 这里断言的是【放行是否生效】，行数只是它的载体，随初始化数据增长是正常的
-                .isEqualTo(201);
+                .isEqualTo(206);
     }
 
     @Test

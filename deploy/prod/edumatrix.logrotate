@@ -1,0 +1,13 @@
+# 这台机器上唯一会失控增长的东西。
+# Caddy 自带 roll（见 Caddyfile），这里只管应用日志。
+/var/log/edumatrix/*.log {
+    daily
+    rotate 14
+    maxsize 100M
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    su edumatrix edumatrix
+}

@@ -1,4 +1,4 @@
-package com.edumatrix.org.member.service;
+package com.edumatrix.common.account;
 
 import java.security.SecureRandom;
 import java.util.ArrayList;
@@ -11,19 +11,22 @@ import com.edumatrix.common.errorcode.ErrorCode;
 import com.edumatrix.common.response.BizException;
 
 /**
- * 初始密码：调用者指定则校验格式，留空则服务端随机生成 ≥12 位强口令
- * （PRD F1-3 规则 3、03-02 §4.2 / §5.2 / §6.2 的 {@code initPassword} 参数说明）。
+ * 初始 / 重置口令：调用者指定则校验格式，留空则服务端随机生成 ≥12 位强口令。
  *
- * <h2>⚠ 全库还有一份同源实现：{@code org/node/service/NodePasswordResetService}</h2>
- * <p>模块 06 的 §3.6 重置人员密码里有两个私有方法（{@code generatePassword} /
- * {@code assertStrongEnough}），规则与本类<b>逐字相同</b>。本类<b>没有</b>把那两个方法抽走，
- * 原因是模块 06 正在整改、同期改同一个文件会在合并时把注释合掉一半 ——
- * 与 {@code PlatformNodeWriter} 退休被推迟是同一个理由。
+ * <p>三个建人接口（03-02 §4.2 / §5.2 / §6.2 的 {@code initPassword}）与重置人员密码
+ * （§3.6 的 {@code newPassword}）共用同一套规则，依据是 PRD F1-3 规则 3。
  *
- * <p><b>模块 06 整改合入后，{@code NodePasswordResetService} 应改为委派本类，那两个私有方法删除。</b>
- * 在那之前<b>改任一份都要同时改另一份</b>：两份各自的测试都会继续通过，
- * 只是同一条口令规则在两条路径上一严一松，而<b>宽的那条不会报错</b>
- * （{@code NodeTypeRule} 的第二份实现是同一种处境，那里的注释写的也是这句）。
+ * <h2>为什么落在 {@code common/} 而不是 {@code org/member}</h2>
+ * <p>它是<b>纯工具，没有任何业务判断</b>：不查库、不看租户、不认识节点。
+ * 而消费方跨子域 —— {@code org/node} 的 §3.6 与 {@code org/member} 的三个建人接口。
+ * 放 {@code org/member} 会让 {@code org/node} <b>反向依赖</b> {@code org/member}，
+ * 而 {@code common} 谁都能依赖。与同包的 {@link PasswordHasher} / {@link SessionRevoker}
+ * 是同一个位置选择，只是那两个还多一层 SPI（实现在 {@code auth}），本类不需要。
+ *
+ * <p><b>本类此前有两份实现</b>（{@code org/member/service/InitialPasswordFactory} 与
+ * {@code org/node/service/NodePasswordResetService} 的两个私有方法），
+ * 规则逐字相同。<b>已合并为本类，那两处均已删除</b> —— 于是「改一份忘了另一份」
+ * 这个隐患不再存在，也不需要任何「两份必须同步」的警告。
  *
  * <h2>不设固定默认密码，也不用手机号后 6 位</h2>
  * <p>PRD F1-3 规则 3 逐字：「<b>严禁使用手机号后 6 位等可由账号推导的默认值</b>——
@@ -31,9 +34,8 @@ import com.edumatrix.common.response.BizException;
  * 它会出现在文档与工单里，攻击者拿到用户名列表即可批量撞库命中所有「已建号未改密」的账号。
  *
  * <h2>明文只在本次响应返回一次</h2>
- * <p>三个建人接口的响应字段说明都写着「<b>仅本次创建响应返回一次</b>，不落库、不可再查」
- * （PRD §7.3：明文永不落库）。库里只有 BCrypt 密文，哈希一律走
- * {@code common/account/PasswordHasher}（SPI，实现在 {@code auth}）——
+ * <p>四个接口的响应字段说明都写着「<b>仅本次返回一次</b>，不落库、不可再查」
+ * （PRD §7.3：明文永不落库）。库里只有 BCrypt 密文，哈希一律走 {@link PasswordHasher} ——
  * 自己 {@code new BCryptPasswordEncoder} 会让 cost 分叉，而 BCrypt 把 cost 编码在密文里，
  * 两边都验得过，<b>不报错、不失败，只是安全强度悄悄回退</b>。
  */
@@ -52,9 +54,9 @@ public class InitialPasswordFactory {
     private final SecureRandom random = new SecureRandom();
 
     /**
-     * 取本次建号要用的明文口令。
+     * 取本次要用的明文口令。
      *
-     * @param specified 请求体里的 {@code initPassword}；{@code null} 或空白表示由服务端生成
+     * @param specified 调用者指定的口令；{@code null} 或空白表示由服务端生成
      */
     public String resolve(String specified) {
         return specified == null || specified.isBlank()
@@ -64,7 +66,12 @@ public class InitialPasswordFactory {
 
     /**
      * 「8~20 位且同时含字母与数字」——长度由 DTO 的 {@code @Size} 拦，
-     * 这里判跨字符的那一半。不合规返回 <b>400</b>，不是业务码。
+     * 这里判跨字符的那一半（正则表达可读性差）。不合规返回 <b>400</b>，不是业务码。
+     *
+     * <p><b>不含「不得与原密码相同」这一条</b>：那是 03-01 §1.6 <b>本人改密</b>的语义，
+     * 而管理员建号 / 重置时不知道对方原密码，也不该知道。
+     * 两处规则不同，共用一个方法迟早会把 §1.6 的规则漏进来 —— 与
+     * {@link PasswordHasher} 刻意不暴露强度校验是同一条理由。
      */
     private static String assertStrongEnough(String raw) {
         boolean hasLetter = false;
@@ -78,7 +85,7 @@ public class InitialPasswordFactory {
             }
         }
         if (!hasLetter || !hasDigit) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "初始密码须同时包含字母与数字");
+            throw new BizException(ErrorCode.BAD_REQUEST, "口令须同时包含字母与数字");
         }
         return raw;
     }

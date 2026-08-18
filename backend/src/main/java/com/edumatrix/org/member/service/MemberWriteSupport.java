@@ -5,6 +5,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 
+import com.edumatrix.common.account.InitialPasswordFactory;
 import com.edumatrix.common.account.PasswordHasher;
 import com.edumatrix.common.account.SessionRevoker;
 import com.edumatrix.common.errorcode.ErrorCode;
