@@ -133,7 +133,8 @@ class NodeMoveConcurrencyIT extends OrgIntegrationTestBase {
         // 判据③：至少有一次移动真的落库了，否则上面两条在一棵没动过的树上也成立
         assertThat(succeeded.get()).isPositive();
 
-        // 判据④：【一次死锁都不许有】。04-实施计划.md §F「撞车预案」逐字：
+        // 判据④：【一次死锁都不许有】。04-实施计划.md §D 前置风险项 R2
+        // 「撞车后的影响面」那一行逐字：
         // 「若 10 并发下出现死锁，说明 id 升序加锁没有覆盖全部加锁点——
         //   这属于铁律 1 未落地，不可上线」。
         // 这条断言是那句话的回归守卫：把 NodeMoveService#lockIds 缩回「只锁被移动节点 +
