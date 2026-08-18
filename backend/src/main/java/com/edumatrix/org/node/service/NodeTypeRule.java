@@ -26,12 +26,23 @@ import com.edumatrix.common.subtree.NodePath;
  * 另一份实现。<b>不是复制粘贴的疏忽</b>：{@code check_backend_conventions.sh} 的检查③
  * 禁止 {@code system} 领域 import {@code org} 领域，而 03-01 §2.2 的建号路径必须校验它。
  *
- * <p>合并的时机是<b>模块 07</b>：那时 {@code org} 建成建人/删人接口，
- * {@code PlatformNodeWriter} 整体退休（交接清单见
- * {@code system/user/entity/SystemOrgNode} 的类注释），第二份随之消失。
- *
- * <p><b>在那之前，改了一份不改另一份不会有任何东西报错</b> —— 两份各自的测试都会继续通过，
- * 只是同一个非法结构在两条路径上一条被拒、一条被放行。这句话写在这里就是为了让下一个人看见。
+ * <p><b>⚠ 合并时机已由模块 07 重新定过：不是模块 07，是「模块 06 整改合入之后的单独一轮」。</b>
+ * 原写的是模块 07 —— 那时 {@code org} 建成建人/删人接口、{@code PlatformNodeWriter} 整体退休
+ * （交接清单见 {@code system/user/entity/SystemOrgNode} 的类注释），第二份随之消失。
+ * 模块 07 确实建成了那些接口，但<b>没有做退休</b>，两条理由：
+ * <ol>
+ *   <li>交接清单里「{@code system/user} 改调对方 Service」这句<b>照字面做会触发检查③</b> ——
+ *       那条 grep 拦的是 import 语句本身，不区分 import 的是实体还是 Service。
+ *       正解是照 {@code common/account/PasswordHasher} 的先例走 {@code common/} SPI，
+ *       方案已记在 {@code com.edumatrix.org.node} 的 {@code package-info}；
+ *   <li>该重构触及模块 03 的 {@code SysUserService} 与模块 04 的两个 Service，
+ *       <b>改动面与同期的模块 06 整改高度重叠</b>，同时动会在合并时把注释合掉一半。
+ * </ol>
+ * <p><b>在那一轮到来之前，两份仍必须并存，而改了一份不改另一份不会有任何东西报错</b> ——
+ * 两份各自的测试都会继续通过，只是同一个非法结构在两条路径上一条被拒、一条被放行。
+ * 这句话写在这里就是为了让下一个人看见。
+ * 模块 07 已<b>逐组合比对过两份</b>（含 {@code null} 与兜底分支），当前对任意输入返回的
+ * 错误码完全相同 —— <b>那不是可以放着不管的理由，那是它至今没出事的原因。</b>
  *
  * <h2>{@code node_type} 不可变更，所以本规则只在「建」与「移」两个时刻生效</h2>
  * <p>§3.1.5：「修改 {@code node_type} —— <b>直接禁止</b>。人员类型变更应走

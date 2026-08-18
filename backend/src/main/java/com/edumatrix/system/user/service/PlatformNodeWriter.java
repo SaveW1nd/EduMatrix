@@ -22,14 +22,28 @@ import com.edumatrix.system.user.mapper.SystemOrgNodeMapper;
  *
  * <p><b>模块 06 已落地，本类原样保留</b> —— 它的六个接口是查询/详情/修改/移动/停用/
  * 重置密码，<b>没有建节点与删节点</b>（03-02 §2.2：「建节点 = 建人，一律走接口 8/12/17」）。
- * 退休时机是<b>模块 07</b>，届时 {@code system/user} 改调对方 Service；
- * 检查③仍禁止直接 import 实体，故对方 Service 要返回自己的 DTO，
- * 而 {@link #createTenantRootNode} 的两条例外必须<b>原样保留</b>。
+ * <p><b>⚠ 退休时机已由模块 07 重新定过：不是模块 07，是「模块 06 整改合入之后的单独一轮」。</b>
+ * 模块 07 已建成建人/删人接口（03-02 接口 8/12/17 与 10/14/19），本可以在那一轮退休，但没有做：
+ * <ol>
+ *   <li><b>原写的交接方式行不通</b>：「{@code system/user} 改调对方 Service」——
+ *       {@code check_backend_conventions.sh} 检查③ 的 grep 是
+ *       {@code ^import com.edumatrix.($OTHERS).}，<b>拦的是 import 语句本身</b>，
+ *       不区分 import 的是实体还是 Service。只让对方 Service 返回自己的 DTO 解决不了这一点。
+ *       <b>正解是既有先例</b>：{@code common/account/PasswordHasher} / {@code SessionRevoker}
+ *       ——接口声明在 {@code common/}、实现在提供方领域。方案（{@code common/orgnode/OrgNodeGateway}
+ *       + {@code NodeBrief} DTO，实现落 {@code org/node}）已记在
+ *       {@code com.edumatrix.org.node} 的 {@code package-info}；
+ *   <li><b>改动面冲突</b>：该重构触及模块 03 的 {@code SysUserService} 与模块 04 的
+ *       {@code TenantProvisionService} / {@code SysTenantService}，与同期模块 06 整改
+ *       要改的文件高度重叠，同时动会在合并时把注释合掉一半。
+ * </ol>
+ * <p>退休时 {@link #createTenantRootNode} 的两条例外仍必须<b>原样保留</b>。
  *
  * <p><b>{@link #assertParentAcceptsChild} 现在有一份同源的第二实现</b>：
  * 模块 06 的 {@code org/node/service/NodeTypeRule}（02-数据库设计 §3.1.5 要求「所有入口共用」
- * 的那个静态方法）。检查③挡着，两份在模块 07 之前必须并存 ——
+ * 的那个静态方法）。检查③挡着，两份必须并存到本类退休为止（时机见上，<b>不是模块 07</b>）——
  * <b>改任一份都要同时改另一份，且不会有任何东西报错</b>。
+ * 模块 07 已逐组合比对过两份，当前对任意输入返回的错误码完全相同。
  *
  * <h2>最小集边界 —— 多一点都不做</h2>
  * <table border="1">

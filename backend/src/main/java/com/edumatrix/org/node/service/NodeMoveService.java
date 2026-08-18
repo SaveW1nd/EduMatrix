@@ -19,10 +19,11 @@ import com.edumatrix.common.subtree.NodeAncestorCache;
 import com.edumatrix.common.subtree.NodePath;
 import com.edumatrix.common.subtree.SubtreeScopeHelper;
 import com.edumatrix.common.tenant.TenantHelper;
+import com.edumatrix.org.member.mapper.OrgStudentMapper;
+import com.edumatrix.org.member.mapper.OrgTeacherMapper;
 import com.edumatrix.org.node.entity.OrgNode;
 import com.edumatrix.org.node.entity.OrgNodeChangeLog;
 import com.edumatrix.org.node.mapper.NodeGrantScopeMapper;
-import com.edumatrix.org.node.mapper.NodeMemberMapper;
 import com.edumatrix.org.node.mapper.OrgNodeMapper;
 import com.edumatrix.org.node.vo.NodeMovedVO;
 import com.edumatrix.org.node.vo.OutOfScopeGrantVO;
@@ -66,7 +67,8 @@ public class NodeMoveService {
     private static final Logger log = LoggerFactory.getLogger(NodeMoveService.class);
 
     private final OrgNodeMapper nodeMapper;
-    private final NodeMemberMapper memberMapper;
+    private final OrgStudentMapper studentMapper;
+    private final OrgTeacherMapper teacherMapper;
     private final NodeGrantScopeMapper grantScopeMapper;
     private final NodeChangeLogWriter changeLogWriter;
     private final SubtreeScopeHelper subtreeScopeHelper;
@@ -75,7 +77,8 @@ public class NodeMoveService {
     private final MeterRegistry meterRegistry;
 
     public NodeMoveService(OrgNodeMapper nodeMapper,
-                           NodeMemberMapper memberMapper,
+                           OrgStudentMapper studentMapper,
+                           OrgTeacherMapper teacherMapper,
                            NodeGrantScopeMapper grantScopeMapper,
                            NodeChangeLogWriter changeLogWriter,
                            SubtreeScopeHelper subtreeScopeHelper,
@@ -83,7 +86,8 @@ public class NodeMoveService {
                            CurrentNodeResolver currentNodeResolver,
                            MeterRegistry meterRegistry) {
         this.nodeMapper = nodeMapper;
-        this.memberMapper = memberMapper;
+        this.studentMapper = studentMapper;
+        this.teacherMapper = teacherMapper;
         this.grantScopeMapper = grantScopeMapper;
         this.changeLogWriter = changeLogWriter;
         this.subtreeScopeHelper = subtreeScopeHelper;
@@ -191,7 +195,7 @@ public class NodeMoveService {
         Long oldParentId = moving.getParentId();
 
         // 迁移的在读学生数：必须在【重算之前】用旧前缀数，否则子树已经不在 oldP 之下了
-        int movedStudentCount = (int) memberMapper.countActiveStudentsInSubtree(movingNodeId, oldPrefix);
+        int movedStudentCount = (int) studentMapper.countActiveStudentsInSubtree(movingNodeId, oldPrefix);
 
         // =================================================================
         // 步骤 4：更新被移动节点自身
@@ -220,14 +224,15 @@ public class NodeMoveService {
             nodeMapper.addStudentCount(ancestorChainOf(moving.getAncestors(), oldParentId), -movedStudentCount);
             nodeMapper.addStudentCount(ancestorChainOf(target.getAncestors(), toParentId), movedStudentCount);
 
-            // 【本项不在 §3.1.3 的 7 步模板里，是有意增补，不是照抄遗漏】
+            // 【本项不在 §3.1.3 的 7 步模板里，是有意增补，不是照抄遗漏】理由逐条见
+            // OrgTeacherMapper#addStudentCount（模块 07 接手 NodeMemberMapper 后迁到了那里）
             // 依据两条：① DDL 对 org_teacher.student_count 的列注释「与 org_node.student_count
             // 同源同步；分配/转交/调岗时维护」；② 04-实施计划.md 模块 07「对外产出 · 冗余维护」
             // 那一行：「统一在 06 的移动事务与本模块建删事务内」。
             // 而分配导师/转交/调岗全是本方法的封装，模块 07 没有别的钩子能补这一笔。
             // 父节点不是教师时匹配 0 行、静默无事发生（org_teacher 有 uk_node_id）
-            memberMapper.addTeacherStudentCount(oldParentId, -movedStudentCount);
-            memberMapper.addTeacherStudentCount(toParentId, movedStudentCount);
+            teacherMapper.addStudentCount(oldParentId, -movedStudentCount);
+            teacherMapper.addStudentCount(toParentId, movedStudentCount);
         }
 
         // =================================================================
@@ -315,7 +320,7 @@ public class NodeMoveService {
         if (moving.getNodeType() == null || moving.getNodeType() != NodePath.NODE_TYPE_STUDENT) {
             return;
         }
-        Integer status = memberMapper.selectStudentStatus(moving.getId());
+        Integer status = studentMapper.selectStudentStatus(moving.getId());
         if (status != null && status != 0) {
             throw new BizException(ErrorCode.STUDENT_ARCHIVED_OR_QUIT);
         }
