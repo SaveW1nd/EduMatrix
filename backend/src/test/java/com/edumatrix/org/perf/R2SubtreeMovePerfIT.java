@@ -156,8 +156,12 @@ class R2SubtreeMovePerfIT {
     @DisplayName("R2：10 并发交叉移动，死锁率必须为 0（否则铁律 1 未落地，不可上线）")
     void concurrentCrossMovesDeadlockRate() throws Exception {
         List<Long> movers = pickDistinctSubtreeRoots(CONCURRENCY);
+        // 【断言实际并发数】R2 原文要求 10 并发。第一版按「兄弟节点」取，
+        // 分支因子 5 让它只拿到 5 个，而输出「成功 5、死锁 0」看上去完全正常
+        org.assertj.core.api.Assertions.assertThat(movers)
+                .as("R2 要求 10 并发交叉移动").hasSize(CONCURRENCY);
         System.out.printf("%n========== R2 并发交叉移动（%d 并发，子树互不嵌套）==========%n",
-                CONCURRENCY);
+                movers.size());
         runConcurrent(movers, "互不嵌套");
     }
 
@@ -246,9 +250,21 @@ class R2SubtreeMovePerfIT {
         allNodes.add(PARK_A);
         allNodes.add(PARK_B);
 
-        // 分支因子 5：5^6 ≈ 15625，取到 1.1 万即停 —— 深度落在 6~8 层（含 ROOT）
+        // 【分支因子随深度变化，不是固定 5】要点在于：R2 要求分别移动 100 / 1000 / 5000
+        // 节点的子树，所以树里【必须真的存在】这三个量级的子树。
+        // 固定分支因子 5 时最大的非停车位子树只有约 1623 个节点（实测），
+        // 找 5000 那一档会直接抛「压测树里找不到 ≥ 5000 节点的子树」——
+        // 第一版就是这么写的，前两档跑完才在第三档报错。
+        //
+        // 【阈值取 <=2，不是 <=4】前两层各分 2 支、再往下每层 6 支，逐层节点数：
+        //   d2=2  d3=4  d4=24  d5=144  d6=864  d7=5184（在此截到 1.1 万）
+        //   于是 d2 节点的子树 ≈ 5500（覆盖 5000 档）、d4 ≈ 1375（1000 档）、
+        //   d5 ≈ 229（100 档），d6/d7 各有几百上千个节点，够并发用例挑 10 个互不嵌套的。
+        // 阈值写成 <=4 时逐层是 2/4/8/16/96/576/3456，全树只有 4161 个节点、
+        // 最大子树 2079 —— 【5000 那一档根本不存在】，前两档跑完才在第三档抛
+        // 「压测树里找不到 ≥ 5000 节点的子树」。深度落在 6~8 层，满足 R2。
         List<long[]> frontier = new ArrayList<>();
-        frontier.add(new long[]{PARK_A, 2});
+        frontier.add(new long[]{PARK_A, 1});
         long nextId = 1969000000000010000L;
         List<Object[]> batch = new ArrayList<>();
 
@@ -258,8 +274,9 @@ class R2SubtreeMovePerfIT {
                 if (allNodes.size() >= TARGET_NODES) {
                     break;
                 }
+                int branch = parent[1] <= 2 ? 2 : 6;
                 String parentAnc = ancestorsOf(parent[0]);
-                for (int i = 0; i < 5 && allNodes.size() < TARGET_NODES; i++) {
+                for (int i = 0; i < branch && allNodes.size() < TARGET_NODES; i++) {
                     long id = nextId++;
                     // 深度 ≤ 8 层后不再生子，控制在 R2 要求的 6~8 层
                     int depth = (int) parent[1] + 1;
@@ -332,7 +349,7 @@ class R2SubtreeMovePerfIT {
         long best = 0;
         int bestSize = Integer.MAX_VALUE;
         // 深度越浅子树越大；2~7 层足以覆盖 100 / 1000 / 5000 三档
-        for (int depth = 2; depth <= 7; depth++) {
+        for (int depth = 2; depth <= 8; depth++) {
             List<Long> candidates = jdbc.queryForList(
                     "SELECT id FROM org_node WHERE tenant_id = ? AND deleted_at = 0 "
                             + "AND id NOT IN (?, ?, ?) "
@@ -363,12 +380,27 @@ class R2SubtreeMovePerfIT {
         return n == null ? 0 : n;
     }
 
-    /** 取 n 棵<b>互不嵌套</b>的子树根：同一层的兄弟节点天然互不嵌套。 */
+    /**
+     * 取 n 棵<b>互不嵌套</b>的子树根。
+     *
+     * <p><b>按「同一深度」取，不是按「同一个父的兄弟」取</b>：分支因子是 5，
+     * 按兄弟取时 {@code LIMIT 10} 只能拿到 5 个 —— 于是「10 并发」实际只跑了 5 并发，
+     * <b>而计数器显示「成功 5、死锁 0」，看上去完全正常</b>。
+     * 同一深度的节点两两之间不可能互为祖先，这才是「互不嵌套」的准确定义。
+     */
     private List<Long> pickDistinctSubtreeRoots(int n) {
-        return jdbc.queryForList(
-                "SELECT id FROM org_node WHERE tenant_id = ? AND deleted_at = 0 "
-                        + "AND parent_id = ? ORDER BY id LIMIT ?",
-                Long.class, TENANT_ID, firstChildOf(PARK_A), n);
+        for (int depth = 5; depth <= 8; depth++) {
+            List<Long> ids = jdbc.queryForList(
+                    "SELECT id FROM org_node WHERE tenant_id = ? AND deleted_at = 0 "
+                            + "AND id NOT IN (?, ?, ?) "
+                            + "AND CHAR_LENGTH(ancestors) - CHAR_LENGTH(REPLACE(ancestors, ',', '')) = ? "
+                            + "ORDER BY id LIMIT ?",
+                    Long.class, TENANT_ID, ROOT, PARK_A, PARK_B, depth, n);
+            if (ids.size() >= n) {
+                return ids;
+            }
+        }
+        throw new IllegalStateException("压测树里凑不出 " + n + " 棵互不嵌套的子树");
     }
 
     /** 取一条<b>互相嵌套</b>的祖先链：每个都是下一个的祖先。 */
