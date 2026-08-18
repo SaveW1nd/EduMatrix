@@ -39,10 +39,10 @@ public interface OrgNodeMapper extends BaseMapper<OrgNode> {
     // =====================================================================
 
     /**
-     * <b>步骤 1</b>：按 id 升序对被移动节点与目标父节点加行锁。
+     * <b>步骤 1</b>：对 {@code ids} 里的行按 <b>id 升序</b>加行锁。
      *
      * <pre>
-     * SELECT ... FROM org_node WHERE id IN (movingId, targetParentId) ORDER BY id FOR UPDATE;
+     * SELECT ... FROM org_node WHERE id IN (...) ORDER BY id FOR UPDATE;
      * </pre>
      *
      * <p><b>{@code ORDER BY id} 是防死锁的唯一手段</b>（§3.1.3 硬要求 2、00-通用约定 §7.5）：
@@ -53,11 +53,21 @@ public interface OrgNodeMapper extends BaseMapper<OrgNode> {
      * 都不会回来。调用方据此判 {@code 10101}（§3.4 校验 1），三种成因<b>不区分</b>
      * ——不暴露存在性。
      *
-     * <p><b>为什么锁两行就够</b>：移动改写的是「被移动节点自身」与「两个父节点的计数」，
-     * 而子树的 {@code ancestors} 重算是一条前缀 UPDATE，它自己会锁住命中的那批行。
-     * 真正需要防的是「两个事务基于各自读到的旧 {@code ancestors} 分别重算」，
-     * 锁住这两行即可切断该竞态 —— 成环校验的输入（{@code targetParent.ancestors}）
-     * 正是这里锁住的那一行。
+     * <h2>⚠ 锁<b>哪些行</b>不由本方法决定，由 {@code NodeMoveService#lockIds} 决定</h2>
+     * <p>本方法只保证「给什么就按 id 升序锁什么」。集合的构成与完整论证<b>全部在
+     * {@code NodeMoveService#lockIds} 的注释里</b>，不要在这里推断。
+     *
+     * <p><b>它不是「被移动节点 + 目标父」两行</b>。02-数据库设计 §3.1.3 的模板步骤 1
+     * 写的是那两行，但同一模板的步骤 6 还要写<b>旧父</b>与<b>两条祖先链</b> ——
+     * 那些行不在被排序的集合里。<b>实测：只锁两行时 10 并发交叉移动 6/10 被判死锁</b>，
+     * {@code SHOW ENGINE INNODB STATUS} 的环里正是 {@code student_count} 的祖先链 UPDATE
+     * 与旧父的 {@code child_count} UPDATE。所以调用方传进来的是
+     * <b>本事务全部点写入行</b>的并集。
+     *
+     * <p>（此处曾写着「为什么锁两行就够」的一段论证，<b>那段论证是错的，已被上面的实测推翻</b>。
+     * 它错在只考虑了「两个事务基于各自读到的旧 {@code ancestors} 分别重算」这一个竞态，
+     * 漏掉了步骤 6 的冗余计数写入。留这句话在这里，是因为<b>Mapper 方法签名上方是后来者
+     * 最先读到的位置</b>——不点破的话，下一个人会照着那段旧论证去"简化" {@code lockIds}。）
      */
     @Select("<script>"
             + "SELECT id, parent_id AS parentId, ancestors, node_name AS nodeName, "

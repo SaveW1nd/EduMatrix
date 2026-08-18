@@ -53,6 +53,15 @@ public interface NodeGrantScopeMapper {
      * <p>（这与「清 {@code node:anc:*} 必须等提交」<b>不矛盾</b>：那件事要让
      * <b>别的连接</b>看到新树，本条只要<b>自己</b>看到。）
      *
+     * <h2>有效期口径与 {@link #selectGrantedResourceStat} <b>逐字相同</b></h2>
+     * <p>两端都判、两端都放行 {@code NULL}：{@code valid_start IS NULL} 表示立即生效、
+     * {@code valid_end IS NULL} 表示永久有效（DDL 列注释）。
+     *
+     * <p><b>漏判 {@code valid_start} 的后果</b>：一条<b>尚未生效</b>的未来授权会被算进
+     * {@code outOfScopeGrantCount} 并出现在清单里 —— 操作者看到一条「现在根本还用不了」的授权
+     * 被列为待办，而接口返回 200、没有任何报错。同一个 Mapper 里两条查询用两套有效期口径，
+     * 是这类偏差最容易长出来的地方，所以<b>这两条必须一起改</b>。
+     *
      * @param movingNodeId 被移动节点（它自己持有的授权也要算）
      * @param prefix       移动<b>之后</b>被移动节点的自身路径前缀
      */
@@ -63,6 +72,7 @@ public interface NodeGrantScopeMapper {
             + "  JOIN org_node n ON n.id = g.target_node_id AND n.deleted_at = 0 "
             + "  LEFT JOIN sys_user u ON u.id = g.grant_by AND u.deleted_at = 0 "
             + " WHERE g.deleted_at = 0 "
+            + "   AND (g.valid_start IS NULL OR g.valid_start <= NOW()) "
             + "   AND (g.valid_end IS NULL OR g.valid_end > NOW()) "
             + "   AND (n.id = #{movingNodeId} "
             + "        OR n.ancestors = #{prefix} OR n.ancestors LIKE CONCAT(#{prefix}, ',%'))")
