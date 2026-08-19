@@ -2,22 +2,53 @@
 # 本地开发依赖：MySQL 8 + Redis 7
 #
 # 【端口为什么不是 3306 / 6379】这台机器上宿主机的 3306 与 6379 已被其他项目的容器占用，
-# 故本项目一律用 13306 / 16380，避免与它们互相踢。
+# 故本项目默认一律用 13306 / 16380，避免与它们互相踢。
 #
-# 用法：
+# 用法（默认那一套，行为与以前完全一致）：
 #   docker compose -f deploy/docker-compose.dev.yml up -d
 #   docker compose -f deploy/docker-compose.dev.yml down          # 停止，保留数据
 #   docker compose -f deploy/docker-compose.dev.yml down -v       # 连数据卷一起删
 #
-# 【库名钉死 edumatrix】Flyway 初始基线自带 CREATE DATABASE / USE edumatrix，
-# 库名不一致会让表与 flyway_schema_history 分家且不报错。这里预先建好同名库。
 # ============================================================================
-name: edumatrix-dev
+# 【⚠ 本机同时有第二个 worktree 在跑 IT 时，必须各起各的一套】
+# ============================================================================
+# 起自己那一套（三行）：
+#   export EDUMATRIX_DEV_SUFFIX=w2 EDUMATRIX_MYSQL_PORT=13307 EDUMATRIX_REDIS_PORT=16381
+#   docker compose -f deploy/docker-compose.dev.yml up -d
+#   cd backend && mvn clean verify #       -Dspring.datasource.url='jdbc:mysql://127.0.0.1:13307/edumatrix?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai&createDatabaseIfNotExist=true' #       -Dspring.data.redis.port=16381
+#   （或者更省事：export EDUMATRIX_TEST_MYSQL_PORT=13307 EDUMATRIX_TEST_REDIS_PORT=16381
+#     —— application-test.yml 的端口就是从这两个环境变量取的，见那个文件的头注释）
+#
+# 【不隔离的后果，两层，都表现为「别人的改动让你的分支莫名其妙地红」】
+#   ① 行级：全部 IT 夹具往 sys_user / sys_user_role 插的是【固定主键】，
+#      两个构建同时 seed() 必然撞 `Duplicate entry ... for PRIMARY`。实测复现过。
+#   ② schema 级：Flyway 迁移是【按库累积】的。别的分支跑一次，
+#      它那条新迁移就永久留在你的库里，而你的分支没有那个文件——
+#      表现是菜单/权限计数类断言集体红，而你一行代码都没改。实测发生过：
+#      模块 10 的 V202608200000 装进了共享库，本分支 18 条 IT 因此红。
+#   两种都不报「你们撞了」，只报一个看起来像自己代码有问题的失败。
+#
+# 【隔离维度是端口，不是库名 —— 换库名走不通】
+#   基线 V202608120000 里有 `CREATE DATABASE IF NOT EXISTS edumatrix;` 与 `USE edumatrix;`，
+#   而基线是【冻结内容】（契约 §7.3：已发布脚本永不修改）。
+#   把 flyway.schemas 改成别的名字，Flyway 连上去跑基线时那句 USE 会把会话切走，
+#   结果是 41 张表建到 edumatrix、flyway_schema_history 落在新库，
+#   【两边分家且不报错】。所以每套容器里的库都仍然叫 edumatrix，靠端口分开。
+#
+# 【卷也是分开的】卷名由 compose 项目名（name:）加前缀，
+#   而项目名带了 EDUMATRIX_DEV_SUFFIX —— 两套容器不会共用同一个数据卷。
+#   确认方法：docker volume ls | grep edumatrix
+#
+# 【三个变量都用 ${VAR:+-${VAR}} 而不是 ${VAR:-0}】不设变量时项目名、容器名、卷名
+#   与改动前【逐字一致】（实测 docker compose config 确认）。用 :-0 的话默认会变成
+#   edumatrix-dev-0，已有容器变孤儿、卷重建 —— 那就不叫"行为完全不变"了。
+# ============================================================================
+name: edumatrix-dev${EDUMATRIX_DEV_SUFFIX:+-${EDUMATRIX_DEV_SUFFIX}}
 
 services:
   mysql:
     image: mysql:8.0
-    container_name: edumatrix-mysql
+    container_name: edumatrix-mysql${EDUMATRIX_DEV_SUFFIX:+-${EDUMATRIX_DEV_SUFFIX}}
     restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: edumatrix_root
@@ -36,7 +67,8 @@ services:
       - --slow-query-log-file=/var/lib/mysql/slow.log
       - --log-queries-not-using-indexes=OFF
     ports:
-      - "13306:3306"
+      # 【默认值不许变】不设环境变量的人行为必须与以前完全一致
+      - "${EDUMATRIX_MYSQL_PORT:-13306}:3306"
     volumes:
       - mysql-data:/var/lib/mysql
     healthcheck:
@@ -47,11 +79,11 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: edumatrix-redis
+    container_name: edumatrix-redis${EDUMATRIX_DEV_SUFFIX:+-${EDUMATRIX_DEV_SUFFIX}}
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
     ports:
-      - "16380:6379"
+      - "${EDUMATRIX_REDIS_PORT:-16380}:6379"
     volumes:
       - redis-data:/data
     healthcheck:
