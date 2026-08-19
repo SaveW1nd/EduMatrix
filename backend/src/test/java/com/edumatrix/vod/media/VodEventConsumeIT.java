@@ -281,4 +281,61 @@ class VodEventConsumeIT extends CourseIntegrationTestBase {
                 Long.class, action);
         return n != null && n > 0;
     }
+    // =====================================================================
+    // 异步冗余刷新（§7.2 规则 9）：断言冗余值【真的变了】，不是断言「提交了任务」
+    // =====================================================================
+
+    /**
+     * 转码成功后，引用该媒资的课时 {@code duration} 与所属课程 {@code total_duration}
+     * <b>真的被刷新</b>。
+     *
+     * <h2>为什么断言的是「值变了」而不是「任务提交了」</h2>
+     * <p>异步线程<b>不继承</b>租户上下文；Runnable 里漏了 {@code runWithTenant} 的表现是
+     * ——任务照样提交、照样跑、异常被吞成一条没人看的 ERROR，而<b>冗余值一动不动</b>。
+     * 断言「提交了任务」对这种失败<b>完全无感</b>。
+     *
+     * <p><b>变异验证</b>：去掉 {@code VodEventConsumeService#refreshCountersAsync} 里的
+     * {@code TenantHelper.runWithTenant(...)} → 本条必红（输出见提交说明）。
+     * 这是「漏了就静默不发生」唯一能被机器发现的形态。
+     */
+    @Test
+    @DisplayName("§7.2 规则 9 异步刷新：crs_lesson.duration 与 crs_course.total_duration 真的变了")
+    void asyncRefreshActuallyUpdatesRedundantColumns() throws Exception {
+        long lessonId = 1968000000000004501L;
+        courseFixtures.lesson(lessonId, CourseFixtures.C_ROOT, 0L, 1,
+                CourseFixtures.VIDEO_TRANSCODING, null, 0, 1, CourseFixtures.TENANT_ID);
+        setStatus(CourseFixtures.VIDEO_TRANSCODING, 1);
+        cloud.oneEncryptedHls("52.233433");        // → ceil = 53 秒
+
+        queue.offer("r-refresh", transcodeComplete(FILE_ID_TRANSCODING, "success"));
+        consumeService.consumeOnce();
+
+        // 异步：轮询等它跑完（不 sleep 一个拍脑袋的固定值）
+        waitUntil(() -> lessonDuration(lessonId) == 53);
+
+        assertEquals(53, lessonDuration(lessonId),
+                "课时 duration 没被刷新 —— 异步 Runnable 里若漏了 runWithTenant，"
+                        + "租户插件取不到租户会直接抛，而异常被吞成一条没人看的 ERROR");
+        assertEquals(53, courseTotalDuration(CourseFixtures.C_ROOT),
+                "所属课程 total_duration 同样要被全量重算回来");
+    }
+
+    private void waitUntil(java.util.function.BooleanSupplier condition) throws Exception {
+        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+        while (!condition.getAsBoolean() && System.nanoTime() < deadline) {
+            Thread.sleep(20);
+        }
+    }
+
+    private int lessonDuration(long lessonId) {
+        Integer d = jdbcTemplate.queryForObject(
+                "SELECT duration FROM crs_lesson WHERE id = ?", Integer.class, lessonId);
+        return d == null ? -1 : d;
+    }
+
+    private int courseTotalDuration(long courseId) {
+        Integer d = jdbcTemplate.queryForObject(
+                "SELECT total_duration FROM crs_course WHERE id = ?", Integer.class, courseId);
+        return d == null ? -1 : d;
+    }
 }

@@ -59,7 +59,23 @@ public class VodEventConsumeService {
 
     private static final Logger log = LoggerFactory.getLogger(VodEventConsumeService.class);
 
-    /** 单轮预算：剩余不够就停手，消息留在队列下轮再来。没有它，「卡死」是无界的。 */
+    /**
+     * <b>整轮</b>预算 —— 不是每条。剩余不够就停手，未处理的消息留在队列下轮再来。
+     *
+     * <h2>它与不可见时长是两个闸，量级差一个数量级</h2>
+     * <table border="1">
+     *   <caption>8s 是自设软闸，60s 才是真悬崖</caption>
+     *   <tr><th>闸</th><th>值</th><th>从什么时候起算</th><th>撞上了会怎样</th></tr>
+     *   <tr><td>本预算（软）</td><td>8s</td><td>本轮开始</td>
+     *       <td>停手、剩余消息<b>不删</b>留到下一轮 —— <b>安全侧</b>，只是慢</td></tr>
+     *   <tr><td>不可见时长（硬）</td><td><b>60s</b>（需方按契约 §1 上线前置第 2 条设，已核实队列配置）</td>
+     *       <td><b>{@code receive} 那一刻，对整批 16 条同时起算</b></td>
+     *       <td>未删的消息重新可见、被下一轮<b>重复消费</b>。有 CAS 幂等兜底不至于写错数据，
+     *           但会白跑一次 {@code GetPlayInfo}</td></tr>
+     * </table>
+     * <p><b>「对整批同时起算」是这里最容易读错的一点</b>：不是每条各有 60s，
+     * 是整批从取到手那一刻共用 60s。所以软闸留了 7 倍余量。
+     */
     private static final long ROUND_BUDGET_MILLIS = 8000L;
 
     /** 孤儿成因标签 —— 用 {@code {reason}} 而不是新造指标名（契约 §7.1 的 11 个名字是穷举）。 */
@@ -75,6 +91,7 @@ public class VodEventConsumeService {
     private final CourseCounterRefresher counterRefresher;
     private final OperLogWriter operLogWriter;
     private final MeterRegistry meterRegistry;
+    private final java.util.concurrent.Executor refreshExecutor;
 
     public VodEventConsumeService(VodEventSource eventSource,
                                   VodEventLookupMapper lookupMapper,
@@ -82,7 +99,10 @@ public class VodEventConsumeService {
                                   VodPlayInfoResolver playInfoResolver,
                                   CourseCounterRefresher counterRefresher,
                                   OperLogWriter operLogWriter,
-                                  MeterRegistry meterRegistry) {
+                                  MeterRegistry meterRegistry,
+                                  @org.springframework.beans.factory.annotation.Qualifier(
+                                          com.edumatrix.common.config.SchedulerConfig.VOD_REFRESH_EXECUTOR)
+                                  java.util.concurrent.Executor refreshExecutor) {
         this.eventSource = eventSource;
         this.lookupMapper = lookupMapper;
         this.videoMapper = videoMapper;
@@ -90,6 +110,7 @@ public class VodEventConsumeService {
         this.counterRefresher = counterRefresher;
         this.operLogWriter = operLogWriter;
         this.meterRegistry = meterRegistry;
+        this.refreshExecutor = refreshExecutor;
         registerGauges();
     }
 
@@ -289,27 +310,52 @@ public class VodEventConsumeService {
     }
 
     /**
-     * 冗余刷新<b>必须走 {@code CourseCounterRefresher}</b>（04 §B 模块 09 接管事项第 2 条）：
-     * {@code crs_lesson.duration} 与 {@code crs_course.total_duration} 的写入点全库只有一处；
-     * 而 {@code vod} 领域直写 {@code crs_lesson} 会直接命中约定检查③。
+     * 冗余刷新 —— <b>异步</b>，且<b>必须走 {@code CourseCounterRefresher}</b>
+     * （04 §B 模块 09 接管事项第 2 条）：{@code crs_lesson.duration} 与
+     * {@code crs_course.total_duration} 的写入点全库只有一处；而 {@code vod} 领域
+     * 直写 {@code crs_lesson} 会直接命中约定检查③。
      *
-     * <p><b>⚠ 本轮同步调用，不是异步</b>。§7.2 规则 9 要求「另发异步任务」，理由是扇出会拉长
-     * 单条消息处理时间进而逼高不可见时长。而异步线程<b>不继承租户上下文</b>，
-     * 那个 Runnable 里必须自己再 {@code runWithTenant} —— 漏了就是
-     * {@code requireTenantId()} 抛异常、冗余刷新<b>静默不发生</b>。
-     * 本轮先同步（单轮预算 8s 已经收着扇出），把「异步 + 上下文重设」登记为待办：
-     * 单条消息的处理耗时要与不可见时长一起定（契约 §1 上线前置第 2 条），
-     * 那个值需方尚未给，现在改成异步等于凭空定一个。
+     * <h2>⚠ 异步线程<b>不继承</b>租户上下文 —— 那个 {@code runWithTenant} 不是保险，是必需</h2>
+     * <p>{@code TenantHelper} 的显式租户是 {@code ThreadLocal}；提交到别的线程之后它是空的，
+     * 而租户插件拼条件走的是 {@code requireTenantId()}，取不到<b>直接抛</b>。
+     * 漏了这一句的表现是：媒资状态推进成功、接口一切正常，而
+     * <b>冗余刷新静默不发生</b>（异常被下面那个 catch 吞成一条 ERROR，
+     * 而没有人在看那条 ERROR）—— 课时时长永远停在旧值。
+     * {@code VodEventConsumeIT#asyncRefreshActuallyUpdatesRedundantColumns} 用
+     * 「断言冗余值<b>真的变了</b>」把它钉住，而不是断言「提交了任务」。
+     *
+     * <h2>删消息的时刻：<b>在提交异步任务之前</b>，不等它完成</h2>
+     * <p>契约 §2.8 的「先落库成功再删消息」保护的是<b>状态推进</b>那次写入 ——
+     * 那一次已经在 {@code advance} 里 CAS 成功了。冗余刷新是它<b>之后</b>的第二件事，
+     * 不在同一条保证里。
+     *
+     * <p><b>那么异步任务失败会怎样，为什么可以接受</b>：冗余值与真实值不一致，
+     * 而<b>接口返回 200、字段齐全、数字是错的</b>。这确实是本项目的 1 号失败模式，
+     * 但它<b>自愈</b>：{@code recountRedundant} 是<b>全量</b> {@code COUNT} / {@code SUM}
+     * 而不是增量 ±1，所以<b>漏一次会在下一次任何课时变更时被重算回来</b> ——
+     * 这正是 03-03 §7.2 第 862 行那段订正给出的同一条论证。
+     *
+     * <p><b>反过来「等异步完成再删消息」不成立</b>：那等于把异步又变回同步
+     * （消费线程要等），§7.2 第 1585 行要避免的扇出耦合原样回来，白改一场。
+     *
+     * <p><b>代价如实写下</b>：自愈的触发条件是「下一次课时变更」，而一个媒资可能
+     * 很久没有课时变更。也就是说这段时间里 {@code crs_course.total_duration} 会偏小。
+     * 影响面是管理端列表上的一个数字，不影响播放与进度判定（那两条读 {@code crs_lesson.duration}
+     * 与 {@code vod_video.duration}）。<b>不为它加重试</b>：重试队列本身又是一个要维护的东西，
+     * 而收益只是让一个展示数字早几天正确。
      */
     private void refreshCountersAsync(VodVideoLookup row, int newDuration) {
-        try {
-            counterRefresher.refreshByVideo(row.id(), newDuration);
-        } catch (RuntimeException e) {
-            // 刷新失败不回滚状态推进：媒资本身已经可播，冗余计数下次任何课时变更时自愈
-            //（CourseCounterRefresher 是全量重算，不是增量 ±1）
-            log.error("冗余刷新失败 videoId={} duration={}（媒资状态已推进，不回滚）",
-                    row.id(), newDuration, e);
-        }
+        Long tenantId = row.tenantId();
+        refreshExecutor.execute(() -> {
+            try {
+                // ⚠ 这一句删掉 = 冗余刷新静默不发生。见方法注释与那条 IT 的变异验证
+                TenantHelper.runWithTenant(tenantId,
+                        () -> counterRefresher.refreshByVideo(row.id(), newDuration));
+            } catch (RuntimeException e) {
+                log.error("冗余刷新失败 videoId={} duration={} tenantId={}（媒资状态已推进，不回滚；"
+                        + "全量重算会在下一次课时变更时自愈）", row.id(), newDuration, tenantId, e);
+            }
+        });
     }
 
     /** 孤儿：三件事一件都不能少（契约 §2.8 规则 3「必须有人看见」）+ 删消息。 */

@@ -2,7 +2,10 @@ package com.edumatrix.common.config;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
+
+import com.edumatrix.common.trace.TraceIdTaskDecorator;
 
 /**
  * 调度线程池 —— <b>两个，互相隔离</b>。
@@ -82,6 +85,46 @@ public class SchedulerConfig {
     @Bean(VOD_EVENT_SCHEDULER)
     public ThreadPoolTaskScheduler vodEventTaskScheduler() {
         return build(1, "vod-event-");
+    }
+
+    /** 转码事件的冗余刷新专用执行器的 Bean 名。 */
+    public static final String VOD_REFRESH_EXECUTOR = "vodRefreshExecutor";
+
+    /**
+     * 冗余刷新专用执行器（模块 09，03-03 §7.2 规则 9「冗余刷新必须异步」）。
+     *
+     * <h2>为什么必须与消费线程分开</h2>
+     * <p>§7.2 第 1585 行逐字：「一个视频可被 N 个课时引用……把这串扇出放进消费事务会
+     * <b>显著拉长单条消息的处理时间，进而逼高不可见时长</b>」。这是一条<b>机制</b>要求：
+     * 扇出与状态推进耦合在一条链路上，扇出一大就顶到不可见时长。
+     * 实测当前规模下同步撑得住（M ≈ 145 才会碰到单轮 8s 软闸），
+     * <b>但「今天撑得住」不等于「机制上不冲突」</b> —— 取分册。
+     *
+     * <h2>{@code TraceIdTaskDecorator} 不是可选项</h2>
+     * <p>不包的话 traceId 断在这条异步边界上（契约 §7.1：traceId 要经 MDC 贯穿
+     * 日志、异步线程池、XXL-Job 与 MQ）。冗余刷新出问题时，日志里那条 ERROR
+     * 会与触发它的那条消息<b>失去关联</b>。
+     *
+     * <h2>队列满时 {@code CallerRunsPolicy}：退化成同步，不丢任务</h2>
+     * <p>丢任务 = 冗余值永远不刷新且无人知道；而退化成同步只是把压力顶回消费线程，
+     * 那时单轮 8s 预算会把它挡住、消息留到下一轮（安全侧）。
+     */
+    @Bean(VOD_REFRESH_EXECUTOR)
+    public ThreadPoolTaskExecutor vodRefreshExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(1);
+        executor.setMaxPoolSize(2);
+        executor.setQueueCapacity(256);
+        executor.setThreadNamePrefix("vod-refresh-");
+        // 与 TraceConfig 里那个异步执行器同一写法：TraceIdTaskDecorator 不是 Bean，就地 new。
+        // 它无状态；做成 Bean 只会多一个装配点，而那正是刚才让本类在测试上下文里
+        // 起不来的原因（报错指向"互斥性"，实际是缺一个与被测无关的依赖）
+        executor.setTaskDecorator(new TraceIdTaskDecorator());
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.setAwaitTerminationSeconds(20);
+        executor.setRejectedExecutionHandler(
+                new java.util.concurrent.ThreadPoolExecutor.CallerRunsPolicy());
+        return executor;
     }
 
     /**
