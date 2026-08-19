@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.edumatrix.common.operlog.OperLog;
 import com.edumatrix.common.response.R;
 import com.edumatrix.system.menu.dto.MenuCreateReq;
 import com.edumatrix.system.menu.dto.MenuUpdateReq;
@@ -59,6 +60,7 @@ public class SysMenuController {
     /** §4.2 创建菜单。仅 {@code super_admin}。 */
     @PostMapping
     @SaCheckPermission("system:menu:add")
+    @OperLog(module = "菜单管理", action = "创建菜单")
     public R<MenuCreatedVO> create(@Valid @RequestBody MenuCreateReq req) {
         return R.ok(sysMenuService.create(req));
     }
@@ -66,6 +68,7 @@ public class SysMenuController {
     /** §4.3 修改菜单。仅 {@code super_admin}；{@code menuType} 创建后不可修改。 */
     @PutMapping("/{id}")
     @SaCheckPermission("system:menu:edit")
+    @OperLog(module = "菜单管理", action = "修改菜单")
     public R<Void> update(@PathVariable("id") Long id, @Valid @RequestBody MenuUpdateReq req) {
         sysMenuService.update(id, req);
         return R.ok();
@@ -74,6 +77,7 @@ public class SysMenuController {
     /** §4.4 删除菜单（逻辑删除）。仅 {@code super_admin}；有子节点或被角色引用 → {@code 10009}。 */
     @DeleteMapping("/{id}")
     @SaCheckPermission("system:menu:remove")
+    @OperLog(module = "菜单管理", action = "删除菜单")
     public R<Void> delete(@PathVariable("id") Long id) {
         sysMenuService.delete(id);
         return R.ok();

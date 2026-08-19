@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.edumatrix.common.response.PageResult;
+import com.edumatrix.common.operlog.OperLog;
 import com.edumatrix.common.response.R;
 import com.edumatrix.system.role.dto.RoleCreateReq;
 import com.edumatrix.system.role.dto.RoleMenuAssignReq;
@@ -67,6 +68,7 @@ public class SysRoleController {
     /** §3.3 创建角色。{@code roleKey} 不得使用预置值；{@code menuIds} 受防提权约束。 */
     @PostMapping
     @SaCheckPermission("system:role:add")
+    @OperLog(module = "角色管理", action = "创建角色")
     public R<RoleCreatedVO> create(@Valid @RequestBody RoleCreateReq req) {
         return R.ok(sysRoleService.create(req));
     }
@@ -74,6 +76,7 @@ public class SysRoleController {
     /** §3.4 修改角色。预置角色对 {@code org_admin} 只读 → 400。 */
     @PutMapping("/{id}")
     @SaCheckPermission("system:role:edit")
+    @OperLog(module = "角色管理", action = "修改角色")
     public R<Void> update(@PathVariable("id") Long id, @Valid @RequestBody RoleUpdateReq req) {
         sysRoleService.update(id, req);
         return R.ok();
@@ -82,6 +85,7 @@ public class SysRoleController {
     /** §3.5 删除角色（逻辑删除）。预置角色<b>任何人不可删</b> → 400；被引用 → {@code 10008}。 */
     @DeleteMapping("/{id}")
     @SaCheckPermission("system:role:remove")
+    @OperLog(module = "角色管理", action = "删除角色")
     public R<Void> delete(@PathVariable("id") Long id) {
         sysRoleService.delete(id);
         return R.ok();
@@ -90,6 +94,7 @@ public class SysRoleController {
     /** §3.6 为角色分配菜单（全量覆盖）。预置角色对 {@code org_admin} 只读 → 400；防提权 → 400。 */
     @PutMapping("/{id}/menus")
     @SaCheckPermission("system:role:assignMenu")
+    @OperLog(module = "角色管理", action = "为角色分配菜单")
     public R<Void> assignMenus(@PathVariable("id") Long id,
                                @Valid @RequestBody RoleMenuAssignReq req) {
         sysRoleService.assignMenus(id, req);

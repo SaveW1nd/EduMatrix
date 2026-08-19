@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.edumatrix.common.response.PageResult;
+import com.edumatrix.common.operlog.OperLog;
 import com.edumatrix.common.response.R;
 import com.edumatrix.system.tenant.dto.TenantCreateReq;
 import com.edumatrix.system.tenant.dto.TenantPageQuery;
@@ -77,6 +78,7 @@ public class SysTenantController {
      */
     @PostMapping
     @SaCheckPermission("system:tenant:add")
+    @OperLog(module = "租户管理", action = "开通机构", saveParams = false)
     public R<TenantCreatedVO> create(@Valid @RequestBody TenantCreateReq req) {
         return R.ok(tenantProvisionService.create(req));
     }
@@ -84,6 +86,7 @@ public class SysTenantController {
     /** §5.4 修改租户。改机构名同步刷机构根节点的 {@code node_name}；不改到期时间与状态。 */
     @PutMapping("/{id}")
     @SaCheckPermission("system:tenant:edit")
+    @OperLog(module = "租户管理", action = "修改租户")
     public R<Void> update(@PathVariable("id") Long id, @Valid @RequestBody TenantUpdateReq req) {
         sysTenantService.update(id, req);
         return R.ok();
@@ -92,6 +95,7 @@ public class SysTenantController {
     /** §5.5 删除租户（逻辑删除）。仅允许删已停用的租户；机构根节点及整棵子树一并逻辑删除。 */
     @DeleteMapping("/{id}")
     @SaCheckPermission("system:tenant:remove")
+    @OperLog(module = "租户管理", action = "删除租户")
     public R<Void> delete(@PathVariable("id") Long id) {
         sysTenantService.delete(id);
         return R.ok();
@@ -100,6 +104,7 @@ public class SysTenantController {
     /** §5.6 租户续期。响应 {@code msg} 是「续期成功」——§5.6 的响应示例逐字如此。 */
     @PutMapping("/{id}/renew")
     @SaCheckPermission("system:tenant:renew")
+    @OperLog(module = "租户管理", action = "租户续期")
     public R<TenantRenewedVO> renew(@PathVariable("id") Long id,
                                     @Valid @RequestBody TenantRenewReq req) {
         return R.ok("续期成功", sysTenantService.renew(id, req));
@@ -108,6 +113,7 @@ public class SysTenantController {
     /** §5.7 启用/停用租户。停用后该租户全员在线 Token 作废，登录返回 {@code 10007}。 */
     @PutMapping("/{id}/status")
     @SaCheckPermission("system:tenant:status")
+    @OperLog(module = "租户管理", action = "启用/停用租户")
     public R<Void> changeStatus(@PathVariable("id") Long id,
                                 @Valid @RequestBody TenantStatusReq req) {
         sysTenantService.changeStatus(id, req);
