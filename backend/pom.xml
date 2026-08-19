@@ -35,6 +35,7 @@
         <xxl-job.version>2.4.2</xxl-job.version>
         <aliyun-oss.version>3.17.4</aliyun-oss.version>
         <poi.version>5.2.5</poi.version>
+        <owasp-html-sanitizer.version>20260313.1</owasp-html-sanitizer.version>
         <!-- flyway / mysql-connector-j / micrometer 的版本由 spring-boot-starter-parent 统一管理，此处不写死 -->
     </properties>
 
@@ -129,6 +130,30 @@
             <groupId>com.xuxueli</groupId>
             <artifactId>xxl-job-core</artifactId>
             <version>${xxl-job.version}</version>
+        </dependency>
+
+        <!-- ============ 富文本净化：PRD F2-2 规则 1（模块 08）============ -->
+        <!--
+          OWASP Java HTML Sanitizer —— 图文资料 content 的服务端 XSS 白名单过滤。
+
+          【为什么要一个库，而不是自己写正则】
+          正则剥 <script> 拦不住 <img onerror=>、<svg onload=>、href="javascript:"、
+          属性里的 HTML 实体编码与畸形标签闭合。这是解析问题，不是匹配问题。
+
+          【为什么是它而不是 jsoup 的 Safelist】
+          两者都是默认拒绝模型，都能做白名单。选它的理由是它只做这一件事：
+          policy 是不可变对象、可作为常量复用（jsoup 的 Cleaner 要现建 Document），
+          且属性值谓词（.matching(Pattern)）是一等公民 ——
+          D-3 要求 <img src> 只能是 edumxfile:{fileId} 占位，正好用它表达。
+
+          【契约 §1 技术栈基线没有禁止新增工具库】那张表是"层"级别的选型
+          （框架/权限/库/缓存/前端/播放器/视频云/加密/ID），不是依赖白名单。
+          先例：spring-security-crypto 也是为了一个算法单独引入的。
+        -->
+        <dependency>
+            <groupId>com.googlecode.owasp-java-html-sanitizer</groupId>
+            <artifactId>owasp-java-html-sanitizer</artifactId>
+            <version>${owasp-html-sanitizer.version}</version>
         </dependency>
 
         <!-- ============ 可观测性：契约 §7.1 十项指标 → Micrometer → Prometheus ============ -->

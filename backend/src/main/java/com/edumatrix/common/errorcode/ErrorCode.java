@@ -133,7 +133,7 @@ public enum ErrorCode {
 
     // ========================================================================
     // §9.3 业务错误码 2xxxx —— 课程与视频
-    // （20007、20011~20012、20021~20099 为预留号段）
+    // （20011~20012、20021~20099 为预留号段；20007 已于模块 08 启用，见下）
     // ========================================================================
     PLAY_AUTH_INVALID(20001, "播放凭证过期或无效", Layer.BUSINESS),
     /** 间隔 <8s 或参数非法，本次不计入；≥8s 均有效、单次封顶计入 15s，超窗不补算不报错 */
@@ -142,6 +142,16 @@ public enum ErrorCode {
     COURSE_NOT_FOUND(20004, "课程不存在或不可用", Layer.BUSINESS),
     COURSE_STATUS_NOT_ALLOWED(20005, "课程当前状态不允许该操作", Layer.BUSINESS),
     CHAPTER_LEVEL_INVALID(20006, "章节层级不合法", Layer.BUSINESS),
+    /**
+     * 模块 08 启用的预留号位（G 定案）。
+     *
+     * <p>03-03 §3.3 规则 1「{@code chapterId} 必须属于目标课程」<b>没有给错误码</b>，
+     * 而该接口的错误码栏（{@code 20004} / {@code 20008} / {@code 20009} / {@code 20019}）
+     * 一个都不匹配。<b>不把 {@code 20006} 扩义到「课时挂载点非法」</b> ——
+     * 一致性检查 C3 校验的是「同码同义」且作用于全局，一处扩义会改变所有引用处的含义。
+     * 故取 §9.3 明确登记的预留号段里的 {@code 20007}。已登记 <b>F-46</b>。
+     */
+    CHAPTER_NOT_FOUND_IN_COURSE(20007, "章节不存在或不属于该课程", Layer.BUSINESS),
     RELATED_VIDEO_UNAVAILABLE(20008, "关联视频不存在或状态不可用", Layer.BUSINESS),
     RELATED_MATERIAL_UNAVAILABLE(20009, "关联图文资料不存在或不可用", Layer.BUSINESS),
     MATERIAL_IN_USE(20010, "图文资料已被课时引用，不可删除", Layer.BUSINESS),
