@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.edumatrix.common.operlog.OperLog;
 import com.edumatrix.common.response.R;
 import com.edumatrix.system.tenant.dto.TenantConfigUpdateReq;
 import com.edumatrix.system.tenant.service.TenantConfigService;
@@ -60,6 +61,7 @@ public class SysTenantConfigController {
      */
     @PutMapping("/{configKey}")
     @SaCheckPermission("system:tenantConfig:edit")
+    @OperLog(module = "租户配置", action = "修改租户配置")
     public R<TenantConfigUpdatedVO> update(@PathVariable("configKey") String configKey,
                                            @Valid @RequestBody TenantConfigUpdateReq req) {
         return R.ok(tenantConfigService.update(configKey, req));

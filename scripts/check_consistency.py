@@ -866,6 +866,86 @@ def check_c18_endpoint_paths():
                        f'第 {i} 行引用了接口目录中不存在的路径：{"/".join(segs)}')
 
 
+# ================================ C19 F 清单编号唯一 + 状态唯一
+
+# 允许出现在 F 行编号后面的状态词。**穷举**——写了别的词会被当成"没有状态"，
+# 而那正是要抓的一种写法退化（下一个人拿"待研究""搁置"当状态，工具看不见）。
+F_STATUS_WORDS = ('未定案', '已定案', '已关闭', '已修正', '原则已定案')
+
+def check_c19_f_registry():
+    """
+    C19 `04-实施计划.md` §E 的 F 清单：同一编号只允许一行、只允许一个状态
+
+    【为什么需要这条 —— 它补的是 C1~C18 的一个完整盲区】
+    十八条检查覆盖 DDL / 枚举 / 错误码 / 字段长度 / 接口计数 / 表清单 /
+    Markdown 健康度 / 禁用词 / 类型绑定 / 锚句 / 平台级行 / 列集合 / 心跳 /
+    端点路径，**没有任何一条管 F 清单**。而 F 清单恰恰是模块 08 / 09 / 11
+    将来要查"还有什么没决"的那份东西。
+
+    【真实缺陷】模块 05 交付时，F-25 在清单里出现了两行且状态互相矛盾：
+    行 1650「**未定案** …切面是模块 05 的交付物，本轮模块 05 被跳过」，
+    行 1658「**✅ 已关闭（模块 05 落地）**」。**未定案那行还排在前面** ——
+    下一个人翻清单找未决项，先读到的是"切面还没做"。
+    而这个矛盾**对所有工具都是隐形的**：18 条检查一条都不看 F 清单，
+    Markdown 也照样渲染。这正是本项目反复点名的「不报错的故障」。
+
+    【三条判定，前两条是 ERROR、第三条只 WARN】
+      ① 同一个 F 编号只允许出现一行；
+      ② 同一个 F 编号只允许有一个状态（`**F-25**<br>**未定案**` 里的"未定案"）；
+      ③ 编号连续性只告警 —— **F-8 是历史缺口，不是错误**（04 §E 已登记），
+         把它判成 ERROR 会让这条检查从第一天起就红，最后没人看。
+
+    【它会不会红 —— 已做变异验证，下面是实测输出】
+      A 复制一行 `F-30`（同号两行、状态相同）：
+        ❌ 1 错误 —— "F-30 在 F 清单里出现 2 行"
+      B 复制 `F-30` 并把状态改成「未定案」（同号两状态，即 F-25 那次的真实形态）：
+        ❌ 2 错误 —— 出现 2 行 + "同时标着 2 个状态：已定案、未定案"
+      C 删掉 `F-30` 制造缺号：
+        ⚠️  0 错误 / 1 警告 —— 缺号只告警，不把 F-8 那类历史缺口判成错误
+      恢复后：✅ 0 错 0 警。
+    """
+    path = os.path.join(DOCS, '04-实施计划.md')
+    text = read(path)
+
+    # F 行形如：| **F-25**<br>**✅ 已关闭（模块 05 落地）** | …
+    #          | **F-1** | …                （早期条目没有状态段）
+    rows = re.findall(r'^\|\s*\*\*(F-\d+)\*\*([^|]*)\|', text, re.M)
+    if not rows:
+        report('ERROR', 'C19', path,
+               'F 清单一行都没扫到 —— 本检查正在空转，请确认 §E 的表格格式是否变了')
+        return
+
+    seen = {}
+    for num, tail in rows:
+        status = None
+        for word in F_STATUS_WORDS:
+            if word in tail:
+                # 取最长匹配（"原则已定案"含"已定案"，不取长的会判成两个状态）
+                if status is None or len(word) > len(status):
+                    status = word
+        seen.setdefault(num, []).append(status)
+
+    for num in sorted(seen, key=lambda n: int(n.split('-')[1])):
+        statuses = seen[num]
+        if len(statuses) > 1:
+            report('ERROR', 'C19', path,
+                   f'{num} 在 F 清单里出现 {len(statuses)} 行 —— '
+                   f'同一编号只允许一行（读清单的人会先读到排在前面的那行）')
+        distinct = {s for s in statuses if s is not None}
+        if len(distinct) > 1:
+            report('ERROR', 'C19', path,
+                   f'{num} 同时标着 {len(distinct)} 个状态：{"、".join(sorted(distinct))} '
+                   f'—— 同一编号只允许一个状态')
+
+    # ③ 连续性只告警：F-8 是历史缺口（04 §E 已登记），不是错误
+    numbers = sorted(int(n.split('-')[1]) for n in seen)
+    gaps = [n for n in range(1, numbers[-1] + 1) if n not in numbers and n != 8]
+    if gaps:
+        report('WARN', 'C19', path,
+               f'F 编号缺号：{", ".join("F-%d" % g for g in gaps)}'
+               f'（F-8 是已登记的历史缺口，不计入）')
+
+
 # ============ C15 心跳请求体签名三处一致（契约 §6.4 / PRD F2-7 / 03-03）
 
 def check_c15_heartbeat_signature():
@@ -1222,6 +1302,7 @@ def main():
         ('C16', check_c16_heartbeat_rule_numbers),
         ('C17', check_c17_json_examples),
         ('C18', check_c18_endpoint_paths),
+        ('C19', check_c19_f_registry),
     ]
     for code, fn in checks:
         if only and code != only:
@@ -1247,6 +1328,7 @@ def main():
         'C16': '心跳校验规则编号 PRD ↔ API 对应',
         'C17': 'JSON 示例内部自洽（nodeType/userType/childCount）',
         'C18': '端点路径存在性（正文引用 ↔ 接口目录）',
+        'C19': 'F 清单编号唯一 + 状态唯一',
     }
     errors = [r for r in results if r[0] == 'ERROR']
     warns = [r for r in results if r[0] == 'WARN']

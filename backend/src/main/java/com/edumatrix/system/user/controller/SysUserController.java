@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.edumatrix.common.response.PageResult;
+import com.edumatrix.common.operlog.OperLog;
 import com.edumatrix.common.response.R;
 import com.edumatrix.system.user.dto.UserCreateReq;
 import com.edumatrix.system.user.dto.UserPageQuery;
@@ -72,6 +73,7 @@ public class SysUserController {
      */
     @PostMapping
     @SaCheckPermission("system:user:add")
+    @OperLog(module = "用户管理", action = "创建用户", saveParams = false)
     public R<UserCreatedVO> create(@Valid @RequestBody UserCreateReq req) {
         return R.ok(sysUserService.create(req));
     }
@@ -79,6 +81,7 @@ public class SysUserController {
     /** §2.3 修改用户。<b>仅 {@code super_admin}</b>；{@code username}/{@code userType}/{@code nodeId} 不可改。 */
     @PutMapping("/{id}")
     @SaCheckPermission("system:user:edit")
+    @OperLog(module = "用户管理", action = "修改用户")
     public R<Void> update(@PathVariable("id") Long id, @Valid @RequestBody UserUpdateReq req) {
         sysUserService.update(id, req);
         return R.ok();
@@ -93,6 +96,7 @@ public class SysUserController {
      */
     @DeleteMapping("/{id}")
     @SaCheckPermission("system:user:remove")
+    @OperLog(module = "用户管理", action = "删除用户")
     public R<Void> delete(@PathVariable("id") Long id) {
         sysUserService.delete(id);
         return R.ok();
@@ -107,6 +111,7 @@ public class SysUserController {
      */
     @PutMapping("/{id}/password/reset")
     @SaCheckPermission("system:user:resetPwd")
+    @OperLog(module = "用户管理", action = "重置密码", saveParams = false)
     public R<PasswordResetVO> resetPassword(@PathVariable("id") Long id,
                                             @Valid @RequestBody UserPasswordResetReq req) {
         PasswordResetVO vo = sysUserService.resetPassword(id, req);
@@ -121,6 +126,7 @@ public class SysUserController {
      */
     @PutMapping("/{id}/status")
     @SaCheckPermission("system:user:status")
+    @OperLog(module = "用户管理", action = "启用/停用用户")
     public R<Void> changeStatus(@PathVariable("id") Long id,
                                 @Valid @RequestBody UserStatusReq req) {
         sysUserService.changeStatus(id, req);

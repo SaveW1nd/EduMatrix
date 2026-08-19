@@ -82,6 +82,24 @@ spring:
   #   接口不接受也不返回时间戳与 ISO8601 带时区格式。
   #   实际的序列化装配在 common/config/JacksonConfig，本处只兜底。
   # --------------------------------------------------------------------------
+  # --------------------------------------------------------------------------
+  # 文件上传（模块 05 / 03-01 §7.1）
+  #
+  # 【必须显式配，否则 10011 这条错误码在大文件上永远不会出现】
+  #   Spring Boot 的默认值是单文件 1MB、单请求 10MB。不改的话，一个 20MB 的 xlsx
+  #   在【进入 Controller 之前】就被 Tomcat 的 multipart 解析器拒掉，
+  #   抛 MaxUploadSizeExceededException → 500，而 03-01 §7.1 要求的是
+  #   10011「文件类型不支持或大小超出限制」。用户看到的是"系统繁忙"而不是"文件太大"。
+  #
+  # 【取 101MB 而不是 100MB】容器层的闸【故意】比业务闸松 1MB：
+  #   业务上限 100MB（03-01 §7.1 逐字）由 FileUploadValidator 判并返回 10011。
+  #   容器闸只作兜底防内存耗尽，两者相等会让 100MB 整的文件由容器先拒、拿不到业务码。
+  # --------------------------------------------------------------------------
+  servlet:
+    multipart:
+      max-file-size: 101MB
+      max-request-size: 101MB
+
   jackson:
     date-format: yyyy-MM-dd HH:mm:ss
     time-zone: Asia/Shanghai
@@ -125,6 +143,32 @@ edumatrix:
     # 00-通用约定 §7.2 只定了 Redis key 与 5 分钟 TTL，没有定义这个值 —— 故可配。
     # 超时返回 HTTP 429 + Retry-After: 1，理由见 common/idempotent/IdempotentAspect 类注释。
     wait-millis: ${IDEMPOTENT_WAIT_MILLIS:1000}
+
+  # ==========================================================================
+  # 文件存储（模块 05）
+  #
+  # 【bucket 非空 → OSS；为空 → 本地磁盘】两个实现的装配条件写在同一个属性上，
+  #   互为反面（common/file/LocalObjectStorage 与 integration/aliyun/OssClient）。
+  #   dev/test 留空走本地盘 —— 集成测试连的是 docker-compose 的 MySQL 与 Redis，没有 OSS。
+  #
+  # 【两个 endpoint 不是冗余】内网 endpoint 供服务端 Put/Get/Delete（同地域不计流量费、
+  #   不出公网）；公网 endpoint 只用来【签名】、不发请求，因为签出来的地址是给浏览器用的。
+  #   签错了会响亮失败（客户端 DNS 解析不到内网域名），不是静默故障。
+  #
+  # 【这里没有"签名有效期"这一项】30 分钟是安全基线不是调优参数
+  #   （00-通用约定 §7.4 / 03-01 §7.3 / 03-05 §4.8 三处同一个数字），
+  #   写死在 common/file/FileConstants.SIGNED_URL_TTL。做成可配等于允许把它调成 24 小时
+  #   而没有任何东西会报错。
+  # ==========================================================================
+  file:
+    # 本地存储根目录，仅 bucket 为空时使用
+    local-root: ${FILE_LOCAL_ROOT:${java.io.tmpdir}/edumatrix-files}
+    oss:
+      bucket: ${ALIYUN_OSS_BUCKET:}
+      internal-endpoint: ${ALIYUN_OSS_INTERNAL_ENDPOINT:}
+      public-endpoint: ${ALIYUN_OSS_PUBLIC_ENDPOINT:}
+      access-key-id: ${ALIYUN_ACCESS_KEY_ID:}
+      access-key-secret: ${ALIYUN_ACCESS_KEY_SECRET:}
 
 # ============================================================================
 # XXL-Job（05-工程结构.md §H：全部任务与 Worker 集中在 com.edumatrix.job）

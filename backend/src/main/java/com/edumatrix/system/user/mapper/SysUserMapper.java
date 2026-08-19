@@ -34,6 +34,25 @@ public interface SysUserMapper extends BaseMapper<SysUser> {
     Long selectNodeIdById(@Param("userId") Long userId);
 
     /**
+     * 按 {@code userId} 取角色档（{@code user_type}：0 超管 1 管理员 2 教师 3 学生，契约 §3）。
+     *
+     * <p><b>模块 05 追加</b>。用途只有一个：03-01 §7.1 上传接口按 {@code bizType} 收窄角色
+     * （{@code answer} 仅学生、{@code import_excel} 仅管理员、
+     * {@code fail_report}/{@code credential_sheet}/{@code export_report} 谁都不行）。
+     * 那三个文件接口按契约 §3.1 边界 0 <b>不加 {@code @SaCheckPermission}</b>，
+     * {@code perms} 只用于 A22 菜单显隐，所以角色判定只能自己查这一列。
+     *
+     * <p><b>为什么加在本类而不是让 {@code system/file} 另开一个 {@code sys_user} Mapper</b>：
+     * 「一张表一个入口」—— 与 {@code org/node/mapper/NodeAccountMapper} 类注释里
+     * 「模块 07 把建人/删人所需的账号读写并入本类，不另开第二个 {@code sys_user} Mapper」
+     * 是同一条纪律。{@code system/file} 与本类同属 {@code system} 域，检查③ 不拦。
+     *
+     * <p>主键点查，命中 {@code PRIMARY}。
+     */
+    @Select("SELECT user_type FROM sys_user WHERE id = #{userId} AND deleted_at = 0")
+    Integer selectUserTypeById(@Param("userId") Long userId);
+
+    /**
      * §2.5 重置密码：写新密文并置 {@code pwd_reset_flag = 1}（下次登录强制改密）。
      *
      * <p>用定向 UPDATE 而不是 {@code updateById(entity)}：与 {@code AuthUserMapper#updatePassword}

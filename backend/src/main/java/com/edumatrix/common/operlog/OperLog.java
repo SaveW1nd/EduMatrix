@@ -11,8 +11,13 @@ import java.lang.annotation.Target;
  *
  * <p><b>注解定义在模块 01（本包），切面实现在模块 05</b>（05-工程结构.md §C2 / §D）。
  * 分开是因为全库从第一天起就要能标注 —— 等模块 05 做完再回头补标，
- * 一定会漏掉前面四个模块的写接口。在切面到位之前，本注解不产生任何行为，
- * 但已标注的位置一个都不用改。
+ * 一定会漏掉前面四个模块的写接口。
+ *
+ * <p><b>切面已于模块 05 到位：{@link OperLogAspect}（F-25 关闭）。</b>
+ * 当时那句「已标注的位置一个都不用改」得到了验证 —— 切面落地时
+ * {@code org} 域已有的 19 处标注<b>一处未改</b>即自动生效。
+ * 写入实现是 {@link OperLogWriter}（全库唯一往 {@code sys_oper_log} 插行的地方），
+ * {@code params} 脱敏在 {@link SensitiveParamMasker}。
  *
  * <p><b>{@code module} / {@code action} 填什么</b>：{@code sys_oper_log} 的 DDL 注释写的是
  * 中文可读值 —— {@code module} 如「学生管理 / 作业管理」，{@code action} 如

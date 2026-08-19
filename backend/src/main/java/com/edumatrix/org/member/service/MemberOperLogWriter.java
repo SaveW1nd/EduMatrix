@@ -2,9 +2,8 @@ package com.edumatrix.org.member.service;
 
 import org.springframework.stereotype.Service;
 
-import com.edumatrix.common.id.IdWorker;
+import com.edumatrix.common.operlog.OperLogWriter;
 import com.edumatrix.common.tenant.TenantHelper;
-import com.edumatrix.org.member.mapper.MemberOperLogMapper;
 
 /**
  * 往 {@code sys_oper_log} 写<b>合规留痕</b>行。模块 07 只写两处，其余一律靠 {@code @OperLog} 注解。
@@ -27,12 +26,12 @@ import com.edumatrix.org.member.mapper.MemberOperLogMapper;
  *       填 0 会是一条假审计记录 —— 与 {@code AuditFieldHandler} 对 {@code create_by} 的取舍同源）。
  * </ol>
  *
- * <h2>与模块 05 将来的切面<b>不重复</b>，因此不必在那时删掉本类的调用点</h2>
+ * <h2>与模块 05 的切面<b>语义不重复</b>，因此模块 05 落地时本类的调用点一处未删</h2>
  * <p>两者的 {@code action} 不同、语义也不同：
  * <table border="1">
  *   <caption>两行的分工</caption>
  *   <tr><th></th><th>写的人</th><th>{@code action}</th><th>记的是什么</th></tr>
- *   <tr><td>操作日志</td><td>模块 05 的切面（现在还没有）</td><td>{@code 新增}</td>
+ *   <tr><td>操作日志</td><td>模块 05 的 {@code OperLogAspect}</td><td>{@code 创建学生}</td>
  *       <td>「谁在什么时候调了创建学生这个接口」</td></tr>
  *   <tr><td>合规留痕</td><td>本类</td><td>{@code 监护人同意留痕}</td>
  *       <td>「机构已确认取得监护人同意」这个<b>法定事实</b>（个保法第 31 条）</td></tr>
@@ -40,6 +39,23 @@ import com.edumatrix.org.member.mapper.MemberOperLogMapper;
  * <p>前者是运维审计，后者是<b>监管问询时要拿出来的证据</b>。合并成一行的后果是：
  * 将来任何一次「操作日志按时间归档清理」都会把合规证据一起清掉，
  * 而 {@code sys_oper_log} 的 DDL 表注释逐字就是「可按时间归档清理」。
+ *
+ * <p><b>订正一处事实错误</b>：本段原写「切面将来写的 {@code action} 是 {@code 新增}」，
+ * 而 {@code OrgStudentController} 上的注解逐字是 {@code action = "创建学生"}。
+ * 方向不受影响（两者仍不同），但那句话本身与它自己模块的代码对不上，已改。
+ *
+ * <h2>⚠ 模块 05 收敛了<b>写入实现</b>（F-25）：本类不再自带 Mapper</h2>
+ * <p>{@code org/member/mapper/MemberOperLogMapper} <b>已删除</b>，本类改调
+ * {@code common/operlog/OperLogWriter} —— 与 {@code OperLogAspect} 共用同一份
+ * 截断规则、脱敏规则与 {@code tenant_id} 取值口径。
+ *
+ * <p><b>为什么原论证不足以让两个 Mapper 共存</b>：它论证的是「两<b>行数据</b>语义不同」，
+ * 这一点成立且已保留；但需方担心的是「两<b>条代码路径</b>各带一套规则」——
+ * 那是本项目反复出事的形态，且当场就能收敛，所以收敛了。
+ * 收敛之后不存在「改一份必须改另一份」，故本类<b>不需要</b>那种同步警告。
+ *
+ * <p><b>用 {@code writeOrThrow} 而不是 {@code write}</b>：见下方 {@link #guardianConsent}
+ * 对「同生共死」的要求 —— 收敛写入实现<b>不等于</b>把失败语义也合并。
  *
  * <h2>不做的事</h2>
  * <ul>
@@ -63,10 +79,10 @@ public class MemberOperLogWriter {
     /** 规则 10：F7-3 删除请求脱敏。 */
     public static final String ACTION_ANONYMIZE = "删除请求脱敏";
 
-    private final MemberOperLogMapper operLogMapper;
+    private final OperLogWriter operLogWriter;
 
-    public MemberOperLogWriter(MemberOperLogMapper operLogMapper) {
-        this.operLogMapper = operLogMapper;
+    public MemberOperLogWriter(OperLogWriter operLogWriter) {
+        this.operLogWriter = operLogWriter;
     }
 
     /**
@@ -81,9 +97,11 @@ public class MemberOperLogWriter {
      * 建档回滚了却留下一条「已取得监护人同意」，比没有这条记录更糟。
      */
     public void guardianConsent(Long studentUserId, Long tenantId) {
-        operLogMapper.insert(IdWorker.nextId(), TenantHelper.getUserId(),
+        // writeOrThrow：留痕写不进去必须让建人事务一起回滚（见方法注释「同生共死」）
+        operLogWriter.writeOrThrow(TenantHelper.getUserId(),
                 MODULE_STUDENT, ACTION_GUARDIAN_CONSENT,
-                "POST /api/v1/org/students#" + studentUserId, tenantId);
+                "POST /api/v1/org/students#" + studentUserId,
+                null, null, OperLogWriter.STATUS_SUCCESS, null, 0, tenantId);
     }
 
     /**
@@ -96,8 +114,11 @@ public class MemberOperLogWriter {
      * Job 里没有会话租户，靠线程残留会把日志写到上一个租户名下。
      */
     public void anonymized(Long studentId, Long tenantId) {
-        operLogMapper.insert(IdWorker.nextId(), null,
+        // 同样 writeOrThrow：脱敏与留痕在 StudentAnonymizeService#anonymize 的同一事务内，
+        // 留痕丢了而脱敏落了库，等于把一次不可逆操作的唯一记录抹掉
+        operLogWriter.writeOrThrow(null,
                 MODULE_STUDENT, ACTION_ANONYMIZE,
-                "AnonymizeArchivedStudentJob#" + studentId, tenantId);
+                "AnonymizeArchivedStudentJob#" + studentId,
+                null, null, OperLogWriter.STATUS_SUCCESS, null, 0, tenantId);
     }
 }
