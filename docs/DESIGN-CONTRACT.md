@@ -597,14 +597,26 @@ MyBatis-Plus 租户插件从**当前会话**取 `tenant_id` 并自动注入 `WHE
 | video_status 媒资状态 | 0上传中 1转码中 2正常 3转码失败 9禁用 |
 | is_correct 判定 | 0错误 1正确 2半对(多选漏选/填空部分对/主观题部分得分) NULL待批改 |
 
-**答案 JSON 结构（`qb_question_version.correct_answer` 与 `hw_answer_detail.student_answer` 共用同一形状，按题型穷举）**：
+**答案 JSON 结构（`qb_question_version.correct_answer` 与 `hw_answer_detail.student_answer` 按题型穷举）**：
+
+> **⚠ 订正（F-70 定案，模块 10 落地）**：本表原写「两者**共用同一形状**」。
+> 该说法在题型 1/2/3 上成立，**在题型 4 填空上不成立**：标准答案要承载**同义答案集**
+> （`accepts`，命中任一项即该空得分），学生作答只有一个 `text`，两侧形状必然不同。
+> **这是一次明知地推翻上位文档，判据是代价不对称**：按「共用同一形状」实现等于取消同义答案 ——
+> 「北京」对、「北京市」错，而客观题**不开放教师改分**（PRD F3-6 规则 3），**错了没有救济路径**；
+> 而 `03-04 §4.4` 的判分规则（「命中该空同义答案集（`accepts`）任一项即该空得分」）与
+> `PRD F3-1` 的验收标准（「第 1 空同义答案集为 `["鲁迅","周树人"]`」）**都逐字依赖 `accepts`**。
+> 题型 5 简答的两侧形状同样不同（`03-04 §2.2` 的标准答案带 `scoringPoints`），
+> 但**本表维持 `{"text": "…"}` 不动**（F-71）：简答不自动判分、有教师批改这条救济路径，
+> 代价远小于填空。**解除条件写死在 F-71**：模块 15 做批改流水线时若确实需要按点给分，
+> 那时扩字段 + 做数据迁移；不为一个还没有消费方的字段现在改契约。
 
 | question_type | JSON | 自动判分 | 说明 |
 | --- | --- | --- | --- |
 | 1 单选 | `{"answer": "B"}` | 是 | 选项号大写字母，字符串 |
 | 2 多选 | `{"answer": ["A","C"]}` | 是 | 字符串数组；**比较前必须排序去重**，`["C","A"]` 与 `["A","C"]` 等价 |
 | 3 判断 | `{"answer": true}` | 是 | **JSON 布尔字面量，不是字符串 `"true"`** |
-| 4 填空 | `{"blanks": [{"index": 1, "text": "北京"}]}` | 是 | `index` 从 1 起；判分按 `index` 对齐，逐空比较 |
+| 4 填空 | 标准答案 `{"blanks": [{"index": 1, "accepts": ["北京", "北京市"]}]}`<br>学生作答 `{"blanks": [{"index": 1, "text": "北京"}]}` | 是 | `index` 从 1 起；判分按 `index` 对齐，逐空比较；**命中 `accepts` 任一项即该空得分**（F-70，见上方订正段）|
 | 5 简答 | `{"text": "……"}` | 否 | 进人工批改 |
 | 6 材料题 | 父题不存答案，逐子题按其自身题型取上述结构 | 随子题 | 父题分数 = 子题之和 |
 
@@ -822,6 +834,22 @@ Resp: {"code":200,"data":{"watchedDuration":130,"watchStatus":1,"maxPosition":13
 > 边界 2 没有考虑过这个前提。**只拆这一处，不是开一条按接口发 perms 的口子**；`org:staff:list` 保留，继续管「能不能进人员管理页面」。
 > 定案见 `04-实施计划.md` §E 的 **F-30**，落库脚本 `V202608160000__split_staff_list_perms.sql`。
 >
+> **⚠ 订正（F-72 定案，模块 10 落地）**：`question:category:add / edit / remove` 三行的绑定角色由
+> `org_admin、teacher` 改为 **`org_admin`**，落库脚本 `V202608200000__revoke_teacher_question_category_perms.sql`
+> 删掉对应的三行 `sys_role_menu` 绑定。
+> **这是一次明知地推翻本附表**，依据三条：
+> ① `03-04 §1.2/§1.3/§1.4` 与 `PRD F3-1 规则 8` 都写「**仅 `org_admin`**」，
+> 并各自附了论证 —— `qb_category` 全租户共享、不带 `owner_node_id`、不进 `org_resource_grant`，
+> 落在「数据范围由树决定」这条规则的**管辖之外**，**没有任何子树边界拦得住**；
+> 而本附表那一侧一句论证都没有；
+> ② 本附表与初始化脚本此前是**一致地错**——只写 `@SaCheckPermission("question:category:add")`
+> 的话**教师会照样通过**，那道门从来没有关上过（本项目第七次「以为存在、实际从未生效的保障」）；
+> ③ 不在代码里加角色门：那会是全库唯一一处不同构的判定，多一个会配错的地方。
+> 改脚本 + 改本附表，两者的**同源关系保住**。
+> **连带**：教师的 `perms` 由 63 变为 60（`AuthMeIT#teacherPerms`），
+> `sys_role_menu` 行数由 206 变为 203（`FlywayBaselineIT`、`PlatformRowVisibilityIT`）。
+> 教师**仍能读**分类树（随 `question:question:list` 放行），少的只是三个写按钮。
+
 > 类型：`M` 目录 / `C` 菜单 / `F` 按钮。「PRD 页面」列对应 01-PRD §6 页面清单编号，**菜单不得脱离该清单自造页面**。
 
 | 菜单 ID | 父 ID | 名称 | 类型 | 前端路由 | perms | PRD 页面 | 绑定角色 |
@@ -902,9 +930,9 @@ Resp: {"code":200,"data":{"watchedDuration":130,"watchStatus":1,"maxPosition":13
 | `1949000000000400102` | `1949000000000400100` | 修改题目 | F | — | `question:question:edit` | A15 | org_admin、teacher |
 | `1949000000000400103` | `1949000000000400100` | 删除题目 | F | — | `question:question:remove` | A15 | org_admin、teacher |
 | `1949000000000400104` | `1949000000000400100` | 启用/停用题目 | F | — | `question:question:status` | A15 | org_admin、teacher |
-| `1949000000000400105` | `1949000000000400100` | 新建题库分类 | F | — | `question:category:add` | A15 | org_admin、teacher |
-| `1949000000000400106` | `1949000000000400100` | 修改题库分类 | F | — | `question:category:edit` | A15 | org_admin、teacher |
-| `1949000000000400107` | `1949000000000400100` | 删除题库分类 | F | — | `question:category:remove` | A15 | org_admin、teacher |
+| `1949000000000400105` | `1949000000000400100` | 新建题库分类 | F | — | `question:category:add` | A15 | org_admin |
+| `1949000000000400106` | `1949000000000400100` | 修改题库分类 | F | — | `question:category:edit` | A15 | org_admin |
+| `1949000000000400107` | `1949000000000400100` | 删除题库分类 | F | — | `question:category:remove` | A15 | org_admin |
 | `1949000000000400200` | `1949000000000400000` | 作业管理 | C | /qb/homeworks | `homework:homework:list` | A16 / B8 / B10 | org_admin、teacher |
 | `1949000000000400201` | `1949000000000400200` | 创建作业 | F | — | `homework:homework:add` | B8 | teacher |
 | `1949000000000400202` | `1949000000000400200` | 修改作业 | F | — | `homework:homework:edit` | B8 | teacher |
