@@ -5,7 +5,9 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.List;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -63,6 +65,7 @@ public final class VodEventPayloadParser {
                 number(root, "Size"),
                 text(root, "ErrorCode"),
                 text(root, "ErrorMessage"),
+                streams(root.get("StreamInfos")),
                 json);
     }
 
@@ -113,7 +116,56 @@ public final class VodEventPayloadParser {
     }
 
     private static VodEvent unparsable(String receiptHandle, String body) {
-        return new VodEvent(receiptHandle, null, null, null, null, null, null, null, body);
+        return new VodEvent(receiptHandle, null, null, null, null, null, null, null, List.of(), body);
+    }
+
+    /**
+     * {@code StreamInfos[]}。<b>空数组、缺字段、不是数组</b>一律返回空列表 ——
+     * 由调用方按「挑不到流」处理（契约 §1 第 3 条：置 {@code status=3} 并告警，绝不置 2）。
+     */
+    private static List<VodEventStream> streams(JsonNode node) {
+        if (node == null || !node.isArray()) {
+            return List.of();
+        }
+        List<VodEventStream> streams = new ArrayList<>(node.size());
+        for (JsonNode item : node) {
+            streams.add(new VodEventStream(
+                    text(item, "Status"),
+                    text(item, "Format"),
+                    strictBoolean(item, "Encrypt"),
+                    strictBoolean(item, "IsAudio"),
+                    strictNumber(item, "Duration"),
+                    number(item, "Size"),
+                    text(item, "FileUrl"),
+                    text(item, "Definition")));
+        }
+        return streams;
+    }
+
+    /**
+     * <b>严格</b>取布尔：JSON 里不是布尔就返回 {@code null}，<b>不做隐式转换</b>。
+     *
+     * <p>{@code GetPlayInfo} 那一侧的 {@code Encrypt} 是 {@code Long = 1}，
+     * 事件报文这一侧是布尔 {@code true}（都由真实样本核实）。
+     * 用 {@code asBoolean()} 的话 {@code 1} 会被悄悄读成 {@code true} ——
+     * 那正是"两个解析器可以合并"这个错觉的来源，而合并之后下一次形状变化就是全量误判。
+     * 与模块 10 的判断题 {@code "true"} vs {@code true} 同一形状。
+     */
+    static Boolean strictBoolean(JsonNode parent, String field) {
+        JsonNode node = parent.get(field);
+        return node != null && node.isBoolean() ? node.booleanValue() : null;
+    }
+
+    /**
+     * <b>严格</b>取数字：JSON 里不是数字就返回 {@code null}。
+     *
+     * <p>事件报文的 {@code Duration} 是数字 {@code 52.233433}，而 {@code GetPlayInfo} 的是字符串。
+     * <b>同一个对象里 {@code Bitrate} 还是字符串 {@code "1452"}</b> —— 阿里云自己都没统一，
+     * 所以这里只认自己那一侧的形状，认不出就交给「挑不到流」那条路响亮地失败。
+     */
+    static Double strictNumber(JsonNode parent, String field) {
+        JsonNode node = parent.get(field);
+        return node != null && node.isNumber() ? node.doubleValue() : null;
     }
 
     private static String text(JsonNode root, String field) {

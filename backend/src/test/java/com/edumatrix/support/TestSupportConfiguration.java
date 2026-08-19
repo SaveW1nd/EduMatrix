@@ -4,7 +4,13 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
 
+import com.edumatrix.common.media.VodEvent;
+import com.edumatrix.common.media.VodEventPayloadParser;
+import com.edumatrix.common.media.VodEventSource;
 import com.edumatrix.common.media.VodMediaClient;
+import com.edumatrix.common.media.VodNotReadyException;
+import com.edumatrix.common.media.VodPlayInfo;
+import com.edumatrix.common.media.VodPlayStream;
 import com.edumatrix.common.tenant.TenantHelper;
 
 /**
@@ -50,10 +56,26 @@ public class TestSupportConfiguration {
         public final java.util.List<String> calls = new java.util.ArrayList<>();
         /** 置 true 时下一次调用抛异常 —— 用来验「云调失败则整体回滚，没有中间态」。 */
         public boolean failNext;
+        /** {@code getPlayInfo} 要返回的流；默认空（= 挑不到）。 */
+        public java.util.List<VodPlayStream> streams = java.util.List.of();
+        /** 置 true 时 {@code getPlayInfo} 抛「云端未就绪」——与「挑不到流」是两条路。 */
+        public boolean notReady;
 
         public void reset() {
             calls.clear();
             failNext = false;
+            notReady = false;
+            streams = java.util.List.of();
+        }
+
+        /** 一路正常的加密 HLS（GetPlayInfo 形态：Encrypt 是 Long=1、Duration 是 String）。 */
+        public void oneEncryptedHls(String duration) {
+            streams = java.util.List.of(new VodPlayStream("m3u8", 1L, "AliyunVoDEncryption",
+                    null, "https://vod.example.cn/x.m3u8", duration, 9486668L, "SD"));
+        }
+
+        public long playInfoCalls() {
+            return calls.stream().filter(c -> c.startsWith("getPlayInfo")).count();
         }
 
         private void record(String call) {
@@ -80,14 +102,71 @@ public class TestSupportConfiguration {
         }
 
         @Override
-        public com.edumatrix.common.media.VodPlayInfo getPlayInfo(String cloudVideoId) {
+        public VodPlayInfo getPlayInfo(String cloudVideoId) {
             record("getPlayInfo:" + cloudVideoId);
-            return new com.edumatrix.common.media.VodPlayInfo(java.util.List.of(), null);
+            if (notReady) {
+                throw new VodNotReadyException("探针：Currently Video Status is Transcoding "
+                        + "and AuditStatus is Init");
+            }
+            // CoverURL 刻意给一个【真实形态】的值：http:// + Expires 签名。
+            // 消费侧不写它，本条就是那个口径的反面证据
+            return new VodPlayInfo(streams,
+                    "http://outin-x/snapshots/y.jpg?Expires=1787169594&Signature=abc");
         }
 
         @Override
         public void submitTranscodeJobs(String cloudVideoId) {
             record("submitTranscodeJobs:" + cloudVideoId);
+        }
+    }
+
+    /**
+     * 不联网的队列替身。压过 {@code common/media/DisabledVodEventSource}。
+     *
+     * <p><b>喂进去的是原始 JSON 文本</b>，走的仍是 {@code VodEventPayloadParser} ——
+     * 而不是另一份手搓的解析。否则测的就不是生产那条链路了。
+     */
+    @Bean
+    @Primary
+    public FakeVodEventSource fakeVodEventSource() {
+        return new FakeVodEventSource();
+    }
+
+    /** 供用例断言「哪条消息被删了、哪条还留着」。 */
+    public static class FakeVodEventSource implements VodEventSource {
+
+        private final java.util.List<VodEvent> pending = new java.util.ArrayList<>();
+        public final java.util.List<String> deleted = new java.util.ArrayList<>();
+
+        public void reset() {
+            pending.clear();
+            deleted.clear();
+        }
+
+        /** 投一条消息（原始 JSON 文本，与生产同一段解析）。 */
+        public void offer(String receiptHandle, String rawJson) {
+            pending.add(VodEventPayloadParser.parse(receiptHandle, rawJson));
+        }
+
+        public boolean deletedContains(String receiptHandle) {
+            return deleted.contains(receiptHandle);
+        }
+
+        @Override
+        public java.util.List<VodEvent> receive(int max) {
+            java.util.List<VodEvent> batch = java.util.List.copyOf(pending);
+            pending.clear();
+            return batch;
+        }
+
+        @Override
+        public void delete(String receiptHandle) {
+            deleted.add(receiptHandle);
+        }
+
+        @Override
+        public long queueDepth() {
+            return pending.size();
         }
     }
 }

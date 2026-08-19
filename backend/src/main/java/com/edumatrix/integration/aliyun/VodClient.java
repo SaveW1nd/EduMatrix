@@ -20,6 +20,7 @@ import com.aliyuncs.vod.model.v20170321.RefreshUploadVideoRequest;
 import com.aliyuncs.vod.model.v20170321.RefreshUploadVideoResponse;
 import com.aliyuncs.vod.model.v20170321.SubmitTranscodeJobsRequest;
 import com.edumatrix.common.media.VodMediaClient;
+import com.edumatrix.common.media.VodNotReadyException;
 import com.edumatrix.common.media.VodPlayInfo;
 import com.edumatrix.common.media.VodPlayStream;
 import com.edumatrix.common.media.VodUploadCredential;
@@ -132,6 +133,12 @@ public class VodClient implements VodMediaClient {
                     ? null : response.getVideoBase().getCoverURL();
             return new VodPlayInfo(streams, coverUrl);
         } catch (Exception e) {
+            // 【未就绪】与【产物不对】必须分成两条路 —— 见 VodNotReadyException 类注释。
+            // 混在一起会因为事件到达与云端状态翻转的时间差，把一条好视频永久标成转码失败
+            if (isNotReady(e)) {
+                throw new VodNotReadyException("点播侧尚未就绪（" + VodNotReadyException.ILLEGAL_STATUS
+                        + "） videoId=" + cloudVideoId + describe(e));
+            }
             throw new IllegalStateException(
                     "取播放信息失败（GetPlayInfo） videoId=" + cloudVideoId + describe(e), e);
         }
@@ -154,6 +161,22 @@ public class VodClient implements VodMediaClient {
     private static void applyTimeouts(com.aliyuncs.RpcAcsRequest<?> request) {
         request.setSysConnectTimeout(CONNECT_TIMEOUT_MS);
         request.setSysReadTimeout(READ_TIMEOUT_MS);
+    }
+
+    /**
+     * 是不是 {@code Forbidden.IllegalStatus}。
+     *
+     * <p><b>按 {@code ErrCode} 判，不按 message 文本判</b>：message 是
+     * 「Currently Video Status is Transcoding and AuditStatus is Init」这种自然语言，
+     * 阿里云随时可以改措辞，而错误码是契约面。
+     */
+    private static boolean isNotReady(Exception e) {
+        try {
+            Object code = e.getClass().getMethod("getErrCode").invoke(e);
+            return VodNotReadyException.ILLEGAL_STATUS.equals(String.valueOf(code));
+        } catch (ReflectiveOperationException | RuntimeException ignored) {
+            return false;
+        }
     }
 
     /** 只取异常类型与 {@code RequestId}，<b>不取 message 原文</b>（与 {@code OssClient} 同一条纪律）。 */

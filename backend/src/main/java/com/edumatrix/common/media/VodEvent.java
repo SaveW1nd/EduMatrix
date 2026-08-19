@@ -1,6 +1,7 @@
 package com.edumatrix.common.media;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * 从轻量消息队列取到的一条转码事件（03-03 §7.2）。
@@ -51,6 +52,9 @@ import java.time.LocalDateTime;
  *                      <b>本模块不据此写 {@code vod_video.size_bytes}</b>，理由见 {@code VodEventConsumeService}
  * @param errorCode     失败事件的错误码，写入 {@code remark}
  * @param errorMessage  失败事件的错误描述，写入 {@code remark}
+ * @param streams       {@code TranscodeComplete.StreamInfos[]}。<b>是数组</b> ——
+ *                      单清晰度下恰好 1 个；模板组被误配成多档就会有多个（契约 §1 第 1 条警告的情形）；
+ *                      <b>空数组也要处理</b>。其余事件类型上为空列表
  * @param rawBody       原始报文（已 Base64 解码后的 JSON 文本）
  */
 public record VodEvent(String receiptHandle,
@@ -61,6 +65,7 @@ public record VodEvent(String receiptHandle,
                        Long sizeBytes,
                        String errorCode,
                        String errorMessage,
+                       List<VodEventStream> streams,
                        String rawBody) {
 
     /** 上传完成。阿里云路径下 {@code vod_file_id} 在发凭证时即已写入，此处只推进状态。 */
@@ -102,9 +107,17 @@ public record VodEvent(String receiptHandle,
         return isUploadComplete() || TYPE_TRANSCODE_COMPLETE.equalsIgnoreCase(eventType);
     }
 
+    /** 挑出唯一一路「加密 m3u8 且自身转码成功」的流；不是恰好一路时返回空。 */
+    public List<VodEventStream> encryptedHlsStreams() {
+        return streams == null ? List.of()
+                : streams.stream().filter(VodEventStream::isEncryptedHls)
+                        .filter(VodEventStream::succeeded).toList();
+    }
+
     /** 日志用的短摘要：<b>不打 {@link #rawBody} 全文</b>（可能很长，且含 OSS 直链）。 */
     public String describe() {
         return "eventType=" + eventType + " status=" + status + " videoId=" + vodFileId
-                + " eventTime=" + eventTime;
+                + " eventTime=" + eventTime
+                + " streams=" + (streams == null ? 0 : streams.size());
     }
 }

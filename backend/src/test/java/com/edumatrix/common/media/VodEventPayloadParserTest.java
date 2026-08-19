@@ -159,4 +159,110 @@ class VodEventPayloadParserTest {
                 .as("按 StreamTranscodeComplete 跃迁状态 = 低清先转完就置 2、高清地址永远写不进去")
                 .isFalse();
     }
+    // =====================================================================
+    // TranscodeComplete：真实报文 + 两个解析器【不许合并】
+    // =====================================================================
+
+    /** 生产队列里真实的一条 {@code TranscodeComplete}（需方 2026-08-19 取回，一字未改）。 */
+    private static final String REAL_TRANSCODE_COMPLETE = """
+            {"Status":"success","VideoId":"10d5ee269c0271f1bff44531948c0102",\
+            "EventType":"TranscodeComplete","EventTime":"2026-08-19T19:14:31Z",\
+            "StreamInfos":[{\
+              "Status":"success","IsAudio":false,"Size":9486668,"Definition":"SD","Fps":"24",\
+              "StartTime":"2026-08-19T19:14:21Z","Duration":52.233433,"Bitrate":"1452",\
+              "Encrypt":true,\
+              "FileUrl":"http://outin-x/y-sd-encrypt-stream.m3u8","Format":"m3u8",\
+              "FinishTime":"2026-08-19T19:14:29Z","Height":720,"Width":1280,\
+              "JobId":"5a93ac08b5e342508fba8033cb9932e6"}]}""";
+
+    @Test
+    @DisplayName("真实 TranscodeComplete：顶层与流内两层 Status 都判，挑出唯一一路加密 m3u8")
+    void parsesTheRealTranscodeCompletePayload() {
+        VodEvent event = VodEventPayloadParser.parse("r", REAL_TRANSCODE_COMPLETE);
+
+        assertThat(event.parsed()).isTrue();
+        assertThat(event.isTranscodeSuccess()).isTrue();
+        assertThat(event.eventTime())
+                .as("EventTime 同样是 UTC：19:14:31Z → 东八区次日 03:14:31")
+                .isEqualTo(LocalDateTime.of(2026, 8, 20, 3, 14, 31));
+        assertThat(event.streams()).hasSize(1);
+
+        VodEventStream stream = event.streams().get(0);
+        assertThat(stream.encrypt()).isTrue();
+        assertThat(stream.audio()).isFalse();
+        assertThat(stream.durationSeconds()).isEqualTo(52.233433);
+        assertThat(stream.sizeBytes()).isEqualTo(9486668L);
+        assertThat(stream.definition())
+                .as("Definition=SD 而实际 1280×720 —— 它不能当画质依据")
+                .isEqualTo("SD");
+        assertThat(stream.playUrl())
+                .as("FileUrl 实测仍是 http:// —— 契约「报文里的 URL 一律不采信」被坐实")
+                .startsWith("http://");
+        assertThat(event.encryptedHlsStreams()).hasSize(1);
+    }
+
+    /**
+     * <b>两个解析器不许合并</b>：把 {@code GetPlayInfo} 那一侧的形状喂进来，必须<b>取不出值</b>。
+     *
+     * <p>同一个概念在两处是两种类型（都由真实样本核实）：
+     * {@code Encrypt} 在 {@code GetPlayInfo} 是 {@code Long=1}、在事件里是布尔 {@code true}；
+     * {@code Duration} 在 {@code GetPlayInfo} 是 {@code String}、在事件里是数字。
+     * <b>同一个对象里 {@code Bitrate} 还是字符串</b> —— 阿里云自己都没统一。
+     *
+     * <p>用 {@code asBoolean()} / {@code asDouble()} 的话 {@code 1} 与 {@code "52.23"}
+     * 会被<b>悄悄</b>读成 {@code true} 与 {@code 52.23}，不报错。那正是「两个解析器可以合并」
+     * 这个错觉的来源，而合并之后下一次形状变化就是全量误判 ——
+     * 与模块 10 的判断题 {@code "true"} vs {@code true} 同一形状。
+     *
+     * <p><b>悄悄兼容的那天，就是有人「统一一下」的那天。</b>
+     */
+    @Test
+    @DisplayName("把 GetPlayInfo 的形状喂进事件解析器：Encrypt=1 与 Duration=\"52.23\" 都【取不出】")
+    void getPlayInfoShapeIsRejectedByEventParser() {
+        VodEvent event = VodEventPayloadParser.parse("r",
+                "{\"EventType\":\"TranscodeComplete\",\"Status\":\"success\",\"VideoId\":\"v1\","
+                        + "\"StreamInfos\":[{\"Status\":\"success\",\"Format\":\"m3u8\","
+                        + "\"Encrypt\":1,\"Duration\":\"52.233433\",\"IsAudio\":0}]}");
+
+        VodEventStream stream = event.streams().get(0);
+        assertThat(stream.encrypt())
+                .as("Encrypt=1 是 GetPlayInfo 的形状，事件解析器【不做隐式转换】——"
+                        + "读成 true 的那天，就是两个解析器被合并的那天")
+                .isNull();
+        assertThat(stream.durationSeconds())
+                .as("Duration=\"52.23\" 是 GetPlayInfo 的形状（字符串），这里必须取不出")
+                .isNull();
+        assertThat(stream.audio()).as("IsAudio=0 同理，不是布尔就取不出").isNull();
+        assertThat(stream.isEncryptedHls())
+                .as("取不出就挑不中 —— 宁可响亮地置 status=3 并告警，也不要靠隐式转换蒙对一次")
+                .isFalse();
+        assertThat(event.encryptedHlsStreams()).isEmpty();
+    }
+
+    /** 反向：{@code GetPlayInfo} 那一侧的 {@code VodPlayStream} 拿到事件形态的布尔也判不出。 */
+    @Test
+    @DisplayName("反向：VodPlayStream 的 Encrypt 是 Long，给不出布尔 —— 类型上就隔开了")
+    void playStreamEncryptIsNumericOnly() {
+        assertThat(new VodPlayStream("m3u8", 1L, "AliyunVoDEncryption", null,
+                "https://x/y.m3u8", "52.2", 1L, "SD").isEncryptedHls())
+                .as("GetPlayInfo 侧：Encrypt 必须是数值 1")
+                .isTrue();
+        assertThat(new VodPlayStream("m3u8", null, "AliyunVoDEncryption", null,
+                "https://x/y.m3u8", "52.2", 1L, "SD").isEncryptedHls())
+                .as("取不出数值时判 false —— 与事件侧同一条纪律：不猜")
+                .isFalse();
+    }
+
+    @Test
+    @DisplayName("StreamInfos 空数组 / 缺字段 / 不是数组，一律空列表（由调用方按「挑不到流」置 3）")
+    void emptyOrMissingStreamInfos() {
+        for (String body : new String[]{
+                "{\"EventType\":\"TranscodeComplete\",\"Status\":\"success\",\"VideoId\":\"v\",\"StreamInfos\":[]}",
+                "{\"EventType\":\"TranscodeComplete\",\"Status\":\"success\",\"VideoId\":\"v\"}",
+                "{\"EventType\":\"TranscodeComplete\",\"Status\":\"success\",\"VideoId\":\"v\",\"StreamInfos\":{}}"}) {
+            VodEvent event = VodEventPayloadParser.parse("r", body);
+            assertThat(event.parsed()).isTrue();
+            assertThat(event.streams()).isEmpty();
+        }
+    }
 }
