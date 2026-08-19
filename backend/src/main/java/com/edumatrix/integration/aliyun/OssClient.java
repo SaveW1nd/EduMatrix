@@ -85,6 +85,9 @@ public class OssClient implements ObjectStorage, DisposableBean {
     static final String ATTACHMENT_CONTENT_TYPE = "application/octet-stream";
 
     private final String bucket;
+    /** 配置里那两个 endpoint 的原值 —— 启动自检要拿它们与桶自报的值比对。 */
+    private final String configuredInternalEndpoint;
+    private final String configuredPublicEndpoint;
     private final OSS internalOss;
     private final OSS publicOss;
 
@@ -94,8 +97,10 @@ public class OssClient implements ObjectStorage, DisposableBean {
                      @Value("${edumatrix.file.oss.access-key-id}") String accessKeyId,
                      @Value("${edumatrix.file.oss.access-key-secret}") String accessKeySecret) {
         this.bucket = bucket.trim();
-        this.internalOss = new OSSClientBuilder().build(internalEndpoint.trim(), accessKeyId, accessKeySecret);
-        this.publicOss = new OSSClientBuilder().build(publicEndpoint.trim(), accessKeyId, accessKeySecret);
+        this.configuredInternalEndpoint = internalEndpoint.trim();
+        this.configuredPublicEndpoint = publicEndpoint.trim();
+        this.internalOss = new OSSClientBuilder().build(configuredInternalEndpoint, accessKeyId, accessKeySecret);
+        this.publicOss = new OSSClientBuilder().build(configuredPublicEndpoint, accessKeyId, accessKeySecret);
         assertBucketIsPrivateAndInMainland();
     }
 
@@ -130,7 +135,31 @@ public class OssClient implements ObjectStorage, DisposableBean {
                             + " bucket=" + bucket);
         }
 
-        log.info("对象存储 = 阿里云 OSS bucket={} location={} acl={}（storage 将写 2）", bucket, location, acl);
+        // ③ 跨地域检查：见类注释「第 ③ 条为什么不能靠"名字里有 oss-cn-"来判」
+        String bucketIntranet = info.getBucket().getIntranetEndpoint();
+        if (!hostOf(configuredInternalEndpoint).equals(hostOf(bucketIntranet))) {
+            throw new IllegalStateException(
+                    "OSS 内网 endpoint 与桶不匹配：配置 " + hostOf(configuredInternalEndpoint)
+                            + "，而 bucket=" + bucket + "（location=" + location + "）的内网 endpoint 是 "
+                            + hostOf(bucketIntranet) + "。"
+                            + "两种成因都要拒绝启动：① 桶与 ECS 跨地域 —— 流量走公网，计费、延迟都变，"
+                            + "而且完全静默；② 内网那一格被填成了公网 endpoint —— 那会把「跨地域会连不上」"
+                            + "这个响亮的信号消掉，变成每个月账单上多出来的一笔。"
+                            + "正确做法是把桶建在与 ECS 同一地域，并把 ALIYUN_OSS_INTERNAL_ENDPOINT 填成上面那个值。");
+        }
+
+        // 公网 endpoint 只 WARN 不拒绝：将来绑自有域名（如 file.hqtw.cn，需备案）时
+        // 它本来就会与桶的默认外网 endpoint 不同，作硬闸会把那条正常路径堵死
+        String bucketExtranet = info.getBucket().getExtranetEndpoint();
+        if (!hostOf(configuredPublicEndpoint).equals(hostOf(bucketExtranet))) {
+            log.warn("OSS 公网 endpoint 与桶的默认外网 endpoint 不同：配置 {}，桶默认 {}。"
+                            + "绑了自有加速域名时这是正常的；否则请核对 —— 签名地址是给浏览器用的，"
+                            + "填错会让客户端解析不到（响亮失败）",
+                    hostOf(configuredPublicEndpoint), hostOf(bucketExtranet));
+        }
+
+        log.info("对象存储 = 阿里云 OSS bucket={} location={} acl={} intranet={}（storage 将写 2）",
+                bucket, location, acl, hostOf(bucketIntranet));
     }
 
     @Override
@@ -220,6 +249,30 @@ public class OssClient implements ObjectStorage, DisposableBean {
     public void destroy() {
         internalOss.shutdown();
         publicOss.shutdown();
+    }
+
+    /**
+     * 取 endpoint 的<b>主机名</b>用于比对：剥掉 {@code http(s)://} 前缀、结尾斜杠，转小写。
+     *
+     * <p>不做这层归一的话，{@code https://oss-cn-hangzhou-internal.aliyuncs.com} 与
+     * {@code oss-cn-hangzhou-internal.aliyuncs.com} 会被判成不同 ——
+     * 而两者都是<b>正确</b>的配置写法，那样自检就会变成一个只会误报的东西，
+     * 最后被人加个开关关掉。
+     */
+    static String hostOf(String endpoint) {
+        if (endpoint == null) {
+            return "";
+        }
+        String host = endpoint.trim().toLowerCase(java.util.Locale.ROOT);
+        int scheme = host.indexOf("://");
+        if (scheme >= 0) {
+            host = host.substring(scheme + 3);
+        }
+        int slash = host.indexOf('/');
+        if (slash >= 0) {
+            host = host.substring(0, slash);
+        }
+        return host;
     }
 
     /** RFC 5987 的 {@code filename*}，与 03-01 §7.3 的响应头示例同格式（{@code filename*=UTF-8''...}）。 */

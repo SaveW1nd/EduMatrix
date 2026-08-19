@@ -38,12 +38,13 @@ import org.springframework.web.bind.annotation.RestController;
  * 新增一个写接口而忘了标 → 同样红。
  *
  * <h2>扫描范围与它的边界</h2>
- * <p>覆盖 {@code com.edumatrix.system} 与 {@code com.edumatrix.org} 两个域 ——
- * 当前全部写接口所在。<b>{@code auth} 域刻意不在范围内</b>，理由逐条：
- * 它的四个写端点是登录 / 登出 / 刷新令牌 / 本人改密，前三个属
- * {@code 00-通用约定} §2.3 免登录白名单且已由 {@code sys_login_log} 承载；
- * 第四个（03-01 §1.6 本人改密）值得记，但<b>不在模块 05 的工单授权范围内</b>，
- * 已在交付报告中作为建议提出，未擅自标注。
+ * <p>覆盖 {@code com.edumatrix.system}、{@code com.edumatrix.org} 与
+ * {@code com.edumatrix.auth} 三个域 —— 当前全部写接口所在。
+ *
+ * <p><b>{@code auth} 曾经不在范围内，现已纳入。</b>需方定案后 03-01 §1.6 本人改密
+ * 已补标 {@code @OperLog}；而把整个域纳入扫描、再用 {@link #EXEMPT} <b>逐个点名</b>
+ * 三个豁免端点，比"整个域不扫"强一档：<b>将来 {@code auth} 新增一个写端点，
+ * 它会红</b>，而"整个域不扫"对新增端点完全失明。
  *
  * <p>将来新增领域（{@code course} / {@code vod} / {@code question} / {@code homework} /
  * {@code stat}）时，<b>把包名加进 {@link #SCANNED_PACKAGES} 即可</b> ——
@@ -53,7 +54,24 @@ class OperLogCoverageTest {
 
     /** 见类注释「扫描范围与它的边界」。新增领域时在这里加一行。 */
     private static final List<String> SCANNED_PACKAGES = List.of(
-            "com.edumatrix.system", "com.edumatrix.org");
+            "com.edumatrix.system", "com.edumatrix.org", "com.edumatrix.auth");
+
+    /**
+     * <b>逐个点名</b>的豁免端点。空集是理想状态；每加一项都必须在这里写清理由。
+     *
+     * <p>三个都在 {@code auth}：登录 / 刷新令牌属 {@code 00-通用约定} §2.3 的
+     * <b>免登录白名单</b>，登出紧随其后；而「谁在什么时候登录了」已由
+     * {@code sys_login_log} 承载（PRD F1-1：成功与失败都留痕）。
+     * 再往 {@code sys_oper_log} 记一份，等于<b>同一件事两张表各存一份</b> ——
+     * 那正是本项目反复点名的形态，且两份的口径迟早会分叉。
+     *
+     * <p><b>不豁免 {@code changePassword}</b>：改密是安全相关事件，
+     * 落在 PRD §7.3 第 7 条「敏感操作记 {@code sys_oper_log}」里（需方定案）。
+     */
+    private static final Set<String> EXEMPT = Set.of(
+            "AuthController#login",
+            "AuthController#refresh",
+            "AuthController#logout");
 
     private static final Set<Class<?>> WRITE_MAPPINGS =
             Set.of(PostMapping.class, PutMapping.class, DeleteMapping.class);
@@ -70,8 +88,9 @@ class OperLogCoverageTest {
                     continue;
                 }
                 checked++;
-                if (method.getAnnotation(OperLog.class) == null) {
-                    missing.add(controller.getSimpleName() + "#" + method.getName());
+                String id = controller.getSimpleName() + "#" + method.getName();
+                if (method.getAnnotation(OperLog.class) == null && !EXEMPT.contains(id)) {
+                    missing.add(id);
                 }
             }
         }
@@ -91,16 +110,19 @@ class OperLogCoverageTest {
      * 如果哪天扫描逻辑本身退化（比如注解元数据丢失、包名改了），
      * 上面那条会以"零个未标注"的姿态<b>全绿</b>，而本条会红。
      *
-     * <p>当前 38 = {@code org} 19（member 15 + node 4）+ {@code system} 19
-     * （user 5 / role 4 / menu 3 / tenant 5 / tenantConfig 1 / <b>file 1</b>）。
+     * <p>当前 42 = {@code org} 19（member 15 + node 4）+ {@code system} 19
+     * （user 5 / role 4 / menu 3 / tenant 5 / tenantConfig 1 / <b>file 1</b>）
+     * + {@code auth} 4（login / refresh / logout / changePassword，
+     * 其中前三个在 {@link #EXEMPT} 里）。
      * 新增写接口时本条会红 —— <b>那正是提醒去标注解的时刻</b>，请连同数字一起改。
      *
-     * <p><b>它已经真的红过一次</b>：模块 05 的 C3 把数字钉在 37，C4 加了
-     * {@code SysFileController#upload}（03-01 §7.1 上传文件）之后立刻红，
-     * 于是这一行被改成 38。这就是它存在的样子。
+     * <p><b>它已经真的红过两次</b>：模块 05 的 C3 把数字钉在 37，C4 加了
+     * {@code SysFileController#upload}（03-01 §7.1 上传文件）之后立刻红，改成 38；
+     * 随后 {@code auth} 域纳入扫描（§1.6 补标）又红一次，改成 42。
+     * 这就是它存在的样子。
      */
     @Test
-    @DisplayName("写端点总数 = 38（新增写接口时本条会红，提醒去标 @OperLog）")
+    @DisplayName("写端点总数 = 42（新增写接口时本条会红，提醒去标 @OperLog）")
     void writeEndpointCountIsPinned() throws Exception {
         int count = 0;
         for (Class<?> controller : scanControllers()) {
@@ -110,7 +132,7 @@ class OperLogCoverageTest {
                 }
             }
         }
-        assertThat(count).isEqualTo(38);
+        assertThat(count).isEqualTo(42);
     }
 
     private static boolean isWriteEndpoint(Method method) {

@@ -19,6 +19,7 @@ import com.edumatrix.auth.vo.CaptchaVO;
 import com.edumatrix.auth.vo.LoginVO;
 import com.edumatrix.auth.vo.MeVO;
 import com.edumatrix.auth.vo.RefreshVO;
+import com.edumatrix.common.operlog.OperLog;
 import com.edumatrix.common.response.R;
 
 import jakarta.validation.Valid;
@@ -85,8 +86,27 @@ public class AuthController {
         return R.ok(meService.currentUser());
     }
 
-    /** §1.6 修改密码（本人）。成功后除当前会话外其余会话全部作废。 */
+    /**
+     * §1.6 修改密码（本人）。成功后除当前会话外其余会话全部作废。
+     *
+     * <h2>本类<b>唯一</b>标 {@code @OperLog} 的方法（需方定案，模块 05 补标）</h2>
+     * <p>依据：PRD §7.3 第 7 条「<b>敏感操作</b>（归档、撤回、停用）记 {@code sys_oper_log}」——
+     * 改密是安全相关事件，落在这一条里。
+     *
+     * <p><b>另外三个写端点刻意不标</b>，理由逐条：登录 / 刷新令牌 / 登出属
+     * {@code 00-通用约定} §2.3 的<b>免登录白名单</b>（前两条）或紧随其后，
+     * 而「谁在什么时候登录了」已由 {@code sys_login_log} 承载（PRD F1-1：成功与失败都留痕）。
+     * 再往 {@code sys_oper_log} 记一份，等于<b>同一件事两张表各存一份</b> ——
+     * 那正是本项目反复点名的形态，且两份的口径迟早会分叉。
+     *
+     * <p><b>{@code saveParams = false} 沿用 03-02 §3.6 的先例</b>：
+     * {@code ChangePasswordRequest} 里就是<b>旧密码与新密码的明文</b>，
+     * 写进日志等于把它落了库，与 PRD §7.3 安全条款 1「明文永不落库」直接冲突。
+     * {@code SensitiveParamMasker} 虽已按字段名整值替换，但这一整段请求体
+     * <b>本就没有审计价值</b>——审计要的是「谁在什么时候改了自己的密码」，不是改成了什么。
+     */
     @PutMapping("/password")
+    @OperLog(module = "认证", action = "修改密码", saveParams = false)
     public R<Void> changePassword(@Valid @RequestBody ChangePasswordRequest request) {
         loginService.changePassword(request);
         return R.ok("密码修改成功", null);

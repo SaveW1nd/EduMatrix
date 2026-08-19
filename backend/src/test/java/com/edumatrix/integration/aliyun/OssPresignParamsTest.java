@@ -113,6 +113,26 @@ class OssPresignParamsTest {
     }
 
     @Test
+    @DisplayName("endpoint 归一化：带不带 https:// 与结尾斜杠都视为同一个主机")
+    void endpointHostNormalisation() {
+        String canonical = "oss-cn-hangzhou-internal.aliyuncs.com";
+        assertThat(OssClient.hostOf(canonical)).isEqualTo(canonical);
+        assertThat(OssClient.hostOf("https://" + canonical)).isEqualTo(canonical);
+        assertThat(OssClient.hostOf("http://" + canonical + "/")).isEqualTo(canonical);
+        assertThat(OssClient.hostOf("  HTTPS://OSS-CN-HANGZHOU-INTERNAL.ALIYUNCS.COM  "))
+                .isEqualTo(canonical);
+        assertThat(OssClient.hostOf(null)).isEmpty();
+
+        // 跨地域必须比出不同 —— 这正是启动自检要抓的那件事：
+        // oss-cn-beijing 也以 oss-cn- 开头，靠前缀判是判不出来的
+        assertThat(OssClient.hostOf("oss-cn-beijing-internal.aliyuncs.com"))
+                .as("桶在北京、ECS 在杭州：走公网、计流量费、延迟高，而且完全静默")
+                .isNotEqualTo(OssClient.hostOf(canonical));
+        // "把公网 endpoint 填进内网那一格"同样比得出不同
+        assertThat(OssClient.hostOf("oss-cn-hangzhou.aliyuncs.com")).isNotEqualTo(canonical);
+    }
+
+    @Test
     @DisplayName("有效期恰好是 30 分钟（00-通用约定 §7.4 / 03-01 §7.3 / 03-05 §4.8 三处同一个数字）")
     void ttlIsThirtyMinutes() {
         assertThat(FileConstants.SIGNED_URL_TTL).isEqualTo(Duration.ofMinutes(30));
