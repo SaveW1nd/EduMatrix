@@ -1,0 +1,5 @@
+# 一次性验证物：产物与凭证一律不进 git
+logs/
+vendor/
+.env
+*.key
