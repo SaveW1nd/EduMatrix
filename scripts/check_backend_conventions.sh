@@ -44,6 +44,7 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 JAVA_SRC="$ROOT/backend/src/main/java"
+TEST_SRC="$ROOT/backend/src/test/java"
 MAPPER_XML="$ROOT/backend/src/main/resources/mapper"
 FAIL=0
 
@@ -180,6 +181,70 @@ fi
 HITS="$HITS"$'\n'"$WRITE_SQL"
 check "题目版本表只增不改（窄 Mapper 不继承 BaseMapper、无写注解、全库无 UPDATE/DELETE qb_question_version）" \
       "$(printf '%s' "$HITS" | grep -c . || true)" "$HITS"
+
+# --- ⑧ 测试夹具往共享表插固定主键：派生规则必须逐条登记 ----------------------
+# 【它守的是一次真实发生过的偶发失败】TenantConfigIT 曾报
+#   Duplicate entry '1960000000000001110' for key 'sys_user_role.PRIMARY'
+# 全库有【五个】夹具往同一张 sys_user_role 插固定主键，用了【三套】互不相同的派生规则
+# （+1000L / +500000L / +7L）。五个值域【今天】两两不相交（十对求交全为 ∅）：
+#   AuthFixtures(+1000)      [1960000000000001110 .. 1960000000000001116]
+#   OrgFixtures(+7)          [1962000000000100008 .. 1962000000000100064]
+#   MemberFixtures(+500000)  [1967000000000600001 .. 1967000000000600119]
+#   CourseFixtures(+500000)  [1968000000000600001 .. 1968000000000600021]
+#   QuestionFixtures(+500000)[1969000000000600001 .. 1969000000000600021]（模块 10）
+# 靠的【不是】偏移量互不相同 —— Course / Member / Question 三家用的都是 +500000L，
+# 靠的是【租户前缀互不相同】（1960 / 1962 / 1967 / 1968 / 1969，两两相距 ≥ 1e15），
+# 而最大偏移量只有 6e5，跨不过去。也就是说：偏移量撞车无所谓，【租户前缀撞车才致命】。
+# 这一点【纯属各模块各挑一个前缀的巧合，没有任何东西在保证它】——
+# 第六个夹具挑了一个已被占用的前缀就会撞上，而后果是「只在特定执行顺序下才出现」的
+# 偶发失败，单跑复现不了。
+#
+# 【本条上线当天就逮到了真的，不是变异】模块 10 的 QuestionFixtures 是第五个夹具，
+# rebase 到含模块 10 的 main 之后本条立刻红，逼着算了一次值域（1969 前缀，不相交）
+# 才登记进去。它要的就是这个动作。
+#
+# 【本检查不做值域求交】那需要把每个夹具的节点 ID 常量也解析出来，shell 做不可靠。
+# 它做的是【钉住清单】：出现第五套派生规则（或第五个夹具文件）就红，
+# 逼新增夹具的人现场登记一次 —— 那一刻正是他该去挑一个不相交号段的时候。
+# 【新增第五个夹具的人怎么知道该用哪个号段】：不是"看注释"，是【脚本会红】，
+# 而红的时候上面这份清单里逐行写着已被占用的值域。
+#
+# 【空转守卫】扫不到任何夹具就报违规 —— 目录改名 / SQL 写法改变时，
+# 这条检查会静默变成永远为绿的空转（检查⑥ 与一致性检查 C14 都有同样的下限断言）。
+FIXTURE_SQL='INSERT INTO sys_user_role'
+# 已登记的派生规则：<夹具文件>|<主键偏移量>
+EXPECTED_FIXTURE_KEYS='auth/support/AuthFixtures.java|1000L
+course/catalog/support/CourseFixtures.java|500000L
+org/member/support/MemberFixtures.java|500000L
+org/support/OrgFixtures.java|7L
+question/support/QuestionFixtures.java|500000L'
+ACTUAL_FIXTURE_KEYS=""
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  REL=${f#"$TEST_SRC"/com/edumatrix/}
+  # 主键表达式在 SQL 字面量【之后】的参数行上，形如 `userId + 1000L,` / `userIdOf(nodeId) + 500000L,`
+  OFF=$(grep -A 4 "$FIXTURE_SQL" "$f" | grep -oE '\+ [0-9]+L' | head -1 | tr -d ' +')
+  ACTUAL_FIXTURE_KEYS="$ACTUAL_FIXTURE_KEYS$REL|${OFF:-未能解析出偏移量}"$'\n'
+done < <(grep -rl "$FIXTURE_SQL" "$TEST_SRC" 2>/dev/null | sort)
+ACTUAL_FIXTURE_KEYS=$(printf '%s' "$ACTUAL_FIXTURE_KEYS" | sed '/^$/d')
+FIXTURE_COUNT=$(printf '%s' "$ACTUAL_FIXTURE_KEYS" | grep -c . || true)
+if [ "$FIXTURE_COUNT" -eq 0 ]; then
+  check "共享表 sys_user_role 的夹具主键派生规则已登记" 1 \
+        "$TEST_SRC: 一个往 sys_user_role 插固定主键的夹具都没扫到 —— 本检查正在空转"
+elif [ "$ACTUAL_FIXTURE_KEYS" != "$EXPECTED_FIXTURE_KEYS" ]; then
+  check "共享表 sys_user_role 的夹具主键派生规则已登记" 1 \
+        "夹具清单与登记不符。新增/修改往 sys_user_role 插固定主键的夹具时：
+① 挑一个与上方注释里【全部】已占用值域不相交的偏移量；
+② 回来更新本脚本的 EXPECTED_FIXTURE_KEYS 与那段值域注释；
+③ 在夹具类注释里写清它的值域。
+漏了 ① 的后果是一次【只在特定执行顺序下出现】的 Duplicate entry，单跑复现不了。
+--- 已登记 ---
+$EXPECTED_FIXTURE_KEYS
+--- 实际扫到 ---
+$ACTUAL_FIXTURE_KEYS"
+else
+  check "共享表 sys_user_role 的夹具主键派生规则已登记（$FIXTURE_COUNT 个夹具）" 0 ""
+fi
 
 # --- ⑤ ignore() 逃生舱可审计（契约 §2.8）-----------------------------------
 # 不是违规检查，是清单：每一处都必须能说清「为什么这个查询非跨租户不可」。

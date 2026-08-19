@@ -41,7 +41,13 @@ public abstract class MemberIntegrationTestBase extends AuthIntegrationTestBase 
     @AfterEach
     void tearDownMemberBase() {
         cleanMemberRedisKeys();
-        memberFixtures.clean();
+        // setUp 失败时本方法【仍会执行】，而那时 memberFixtures 可能还没被赋值。
+        // 不加空判的话，这里抛出的 NPE 会把【真正的失败原因】埋在下面 ——
+        // 排查的人第一眼看到的是 NullPointerException，而不是那条 Duplicate entry。
+        // 这不是吞异常：setUp 的原始异常照常上报，本判定只是不再往上面加噪声。
+        if (memberFixtures != null) {
+            memberFixtures.clean();
+        }
     }
 
     /**

@@ -42,7 +42,13 @@ public abstract class CourseIntegrationTestBase extends AuthIntegrationTestBase 
     @AfterEach
     void tearDownCourseBase() {
         cleanCourseRedisKeys();
-        courseFixtures.clean();
+        // setUp 失败时本方法【仍会执行】，而那时 courseFixtures 可能还没被赋值。
+        // 不加空判的话，这里抛出的 NPE 会把【真正的失败原因】埋在下面 ——
+        // 排查的人第一眼看到的是 NullPointerException，而不是那条 Duplicate entry。
+        // 这不是吞异常：setUp 的原始异常照常上报，本判定只是不再往上面加噪声。
+        if (courseFixtures != null) {
+            courseFixtures.clean();
+        }
     }
 
     /** 清掉本模块用到的祖先链缓存键；逐个删而不是 FLUSHDB（库里还有别的模块的键）。 */

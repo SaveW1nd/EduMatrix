@@ -6,11 +6,37 @@
 #
 # 端口用 13306 / 16380 而不是 3306 / 6379 —— 宿主机的默认端口已被其他项目占用。
 #
-# 【库名必须是 edumatrix】Flyway 基线自带 CREATE DATABASE / USE edumatrix。
+# ============================================================================
+# 【⚠ 本机同时有第二个 worktree 在跑 IT 时，必须各起各的一套容器】
+# ============================================================================
+#   export EDUMATRIX_DEV_SUFFIX=w2 EDUMATRIX_MYSQL_PORT=13307 EDUMATRIX_REDIS_PORT=16381
+#   docker compose -f deploy/docker-compose.dev.yml up -d
+#   export EDUMATRIX_TEST_MYSQL_PORT=13307 EDUMATRIX_TEST_REDIS_PORT=16381
+#   cd backend && mvn clean verify
+# 完整说明与「不隔离会怎样」见 deploy/docker-compose.dev.yml 的头注释。
+# 【默认值 13306 / 16380 不许变】——不设这两个环境变量的人行为完全不变。
+#
+# ============================================================================
+# 【库名必须是 edumatrix，而且【不能】拿库名做 worktree 之间的隔离维度】
+# ============================================================================
+# Flyway 初始基线 V202608120000 里逐字有：
+#     CREATE DATABASE IF NOT EXISTS `edumatrix` ...;
+#     USE `edumatrix`;
+# 而基线是【冻结内容】（契约 §7.3：已发布脚本永不修改，修正靠新增脚本）。
+#
+# 于是把 flyway.schemas 与本文件的库名一起改成别的名字【走不通】：
+# Flyway 连上新库跑基线，基线那句 USE 把会话切走 ——
+#   · 41 张业务表建到 edumatrix
+#   · flyway_schema_history 落在新库
+#   · migrate() 【成功完成，无任何报错】
+# 两边分家且不报错，此后应用连的是那个只有一张历史表的空库。
+# 这与 deploy/.env.example 里 MYSQL_URL 那段警告的是同一个形态（F-31 同根）。
+#
+# 所以隔离维度是【端口】：每套容器里的库都仍然叫 edumatrix。
 # ============================================================================
 spring:
   datasource:
-    url: jdbc:mysql://127.0.0.1:13306/edumatrix?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai&createDatabaseIfNotExist=true
+    url: jdbc:mysql://127.0.0.1:${EDUMATRIX_TEST_MYSQL_PORT:13306}/edumatrix?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai&createDatabaseIfNotExist=true
     username: root
     password: edumatrix_root
     driver-class-name: com.mysql.cj.jdbc.Driver
@@ -26,7 +52,7 @@ spring:
   data:
     redis:
       host: 127.0.0.1
-      port: 16380
+      port: ${EDUMATRIX_TEST_REDIS_PORT:16380}
       database: 1
 
 edumatrix:
