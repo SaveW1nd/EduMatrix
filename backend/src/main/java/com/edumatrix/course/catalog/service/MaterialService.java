@@ -138,7 +138,7 @@ public class MaterialService {
     // =====================================================================
 
     public MaterialDetailVO detail(Long materialId) {
-        CrsMaterial material = loadInScope(materialId);
+        CrsMaterial material = loadMaterialByPath(materialId);
         MaterialDetailVO vo = new MaterialDetailVO();
         vo.setId(material.getId());
         vo.setTitle(material.getTitle());
@@ -182,7 +182,7 @@ public class MaterialService {
      */
     @Transactional(rollbackFor = Exception.class)
     public void update(Long materialId, MaterialUpdateReq req) {
-        CrsMaterial material = loadInScope(materialId);
+        CrsMaterial material = loadMaterialByPath(materialId);
         materialMapper.update(null, new com.baomidou.mybatisplus.core.conditions.update
                 .LambdaUpdateWrapper<CrsMaterial>()
                 .eq(CrsMaterial::getId, material.getId())
@@ -198,7 +198,7 @@ public class MaterialService {
     /** 存在未删除课时引用（{@code crs_lesson.content_id}）时拒绝 → {@code 20010}（§4.5）。 */
     @Transactional(rollbackFor = Exception.class)
     public void delete(Long materialId) {
-        CrsMaterial material = loadInScope(materialId);
+        CrsMaterial material = loadMaterialByPath(materialId);
         Long refs = lessonMapper.selectCount(new LambdaQueryWrapper<CrsLesson>()
                 .eq(CrsLesson::getContentId, material.getId()));
         if (refs != null && refs > 0) {
@@ -212,13 +212,22 @@ public class MaterialService {
     // =====================================================================
 
     /**
-     * 不存在 / 已删除 / 跨租户 → {@code 20009}（§4.2 / §4.4 / §4.5 错误码栏）；
-     * 存在但 {@code owner_node_id} 不在我的子树内 → <b>404</b>（契约 §2.4 三分法第 1 行）。
+     * <b>路径上的资料</b>（{@code /materials/{id}}，§4.2 / §4.4 / §4.5）：
+     * 不存在 / 已删除 / 跨租户 <b>与</b>「存在但 {@code owner_node_id} 不在我的子树内」
+     * 一律 <b>404</b>。
+     *
+     * <h2>F-42 定案：两者必须给出同一个结果</h2>
+     * <p>原先前者抛 {@code 20009}、后者 404，合起来能被拿来<b>探测存在性</b>。
+     * 统一到 404 而不是统一到业务码：契约 §2.4 三分法第 1 行是上位文档。
+     *
+     * <p><b>{@code 20009} 没有退役</b>：它仍然是「创建/修改<b>课时</b>时 {@code materialId}
+     * 指向的资料不可用」的码（§3.3 规则 3），那里的 {@code materialId} 来自<b>请求体</b>，
+     * 见 {@code LessonService#loadMaterialByParam}。方法名里的 {@code ByPath} 用来把两类分开。
      */
-    private CrsMaterial loadInScope(Long materialId) {
+    private CrsMaterial loadMaterialByPath(Long materialId) {
         CrsMaterial material = materialId == null ? null : materialMapper.selectById(materialId);
         if (material == null) {
-            throw new BizException(ErrorCode.RELATED_MATERIAL_UNAVAILABLE);
+            throw BizException.notFound(materialId);
         }
         if (!subtreeScopeHelper.isInSubtree(guard.myNodeId(), material.getOwnerNodeId())) {
             throw BizException.notFound(materialId);

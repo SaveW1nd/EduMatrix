@@ -30,6 +30,7 @@ import com.edumatrix.course.catalog.entity.CrsLesson;
 import com.edumatrix.course.catalog.mapper.CrsChapterMapper;
 import com.edumatrix.course.catalog.mapper.CrsCourseMapper;
 import com.edumatrix.course.catalog.mapper.CrsLessonMapper;
+import com.edumatrix.course.catalog.service.CourseAccessGuard.CourseRef;
 import com.edumatrix.course.catalog.vo.CourseDetailVO;
 import com.edumatrix.course.catalog.vo.CourseListVO;
 import com.edumatrix.course.catalog.vo.CourseShelfVO;
@@ -181,7 +182,8 @@ public class CourseService {
 
     public CourseDetailVO detail(Long courseId) {
         Long myNodeId = guard.myNodeId();
-        CrsCourse course = guard.loadVisible(courseId);
+        // 路径上的资源：不存在与不可见同为 404（F-42 定案）
+        CrsCourse course = guard.loadVisible(CourseRef.PATH, courseId);
 
         CourseDetailVO vo = new CourseDetailVO();
         vo.setId(course.getId());
@@ -242,7 +244,7 @@ public class CourseService {
 
     @Transactional(rollbackFor = Exception.class)
     public void update(Long courseId, CourseUpdateReq req) {
-        CrsCourse course = guard.loadOwned(courseId);
+        CrsCourse course = guard.loadOwned(CourseRef.PATH, courseId);
         CrsCourse patch = new CrsCourse();
         patch.setId(course.getId());
         patch.setCourseName(req.getCourseName().trim());
@@ -275,7 +277,7 @@ public class CourseService {
      */
     @Transactional(rollbackFor = Exception.class)
     public void delete(Long courseId) {
-        CrsCourse course = guard.loadOwnedForUpdate(courseId);
+        CrsCourse course = guard.loadOwnedForUpdate(CourseRef.PATH, courseId);
         if (course.getStatus() != null && course.getStatus() == CrsCourse.STATUS_ON_SHELF) {
             throw new BizException(ErrorCode.COURSE_STATUS_NOT_ALLOWED,
                     "课程当前状态不允许该操作：已上架课程须先下架");
@@ -319,7 +321,7 @@ public class CourseService {
      */
     @Transactional(rollbackFor = Exception.class)
     public CourseShelfVO shelf(Long courseId, CourseShelfReq req) {
-        CrsCourse course = guard.loadOwnedForUpdate(courseId);
+        CrsCourse course = guard.loadOwnedForUpdate(CourseRef.PATH, courseId);
         int target = req.getTargetStatus();
         int current = course.getStatus() == null ? CrsCourse.STATUS_DRAFT : course.getStatus();
 

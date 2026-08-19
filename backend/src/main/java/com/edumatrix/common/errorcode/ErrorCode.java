@@ -139,6 +139,18 @@ public enum ErrorCode {
     /** 间隔 <8s 或参数非法，本次不计入；≥8s 均有效、单次封顶计入 15s，超窗不补算不报错 */
     HEARTBEAT_INTERVAL_ABNORMAL(20002, "心跳间隔异常被丢弃", Layer.BUSINESS),
     VIDEO_TRANSCODE_NOT_FINISHED(20003, "视频转码未完成", Layer.BUSINESS),
+    /**
+     * <b>只用于「请求体 / 查询参数里显式指定的 {@code courseId}」</b>（F-42 定案）：
+     * §2.2 创建章节的 body、§3.1 课时列表的 query。
+     *
+     * <p><b>路径上的课程</b>（{@code /courses/{id}/...}）不存在时返回 <b>404</b>，
+     * 与「存在但不可见」同一个结果 —— 两者给不同的码等于把存在性交出去。
+     * 契约 §2.4 三分法第 1 行是上位文档，所以统一到 404 而不是统一到本码。
+     * 判定入口见 {@code course/catalog/service/CourseAccessGuard.CourseRef}。
+     *
+     * <p>msg 里的「不可用」指已逻辑删除，不指「不可见」——「不可见」在本码的
+     * 使用场景里根本走不到（可见性一律 404）。
+     */
     COURSE_NOT_FOUND(20004, "课程不存在或不可用", Layer.BUSINESS),
     COURSE_STATUS_NOT_ALLOWED(20005, "课程当前状态不允许该操作", Layer.BUSINESS),
     CHAPTER_LEVEL_INVALID(20006, "章节层级不合法", Layer.BUSINESS),
@@ -153,10 +165,29 @@ public enum ErrorCode {
      */
     CHAPTER_NOT_FOUND_IN_COURSE(20007, "章节不存在或不属于该课程", Layer.BUSINESS),
     RELATED_VIDEO_UNAVAILABLE(20008, "关联视频不存在或状态不可用", Layer.BUSINESS),
+    /**
+     * <b>只用于「创建/修改课时时请求体里的 {@code materialId}」</b>（§3.3 规则 3，F-42 定案）。
+     *
+     * <p><b>路径上的资料</b>（{@code /materials/{id}}）不存在或不在我子树内一律 <b>404</b>
+     * —— 见 {@code MaterialService#loadMaterialByPath}。码名里的「关联」正是这个意思：
+     * 它描述的是<b>被课时关联的那个资料</b>，不是被直接请求的那个。
+     */
     RELATED_MATERIAL_UNAVAILABLE(20009, "关联图文资料不存在或不可用", Layer.BUSINESS),
     MATERIAL_IN_USE(20010, "图文资料已被课时引用，不可删除", Layer.BUSINESS),
     /** 契约 §2.5 规则 4：只判本节点一条命中，不回溯祖先链 */
     COURSE_NOT_GRANTED(20013, "未被授权访问该课程或授权已过期", Layer.BUSINESS),
+    /**
+     * <b>只用于「请求体 / 查询参数里的 {@code lessonId}」</b>（F-42 定案）：
+     * {@code common/course/LessonVisibilityChecker} 的判定 —— 模块 12 的
+     * {@code POST /vod/play-auth}、模块 13 的心跳、模块 14 的学生端大纲与图文内容。
+     *
+     * <p><b>路径上的课时</b>（{@code /lessons/{id}}，§3.2 / §3.4 / §3.5）不存在时返回
+     * <b>404</b>，与「所属课程对我不可见」同一个结果。
+     *
+     * <p>msg 里的「不可见」= {@code status=0 隐藏}（03-03 §0.3 逐字：「课时不存在、
+     * 已删除、{@code status=0} 隐藏、或课时类型与接口不匹配」），<b>不是</b>资源授权意义上的
+     * 不可见 —— 那个是 {@link #COURSE_NOT_GRANTED}。改完 F-42 后这句话仍然准确。
+     */
     LESSON_NOT_FOUND_OR_INVISIBLE(20014, "课时不存在或不可见", Layer.BUSINESS),
     VIDEO_NOT_FOUND_OR_STATUS_INVALID(20015, "媒资不存在或状态不允许该操作", Layer.BUSINESS),
     VIDEO_IN_USE(20016, "媒资已被课时引用，不可删除", Layer.BUSINESS),

@@ -132,14 +132,15 @@ class CourseCrudIT extends CourseIntegrationTestBase {
     void crossTenantCourseIsInvisible() throws Exception {
         String token = loginAs(CourseFixtures.ROOT);
         JsonNode detail = client.getWithToken("/api/v1/course/courses/" + CourseFixtures.C_OTHER, token);
-        assertEquals(20004, code(detail), "跨租户被插件过滤 → 与「不存在」同一个结果");
+        assertEquals(404, code(detail),
+                "跨租户被插件过滤 → 与「不存在」「不可见」三者同一个结果（F-42 定案）");
 
         JsonNode list = client.getWithToken("/api/v1/course/courses?pageSize=100", token);
         assertFalse(list.toString().contains("另一个机构的课程"), "跨租户数据出现在了列表里");
 
         JsonNode updated = client.putWithToken("/api/v1/course/courses/" + CourseFixtures.C_OTHER,
                 token, "{\"courseName\":\"越界改名\"}");
-        assertEquals(20004, code(updated));
+        assertEquals(404, code(updated));
     }
 
     @Test

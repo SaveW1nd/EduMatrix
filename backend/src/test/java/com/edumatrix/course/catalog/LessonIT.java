@@ -196,7 +196,9 @@ class LessonIT extends CourseIntegrationTestBase {
         assertEquals("已转码视频", data(detail).path("videoName").asText());
 
         JsonNode missing = client.getWithToken("/api/v1/course/lessons/1968000000000099999", token);
-        assertEquals(20014, code(missing));
+        assertEquals(404, code(missing),
+                "F-42：路径上的课时不存在 → 404，与「所属课程不可见」同一个结果。"
+                        + "20014 保留给请求体/查询参数里的 lessonId（LessonVisibilityChecker）");
     }
 
     @Test

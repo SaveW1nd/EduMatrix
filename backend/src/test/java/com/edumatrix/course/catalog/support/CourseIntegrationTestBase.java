@@ -30,7 +30,7 @@ public abstract class CourseIntegrationTestBase extends AuthIntegrationTestBase 
 
     protected CourseFixtures courseFixtures;
 
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    protected final ObjectMapper objectMapper = new ObjectMapper();
 
     @BeforeEach
     void setUpCourseBase() {
@@ -108,5 +108,37 @@ public abstract class CourseIntegrationTestBase extends AuthIntegrationTestBase 
     @FunctionalInterface
     public interface ThrowingRunnable {
         void run() throws Exception;
+    }
+
+    // =====================================================================
+    // F-42：探测不出存在性 —— 要比的是【两次响应本身】
+    // =====================================================================
+
+    /**
+     * 一次请求的完整结果：HTTP 状态码 + 响应体业务码。
+     *
+     * <p>{@code record} 自带 {@code equals}，于是「两次响应完全一致」可以用一句
+     * {@code assertEquals(a, b)} 表达，失败信息还会把两边都打出来。
+     */
+    public record HttpOutcome(int httpStatus, int bizCode) {
+    }
+
+    protected HttpOutcome outcome(String method, String path, String token, String body)
+            throws Exception {
+        var request = switch (method) {
+            case "GET" -> org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(path);
+            case "PUT" -> org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(path);
+            case "DELETE" ->
+                    org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete(path);
+            default -> throw new IllegalArgumentException(method);
+        };
+        request.header("Authorization", "Bearer " + token).contentType(MediaType.APPLICATION_JSON);
+        if (body != null) {
+            request.content(body);
+        }
+        MvcResult result = mockMvc.perform(request).andReturn();
+        String content = result.getResponse().getContentAsString(StandardCharsets.UTF_8);
+        JsonNode json = objectMapper.readTree(content.isBlank() ? "{}" : content);
+        return new HttpOutcome(result.getResponse().getStatus(), json.path("code").asInt());
     }
 }

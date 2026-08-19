@@ -164,8 +164,10 @@ class MaterialIT extends CourseIntegrationTestBase {
         String siblingToken = loginAs(CourseFixtures.TB);
         assertEquals(404, code(client.getWithToken("/api/v1/course/materials/" + id, siblingToken)),
                 "同级教师不在对方子树内 → 404");
-        assertEquals(20009, code(client.getWithToken(
-                "/api/v1/course/materials/1968000000000099999", siblingToken)), "不存在 → 20009");
+        assertEquals(404, code(client.getWithToken(
+                "/api/v1/course/materials/1968000000000099999", siblingToken)),
+                "F-42：路径上的资料不存在 → 404，与「不在我子树内」同一个结果。"
+                        + "20009 保留给创建/修改课时时请求体里的 materialId");
     }
 
     @Test

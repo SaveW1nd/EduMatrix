@@ -26,6 +26,7 @@ import com.edumatrix.course.catalog.entity.CrsMaterial;
 import com.edumatrix.course.catalog.mapper.CrsChapterMapper;
 import com.edumatrix.course.catalog.mapper.CrsLessonMapper;
 import com.edumatrix.course.catalog.mapper.CrsMaterialMapper;
+import com.edumatrix.course.catalog.service.CourseAccessGuard.CourseRef;
 import com.edumatrix.course.catalog.vo.CreatedIdVO;
 import com.edumatrix.course.catalog.vo.LessonDetailVO;
 import com.edumatrix.course.catalog.vo.LessonListVO;
@@ -105,7 +106,8 @@ public class LessonService {
     // =====================================================================
 
     public PageResult<LessonListVO> page(LessonPageQuery query) {
-        CrsCourse course = guard.loadVisible(query.getCourseId());
+        // 查询参数里显式指定的 courseId —— 用户请求的资源是「课时列表」（CourseRef.PARAM）
+        CrsCourse course = guard.loadVisible(CourseRef.PARAM, query.getCourseId());
 
         LambdaQueryWrapper<CrsLesson> wrapper = new LambdaQueryWrapper<CrsLesson>()
                 .eq(CrsLesson::getCourseId, course.getId());
@@ -162,8 +164,8 @@ public class LessonService {
     // =====================================================================
 
     public LessonDetailVO detail(Long lessonId) {
-        CrsLesson lesson = loadLesson(lessonId);
-        guard.loadVisible(lesson.getCourseId());
+        CrsLesson lesson = loadLessonByPath(lessonId);
+        guard.loadVisible(CourseRef.DERIVED, lesson.getCourseId());
 
         VideoRef video = lesson.getVideoId() == null ? null : videoRefReader.read(lesson.getVideoId());
         CrsMaterial material = lesson.getContentId() == null ? null
@@ -199,7 +201,7 @@ public class LessonService {
     @Transactional(rollbackFor = Exception.class)
     public CreatedIdVO create(LessonCreateReq req) {
         CrsChapter chapter = loadChapterOrThrow(req.getChapterId());
-        CrsCourse course = guard.loadOwnedForUpdate(chapter.getCourseId());
+        CrsCourse course = guard.loadOwnedForUpdate(CourseRef.DERIVED, chapter.getCourseId());
 
         int status = req.getStatus() == null ? CrsLesson.STATUS_VISIBLE : req.getStatus();
         CrsLesson lesson = new CrsLesson();
@@ -226,8 +228,8 @@ public class LessonService {
 
     @Transactional(rollbackFor = Exception.class)
     public void update(Long lessonId, LessonUpdateReq req) {
-        CrsLesson lesson = loadLesson(lessonId);
-        CrsCourse course = guard.loadOwnedForUpdate(lesson.getCourseId());
+        CrsLesson lesson = loadLessonByPath(lessonId);
+        CrsCourse course = guard.loadOwnedForUpdate(CourseRef.DERIVED, lesson.getCourseId());
 
         Long targetChapterId = lesson.getChapterId();
         if (req.getChapterId() != null && !req.getChapterId().equals(lesson.getChapterId())) {
@@ -274,8 +276,8 @@ public class LessonService {
 
     @Transactional(rollbackFor = Exception.class)
     public void delete(Long lessonId) {
-        CrsLesson lesson = loadLesson(lessonId);
-        CrsCourse course = guard.loadOwnedForUpdate(lesson.getCourseId());
+        CrsLesson lesson = loadLessonByPath(lessonId);
+        CrsCourse course = guard.loadOwnedForUpdate(CourseRef.DERIVED, lesson.getCourseId());
         lessonMapper.deleteById(lesson.getId());
         counterService.refreshByCourse(course.getId());
     }
@@ -316,13 +318,26 @@ public class LessonService {
             throw new BizException(ErrorCode.LESSON_TYPE_RESOURCE_MISMATCH,
                     "课时类型与关联资源参数不匹配：lessonType=2 必须传 materialId");
         }
-        CrsMaterial material = materialMapper.selectById(materialId);
-        if (material == null) {
-            throw new BizException(ErrorCode.RELATED_MATERIAL_UNAVAILABLE);
-        }
+        loadMaterialByParam(materialId);
         lesson.setVideoId(null);
         lesson.setContentId(materialId);
         lesson.setDuration(0);
+    }
+
+    /**
+     * <b>请求体里显式指定的 {@code materialId}</b>（§3.3 规则 3 / §3.4）：
+     * 不存在 / 已删除 → <b>{@code 20009}</b>，<b>不是 404</b>。
+     *
+     * <p>与 {@link #loadLessonByPath} 的分工就是 F-42 的边界：用户请求的资源是
+     * <b>课时</b>，{@code materialId} 只是他选的一个关联对象 —— 选错了要明确告诉他，
+     * 返 404 会让人以为端点写错了（契约 §2.4 三分法第 3 行同一条理由）。
+     */
+    private CrsMaterial loadMaterialByParam(Long materialId) {
+        CrsMaterial material = materialId == null ? null : materialMapper.selectById(materialId);
+        if (material == null) {
+            throw new BizException(ErrorCode.RELATED_MATERIAL_UNAVAILABLE);
+        }
+        return material;
     }
 
     /** {@code chapterId} 不存在 / 已删除 → {@code 20007}（G 定案的新码）。 */
@@ -334,11 +349,27 @@ public class LessonService {
         return chapter;
     }
 
-    /** 课时不存在 / 已删除 / 跨租户 → {@code 20014}（§3.2 / §3.4 / §3.5 错误码栏）。 */
-    private CrsLesson loadLesson(Long lessonId) {
+    /**
+     * <b>路径上的课时</b>（{@code /lessons/{id}}，§3.2 / §3.4 / §3.5）：
+     * 不存在 / 已删除 / 跨租户 → <b>404</b>。
+     *
+     * <h2>F-42 定案：与「存在但不可见」同一个结果</h2>
+     * <p>原先这里抛 {@code 20014}，而「课时在、但所属课程对我不可见」由
+     * {@code guard.loadVisible(DERIVED, ...)} 抛 404 —— 两个码合起来能被拿来
+     * <b>探测存在性</b>：拿到 {@code 20014} = 这个 id 不存在，拿到 404 = 存在但你看不到。
+     * 统一到 404 而不是统一到业务码，是因为契约 §2.4 三分法第 1 行
+     * 「路径上的资源不在我的子树内 → 404，不暴露存在性」是上位文档、动不得。
+     *
+     * <p><b>{@code 20014} 没有退役</b>：它仍然是
+     * {@code common/course/LessonVisibilityChecker} 的码 —— 那条路径上的
+     * {@code lessonId} 来自<b>请求体/查询参数</b>（模块 12 的 {@code POST /vod/play-auth}、
+     * 模块 13 的心跳、模块 14 的学生端），属于 {@link CourseRef#PARAM} 那一类。
+     * 方法名里的 {@code ByPath} 就是用来把这两类在代码里分开的。
+     */
+    private CrsLesson loadLessonByPath(Long lessonId) {
         CrsLesson lesson = lessonId == null ? null : lessonMapper.selectById(lessonId);
         if (lesson == null) {
-            throw new BizException(ErrorCode.LESSON_NOT_FOUND_OR_INVISIBLE);
+            throw BizException.notFound(lessonId);
         }
         return lesson;
     }

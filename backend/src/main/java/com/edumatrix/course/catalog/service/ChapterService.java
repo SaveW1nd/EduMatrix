@@ -21,6 +21,7 @@ import com.edumatrix.course.catalog.entity.CrsChapter;
 import com.edumatrix.course.catalog.entity.CrsCourse;
 import com.edumatrix.course.catalog.mapper.CrsChapterMapper;
 import com.edumatrix.course.catalog.mapper.CrsLessonMapper;
+import com.edumatrix.course.catalog.service.CourseAccessGuard.CourseRef;
 import com.edumatrix.course.catalog.vo.ChapterDeleteVO;
 import com.edumatrix.course.catalog.vo.ChapterNodeVO;
 import com.edumatrix.course.catalog.vo.CreatedIdVO;
@@ -69,7 +70,8 @@ public class ChapterService {
      * 冲突。本轮已订正该处措辞。
      */
     public List<ChapterNodeVO> tree(Long courseId) {
-        CrsCourse course = guard.loadVisible(courseId);
+        // 路径上的资源（/courses/{id}/chapters）：不存在与不可见同为 404（F-42 定案）
+        CrsCourse course = guard.loadVisible(CourseRef.PATH, courseId);
         List<CrsChapter> chapters = chapterMapper.selectList(new LambdaQueryWrapper<CrsChapter>()
                 .eq(CrsChapter::getCourseId, course.getId())
                 .orderByAsc(CrsChapter::getSort).orderByAsc(CrsChapter::getId));
@@ -126,7 +128,9 @@ public class ChapterService {
 
     @Transactional(rollbackFor = Exception.class)
     public CreatedIdVO create(ChapterCreateReq req) {
-        CrsCourse course = guard.loadOwnedForUpdate(req.getCourseId());
+        // 请求体里显式指定的 courseId —— 用户请求的资源是「章节」，课程只是归属参数，
+        // 查不到必须明确告诉他选错了，返 404 会指代不清（F-42 定案的边界，CourseRef.PARAM）
+        CrsCourse course = guard.loadOwnedForUpdate(CourseRef.PARAM, req.getCourseId());
         Long parentId = req.getParentId() == null ? CrsChapter.ROOT_PARENT_ID : req.getParentId();
         if (parentId != CrsChapter.ROOT_PARENT_ID) {
             CrsChapter parent = chapterMapper.selectById(parentId);
@@ -171,7 +175,7 @@ public class ChapterService {
     @Transactional(rollbackFor = Exception.class)
     public void update(Long chapterId, ChapterUpdateReq req) {
         CrsChapter chapter = loadChapter(chapterId);
-        guard.loadOwned(chapter.getCourseId());
+        guard.loadOwned(CourseRef.DERIVED, chapter.getCourseId());
         CrsChapter patch = new CrsChapter();
         patch.setId(chapter.getId());
         patch.setChapterName(req.getChapterName().trim());
@@ -192,7 +196,7 @@ public class ChapterService {
     @Transactional(rollbackFor = Exception.class)
     public ChapterDeleteVO delete(Long chapterId) {
         CrsChapter chapter = loadChapter(chapterId);
-        CrsCourse course = guard.loadOwnedForUpdate(chapter.getCourseId());
+        CrsCourse course = guard.loadOwnedForUpdate(CourseRef.DERIVED, chapter.getCourseId());
 
         List<Long> victims = new ArrayList<>();
         victims.add(chapter.getId());
@@ -238,7 +242,8 @@ public class ChapterService {
      */
     @Transactional(rollbackFor = Exception.class)
     public void sort(Long courseId, ChapterSortReq req) {
-        CrsCourse course = guard.loadOwnedForUpdate(courseId);
+        // 路径上的资源（/courses/{id}/chapters/sort）
+        CrsCourse course = guard.loadOwnedForUpdate(CourseRef.PATH, courseId);
 
         // ---- 第 3 步：锁内读出当前集合并比对 ----
         List<CrsChapter> current = chapterMapper.selectList(new LambdaQueryWrapper<CrsChapter>()
