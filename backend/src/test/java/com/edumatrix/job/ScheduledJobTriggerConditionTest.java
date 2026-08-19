@@ -6,7 +6,12 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -14,10 +19,14 @@ import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.autoconfigure.task.TaskSchedulingAutoConfiguration;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.scheduling.config.CronTask;
+import org.springframework.scheduling.config.FixedDelayTask;
 import org.springframework.scheduling.config.ScheduledTask;
 import org.springframework.scheduling.config.ScheduledTaskHolder;
+import org.springframework.scheduling.config.Task;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.test.context.ActiveProfiles;
 
+import com.edumatrix.common.config.SchedulerConfig;
 import com.edumatrix.common.config.XxlJobConfig;
 import com.edumatrix.org.member.job.AnonymizeArchivedStudentJob;
 import com.edumatrix.support.IntegrationTest;
@@ -51,13 +60,26 @@ class ScheduledJobTriggerConditionTest {
      * 传 0 时 XXL-Job <b>自己挑一个可用端口</b>（实测日志：两个上下文分别拿到 9999 与 10000）——
      * 不是 OS 分配，是它内部的可用端口探测，效果相同且不会撞。
      */
-    private final ApplicationContextRunner runner = new ApplicationContextRunner()
-            .withConfiguration(AutoConfigurations.of(TaskSchedulingAutoConfiguration.class))
-            .withPropertyValues("xxl.job.executor.appname=edumatrix-test",
-                    "xxl.job.executor.port=0")
-            .withBean(AnonymizeArchivedStudentJob.class, () -> mock(AnonymizeArchivedStudentJob.class))
-            .withBean(TempFileCleanupJob.class, () -> mock(TempFileCleanupJob.class))
-            .withUserConfiguration(ScheduledJobTrigger.class, XxlJobConfig.class);
+    private final ApplicationContextRunner runner = runnerWith(mock(VodEventConsumeJob.class));
+
+    /**
+     * 同一套装配，只换消费 Job 的 mock。
+     *
+     * <p><b>不要在共享的 {@code runner} 上再 {@code withBean} 一个同类型的 Bean</b> ——
+     * 那会注册成两个候选，上下文直接起不来，而表现是「任务没跑」这种看着像被测行为的假象
+     * （本条实测踩过：第一版这么写，失败信息是「消费任务 5 秒内一次都没跑」，
+     * 而真正的原因是上下文压根没起来）。
+     */
+    private static ApplicationContextRunner runnerWith(VodEventConsumeJob consumeJob) {
+        return new ApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(TaskSchedulingAutoConfiguration.class))
+                .withPropertyValues("xxl.job.executor.appname=edumatrix-test",
+                        "xxl.job.executor.port=0")
+                .withBean(AnonymizeArchivedStudentJob.class, () -> mock(AnonymizeArchivedStudentJob.class))
+                .withBean(TempFileCleanupJob.class, () -> mock(TempFileCleanupJob.class))
+                .withBean(VodEventConsumeJob.class, () -> consumeJob)
+                .withUserConfiguration(SchedulerConfig.class, ScheduledJobTrigger.class, XxlJobConfig.class);
+    }
 
     // =====================================================================
     // ① / ② 互斥
@@ -222,16 +244,21 @@ class ScheduledJobTriggerConditionTest {
     void delegatesToRunNotExecute() {
         AnonymizeArchivedStudentJob anonymize = mock(AnonymizeArchivedStudentJob.class);
         TempFileCleanupJob cleanup = mock(TempFileCleanupJob.class);
+        VodEventConsumeJob consume = mock(VodEventConsumeJob.class);
         when(cleanup.run()).thenReturn(new TempFileCleanupJob.CleanupSummary(0, 0));
+        when(consume.run()).thenReturn(0);
 
-        ScheduledJobTrigger trigger = new ScheduledJobTrigger(anonymize, cleanup);
+        ScheduledJobTrigger trigger = new ScheduledJobTrigger(anonymize, cleanup, consume);
         trigger.triggerAnonymizeArchivedStudent();
         trigger.triggerTempFileCleanup();
+        trigger.triggerVodEventConsume();
 
         verify(anonymize).run();
         verify(anonymize, never()).execute();
         verify(cleanup).run();
         verify(cleanup, never()).execute();
+        verify(consume).run();
+        verify(consume, never()).execute();
     }
 
     @Test
@@ -239,10 +266,12 @@ class ScheduledJobTriggerConditionTest {
     void oneFailureDoesNotBreakTheScheduler() {
         AnonymizeArchivedStudentJob anonymize = mock(AnonymizeArchivedStudentJob.class);
         TempFileCleanupJob cleanup = mock(TempFileCleanupJob.class);
+        VodEventConsumeJob consume = mock(VodEventConsumeJob.class);
         when(anonymize.run()).thenThrow(new IllegalStateException("探针：本次执行失败"));
         when(cleanup.run()).thenReturn(new TempFileCleanupJob.CleanupSummary(0, 0));
+        when(consume.run()).thenReturn(0);
 
-        ScheduledJobTrigger trigger = new ScheduledJobTrigger(anonymize, cleanup);
+        ScheduledJobTrigger trigger = new ScheduledJobTrigger(anonymize, cleanup, consume);
 
         org.assertj.core.api.Assertions
                 .assertThatCode(trigger::triggerAnonymizeArchivedStudent)
@@ -253,6 +282,183 @@ class ScheduledJobTriggerConditionTest {
         org.assertj.core.api.Assertions
                 .assertThatCode(trigger::triggerTempFileCleanup)
                 .doesNotThrowAnyException();
+    }
+
+
+    // =====================================================================
+    // 模块 09：第三条任务，以及它跑在【哪个】线程池上
+    // =====================================================================
+
+    /**
+     * <b>补上 {@link #cronTasksAreActuallyRegistered} 的一个洞</b>：那一条
+     * {@code .filter(CronTask.class::isInstance)}，只看得见 cron 触发器。
+     * 模块 09 的消费任务用的是 {@code fixedDelay}，注册成 {@code FixedDelayTask} ——
+     * <b>它加进来，那条断言不会红</b>。而「加了一个 Job 必须有人动手改测试」正是
+     * {@code XxlJobHandlerRegistryTest} 与那条断言共同守的东西。
+     *
+     * <p>所以这里数<b>全部</b> {@link ScheduledTask}，不按类型过滤，并逐条钉住触发器的类型与值。
+     * <b>原来那条一字未改</b>——放松它等于把守卫拆了。
+     *
+     * <p>变异（需方点名的杀死条件）：把 {@code triggerVodEventConsume} 上的
+     * {@code @Scheduled} 删掉 → 任务数变 2 → 本条红。
+     */
+    @Test
+    @DisplayName("全部 ScheduledTask 恰好三条：两条 cron + 一条 fixedDelay 10s（摘掉消费任务会红）")
+    void allScheduledTasksArePinned() {
+        runner.run(context -> {
+            List<Task> tasks = context.getBeansOfType(ScheduledTaskHolder.class).values().stream()
+                    .flatMap(holder -> holder.getScheduledTasks().stream())
+                    .map(ScheduledTask::getTask)
+                    .toList();
+
+            assertThat(tasks)
+                    .as("注册的调度任务数与预期不符。加/删 Job 时：① 去调度中心登记 handler 名与 cron；"
+                            + "② 更新 XxlJobHandlerRegistryTest 的清单；③ 更新本条与 05-工程结构.md §H")
+                    .hasSize(3);
+
+            List<String> crons = tasks.stream()
+                    .filter(CronTask.class::isInstance).map(CronTask.class::cast)
+                    .map(CronTask::getExpression).sorted().toList();
+            assertThat(crons).containsExactly(
+                    ScheduledJobTrigger.CRON_ANONYMIZE_ARCHIVED_STUDENT,
+                    ScheduledJobTrigger.CRON_TEMP_FILE_CLEANUP);
+
+            List<Duration> delays = tasks.stream()
+                    .filter(FixedDelayTask.class::isInstance).map(FixedDelayTask.class::cast)
+                    .map(FixedDelayTask::getIntervalDuration).toList();
+            assertThat(delays)
+                    .as("转码事件消费必须是 fixedDelay（完成后再等 10s，天然背压、永不重叠），"
+                            + "且间隔 == ScheduledJobTrigger.FIXED_DELAY_VOD_EVENT_CONSUME")
+                    .containsExactly(Duration.ofMillis(
+                            Long.parseLong(ScheduledJobTrigger.FIXED_DELAY_VOD_EVENT_CONSUME)));
+        });
+    }
+
+    /**
+     * <b>消费任务必须真的跑在 {@code vodEventTaskScheduler} 上。</b>
+     *
+     * <p>不去反射「注册时绑了哪个 Bean」，而是<b>看它实际跑在哪个线程上</b> ——
+     * 线程名前缀是两个池唯一的、运行期可观测的区别，也是生产上排查卡死时的诊断入口。
+     * {@code fixedDelay} 任务的 {@code initialDelay} 为 0，上下文一起来它就跑第一轮，
+     * 所以这里只需等它跑到。
+     *
+     * <p><b>两个变异各自都能杀死本条</b>：
+     * <ol>
+     *   <li>去掉 {@code @Scheduled} 上的 {@code scheduler = ...} → 消费任务落到默认池，
+     *       线程名变成 {@code edumatrix-sched-*} → 红；</li>
+     *   <li>删掉 {@code SchedulerConfig} 里显式的 {@code @Bean("taskScheduler")} →
+     *       Boot 的 {@code TaskSchedulerConfiguration} 因
+     *       {@code @ConditionalOnMissingBean({TaskScheduler, ScheduledExecutorService})} 退避，
+     *       容器里只剩一个调度器，三条任务重新挤回同一个池 → 下面那条 bean 断言红。
+     *       <b>这一条拦的正是「以为隔离了、实际没隔离」</b>，而它不会报任何错。</li>
+     * </ol>
+     *
+     * <h2>⚠ 两条断言缺一不可 —— 别把 {@code hasBean} 那条当成冗余删掉</h2>
+     * <p><b>这是实测出来的，不是设计出来的</b>：做变异 ② 时，
+     * 上面那条<b>线程名断言仍然是绿的</b> —— 默认调度器退避消失后，三条任务全落到
+     * 剩下的那个池上，而那个池的前缀恰好就是 {@code vod-event-}，
+     * 于是「消费任务跑在 vod-event-* 上」照样成立。红的只有 {@code hasBean} 那一条。
+     *
+     * <p>也就是说：只写线程名断言的话，<b>这个陷阱会安静地通过</b> ——
+     * 隔离失效、日志照打、三个任务重新互相阻塞，而测试全绿。
+     * 那会是本项目「以为存在、实际从未生效的保障」的<b>未遂第七例</b>，
+     * 而拦住它的不是设计，是变异测试。
+     *
+     * <p><b>线程名那条证明「绑对了」，{@code hasBean} 那条证明「有两个池可绑」</b>。
+     * 前者答「消费任务在哪」，后者答「另外两个任务还有没有自己的地方」。删掉任何一条，
+     * 另一条都答不出被删掉的那半个问题。
+     */
+    @Test
+    @DisplayName("消费任务实际跑在 vod-event-* 线程上，且两个调度器 Bean 都在（少一个就是没隔离）")
+    void vodConsumeRunsOnItsOwnScheduler() {
+        AtomicReference<String> threadName = new AtomicReference<>();
+        CountDownLatch ran = new CountDownLatch(1);
+        VodEventConsumeJob consume = mock(VodEventConsumeJob.class);
+        when(consume.run()).thenAnswer(invocation -> {
+            threadName.compareAndSet(null, Thread.currentThread().getName());
+            ran.countDown();
+            return 0;
+        });
+
+        runnerWith(consume).run(context -> {
+            assertThat(ran.await(5, TimeUnit.SECONDS))
+                    .as("消费任务在 5 秒内一次都没跑 —— fixedDelay 的 initialDelay 是 0，"
+                            + "起来就该跑第一轮")
+                    .isTrue();
+
+            assertThat(threadName.get())
+                    .as("消费任务没有跑在自己的调度器上。它会调云端 API，卡住是常态；"
+                            + "与两个合规日任务共用一个单线程池的话，它一卡，"
+                            + "30 日不可逆脱敏与 7 天清理就永远不触发，且没有任何东西会报告")
+                    .startsWith("vod-event-");
+
+            // 默认池必须【也】显式存在，且名字就是 taskScheduler ——
+            // 少了它，自动配置退避，隔离静默失效
+            assertThat(context).hasBean(SchedulerConfig.DEFAULT_SCHEDULER);
+            assertThat(context).hasBean(SchedulerConfig.VOD_EVENT_SCHEDULER);
+            assertThat(context.getBean(SchedulerConfig.DEFAULT_SCHEDULER))
+                    .as("两个调度器必须是不同实例，否则隔离只是名字上的")
+                    .isNotSameAs(context.getBean(SchedulerConfig.VOD_EVENT_SCHEDULER));
+        });
+    }
+
+    /**
+     * <b>行为层的证明：一个任务卡死，另外两个还跑不跑。</b>
+     *
+     * <p>上面两条数的是装配结果。本条不起 Spring 上下文，直接拿两个<b>真的</b>单线程
+     * {@code ThreadPoolTaskScheduler}，把消费任务换成一个<b>永不返回</b>的 mock，
+     * 再看日任务还走不走得动。这才是那句承诺（「消费任务卡住，两个合规任务照常」）
+     * 的直接证据 —— 装配对了但线程池实现有别的坑时，只有这一条会红。
+     *
+     * <p>变异：把两条注册到<b>同一个</b>调度器 → 日任务一次都跑不到 → 红。
+     */
+    @Test
+    @DisplayName("消费任务卡死时，日任务照常触发（两条注册到同一个池则一次都跑不到）")
+    void hangingTaskDoesNotStarveTheOthers() throws Exception {
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicInteger cleanupRuns = new AtomicInteger();
+
+        AnonymizeArchivedStudentJob anonymize = mock(AnonymizeArchivedStudentJob.class);
+        TempFileCleanupJob cleanup = mock(TempFileCleanupJob.class);
+        VodEventConsumeJob consume = mock(VodEventConsumeJob.class);
+        when(cleanup.run()).thenAnswer(invocation -> {
+            cleanupRuns.incrementAndGet();
+            return new TempFileCleanupJob.CleanupSummary(0, 0);
+        });
+        when(consume.run()).thenAnswer(invocation -> {
+            release.await();          // 卡死：模拟云端 API 挂住，永不返回
+            return 0;
+        });
+
+        ScheduledJobTrigger trigger = new ScheduledJobTrigger(anonymize, cleanup, consume);
+        ThreadPoolTaskScheduler vodPool = pool("probe-vod-");
+        ThreadPoolTaskScheduler dailyPool = pool("probe-daily-");
+        try {
+            vodPool.scheduleWithFixedDelay(trigger::triggerVodEventConsume, Duration.ofMillis(20));
+            dailyPool.scheduleWithFixedDelay(trigger::triggerTempFileCleanup, Duration.ofMillis(50));
+
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (cleanupRuns.get() < 3 && System.nanoTime() < deadline) {
+                Thread.sleep(20);
+            }
+            assertThat(cleanupRuns.get())
+                    .as("消费任务卡死期间日任务一次都没跑到 —— 两者共用了同一个线程池。"
+                            + "后果：30 日不可逆脱敏（《个保法》第 31 条 / 契约 §7.2 第 3 条）与"
+                            + "敏感文件 7 天清理永远不触发，而应用一切正常")
+                    .isGreaterThanOrEqualTo(3);
+        } finally {
+            release.countDown();
+            vodPool.shutdown();
+            dailyPool.shutdown();
+        }
+    }
+
+    private static ThreadPoolTaskScheduler pool(String prefix) {
+        ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
+        scheduler.setPoolSize(1);
+        scheduler.setThreadNamePrefix(prefix);
+        scheduler.initialize();
+        return scheduler;
     }
 
     // =====================================================================

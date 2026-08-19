@@ -170,6 +170,37 @@ edumatrix:
       access-key-id: ${ALIYUN_ACCESS_KEY_ID:}
       access-key-secret: ${ALIYUN_ACCESS_KEY_SECRET:}
 
+  # ==========================================================================
+  # 点播与转码事件（模块 09 / 12）
+  #
+  # 【留空 = 整块功能不装配】两组开关，各自互为反面（与 OSS 那组同型）：
+  #   region + template-group-id 非空 → integration/aliyun/VodClient
+  #                             为空 → common/media/DisabledVodMediaClient
+  #   smq.endpoint + smq.queue-name 非空 → integration/aliyun/SmqClient
+  #                                 为空 → common/media/DisabledVodEventSource
+  #
+  # 【为什么不是「配错就启动失败」】OssClient 那两条自检（桶必须私有、区域必须中国大陆）
+  #   是【合规基线】，配错的后果是数据当场对全互联网敞开，所以它拒绝启动。
+  #   本组不同：缺配置的后果是【功能不可用】，模块 01~08 与本模块的读接口都不依赖它。
+  #   而生产机 /etc/edumatrix/db.env 里【目前一个 VOD/SMQ 的键都没有】——
+  #   启动失败等于「一部署新版本这台在跑的机器就起不来」，把功能缺失升级成全站停机。
+  #   代价是「静默不工作」，处置见两个 Disabled 实现的构造函数：
+  #   各打一条【写明后果】的 WARN，且未配置时不注册 lag 指标（避免持续假警报）。
+  #
+  # 【SMQ endpoint 必须是公网 Endpoint】否则点播服务写队列失败、重试 3 次后【静默丢弃】
+  #   （契约 §1 上线前置确认第 1 条）。这条配错的唯一痕迹是
+  #   vod_event_last_consume_lag_seconds 一路上涨——队列侧永远空着，积压指标恒为 0。
+  #
+  # 【模板组必须是单一清晰度 + Encrypt=true】契约 §1 部署约定第 1/2 条。
+  #   配了多档会让学生实际看到的清晰度不可控——挑流挑出多路时本模块置 status=3 并告警（F-54）。
+  # ==========================================================================
+  vod:
+    region: ${ALIYUN_VOD_REGION:}
+    template-group-id: ${ALIYUN_VOD_TEMPLATE_GROUP_ID:}
+    smq:
+      endpoint: ${ALIYUN_SMQ_ENDPOINT:}
+      queue-name: ${ALIYUN_SMQ_QUEUE_NAME:}
+
 # ============================================================================
 # XXL-Job（05-工程结构.md §H：全部任务与 Worker 集中在 com.edumatrix.job）
 #   模块 01 只交付 traceId 的继承包装，第一个 Job 在模块 05/09。

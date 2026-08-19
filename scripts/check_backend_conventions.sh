@@ -246,12 +246,25 @@ else
   check "共享表 sys_user_role 的夹具主键派生规则已登记（$FIXTURE_COUNT 个夹具）" 0 ""
 fi
 
-# --- ⑤ ignore() 逃生舱可审计（契约 §2.8）-----------------------------------
+# --- ⑤ 跨租户逃生舱可审计（契约 §2.8）---------------------------------------
 # 不是违规检查，是清单：每一处都必须能说清「为什么这个查询非跨租户不可」。
-IGNORES=$(grep -rn "TenantHelper\.ignore(" "$JAVA_SRC" --include='*.java' 2>/dev/null | strip_comments || true)
-IGNORE_COUNT=$(printf '%s' "$IGNORES" | grep -c . || true)
-printf '  ℹ️  TenantHelper.ignore() 调用点：%s 处（每一处都要说清为什么非跨租户不可）\n' "$IGNORE_COUNT"
-[ "$IGNORE_COUNT" -gt 0 ] && printf '%s\n' "$IGNORES" | sed 's/^/       /'
+#
+# 【两种写法，一个数字】绕过租户插件有两条路，作用面不同但后果同类：
+#   a. TenantHelper.ignore(...)              —— 豁免整个 lambda 里的【所有】SQL
+#   b. @InterceptorIgnore(tenantLine = ...)  —— 只豁免【那一个】mapped statement（更窄，优先用它）
+# 【为什么合成一个数字而不是分两行计数】两个数字意味着看的人要自己加，
+# 而「忘了加」正是这条检查存在的理由。清单的用途是「一眼看到全部逃生舱有几处」。
+#
+# 正则按头注释那个框的形态写（全限定名绕过），本条对应的绕法是
+# @com.baomidou.mybatisplus.annotation.InterceptorIgnore —— 变异已验，见提交记录。
+ESCAPES=$(grep -rn "TenantHelper\.ignore(" "$JAVA_SRC" --include='*.java' 2>/dev/null | strip_comments || true)
+ANNOTATED=$(grep -rnE "@([A-Za-z_][A-Za-z0-9_]*\.)*InterceptorIgnore\b" "$JAVA_SRC" --include='*.java' 2>/dev/null | strip_comments || true)
+if [ -n "$ANNOTATED" ]; then
+  ESCAPES=$(printf '%s\n%s' "$ESCAPES" "$ANNOTATED")
+fi
+ESCAPE_COUNT=$(printf '%s' "$ESCAPES" | grep -c . || true)
+printf '  ℹ️  跨租户逃生舱：%s 处（TenantHelper.ignore() 与 @InterceptorIgnore 合计；每一处都要说清为什么非跨租户不可）\n' "$ESCAPE_COUNT"
+[ "$ESCAPE_COUNT" -gt 0 ] && printf '%s\n' "$ESCAPES" | sed 's/^/       /'
 
 echo
 if [ "$FAIL" -eq 0 ]; then
