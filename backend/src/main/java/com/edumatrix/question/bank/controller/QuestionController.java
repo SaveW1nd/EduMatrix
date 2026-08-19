@@ -1,6 +1,9 @@
 package com.edumatrix.question.bank.controller;
 
+import java.util.List;
+
 import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -8,32 +11,82 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.edumatrix.common.operlog.OperLog;
+import com.edumatrix.common.response.PageResult;
 import com.edumatrix.common.response.R;
 import com.edumatrix.question.bank.dto.QuestionCreateReq;
+import com.edumatrix.question.bank.dto.QuestionPageQuery;
 import com.edumatrix.question.bank.dto.QuestionStatusReq;
 import com.edumatrix.question.bank.dto.QuestionUpdateReq;
+import com.edumatrix.question.bank.service.QuestionQueryService;
 import com.edumatrix.question.bank.service.QuestionService;
 import com.edumatrix.question.bank.vo.QuestionCreatedVO;
+import com.edumatrix.question.bank.vo.QuestionDetailVO;
+import com.edumatrix.question.bank.vo.QuestionListVO;
+import com.edumatrix.question.bank.vo.QuestionSnapshotVO;
 import com.edumatrix.question.bank.vo.QuestionStatusVO;
 import com.edumatrix.question.bank.vo.QuestionUpdatedVO;
+import com.edumatrix.question.bank.vo.QuestionVersionMetaVO;
 
 import cn.dev33.satoken.annotation.SaCheckPermission;
 import jakarta.validation.Valid;
 
 /**
- * 题目写侧（03-04 §2，接口 6 / 7 / 11 / 12）。
+ * 题目（03-04 §2，接口 5~12 共八个）。
  *
- * <p>四个接口的判定顺序完全一致（{@code QuestionAccessGuard} 的四步表）：
+ * <p>判定顺序统一走 {@code QuestionAccessGuard} 的四步表：
  * {@code @SaCheckPermission} → 查到行 → 可见性(404) → 写权限(403) → 业务码。
  * <b>被授权者是「只读可用」</b>：可见但改 / 停用 / 删一律 403（03-04 §0.1）。
+ *
+ * <p>四个读接口（列表 / 详情 / 版本列表 / 版本快照）<b>不单独发按钮标识</b>，
+ * 随题库管理页的 {@code question:question:list} 一并放行 —— 契约 §3.1 边界 2。
  */
 @RestController
 public class QuestionController {
 
     private final QuestionService questionService;
+    private final QuestionQueryService queryService;
 
-    public QuestionController(QuestionService questionService) {
+    public QuestionController(QuestionService questionService, QuestionQueryService queryService) {
         this.questionService = questionService;
+        this.queryService = queryService;
+    }
+
+    /**
+     * 接口 5 §2.1 分页查询题目。
+     *
+     * <p>返回<b>自有 ∪ 被授权且在有效期内</b>的题目，逐行以 {@code grantType} 标来源。
+     * <b>不回溯祖先链</b>：上级拥有而未显式授权给我的题，本接口不返回。
+     * <b>材料题只出父题</b>（固定过滤 {@code parent_id = 0}）。
+     */
+    @GetMapping("/api/v1/question/questions")
+    @SaCheckPermission("question:question:list")
+    public R<PageResult<QuestionListVO>> page(QuestionPageQuery query) {
+        return R.ok(queryService.page(query));
+    }
+
+    /** 接口 8 §2.4 题目详情（当前版本，含答案与解析 —— 教师侧）。不可见 → 404。 */
+    @GetMapping("/api/v1/question/questions/{id}")
+    @SaCheckPermission("question:question:list")
+    public R<QuestionDetailVO> detail(@PathVariable Long id) {
+        return R.ok(queryService.detail(id));
+    }
+
+    /** 接口 9 §2.5 题目版本列表（按 version 倒序，不分页）。 */
+    @GetMapping("/api/v1/question/questions/{id}/versions")
+    @SaCheckPermission("question:question:list")
+    public R<List<QuestionVersionMetaVO>> versions(@PathVariable Long id) {
+        return R.ok(queryService.versions(id));
+    }
+
+    /**
+     * 接口 10 §2.6 题目指定版本快照。版本不存在 → {@code 30007}。
+     *
+     * <p><b>可见性 404 在 30007 之前判</b>：反过来 30007 就成了存在性探针。
+     */
+    @GetMapping("/api/v1/question/questions/{id}/versions/{version}")
+    @SaCheckPermission("question:question:list")
+    public R<QuestionSnapshotVO> snapshot(@PathVariable Long id, @PathVariable Integer version) {
+        return R.ok(queryService.snapshot(id, version));
     }
 
     /**
