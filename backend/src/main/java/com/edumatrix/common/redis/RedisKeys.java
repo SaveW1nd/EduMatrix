@@ -99,6 +99,17 @@ public final class RedisKeys {
     /** 验证码 IP 限流：{@code rate:captcha:{ip}}，同一 IP 60 秒内最多 20 次（00-通用约定 §8）。 */
     public static final String RATE_LIMIT_CAPTCHA_PREFIX = "rate:captcha:";
 
+    /**
+     * 文件上传频次闸：{@code rate:file:upload:{userId}}，同一用户 60 秒内最多 20 次（D-5 定案）。
+     *
+     * <p><b>按 userId 而不是 IP</b>：登录与验证码是<b>未登录</b>接口，只能按 IP；
+     * 上传接口一定有会话，按 userId 更准 —— 校园网整栋楼一个出口 IP，
+     * 按 IP 限流会让一个人刷爆导致全班传不了作业。
+     *
+     * <p>本项是 00-通用约定 §8 限流表在模块 05 新增的一行（D-5 定案）。
+     */
+    public static final String RATE_LIMIT_FILE_UPLOAD_PREFIX = "rate:file:upload:";
+
     // =====================================================================
     // 拼接助手 —— 让「前缀 + 变量」这件事也只有一种写法
     // =====================================================================
@@ -137,5 +148,9 @@ public final class RedisKeys {
 
     public static String rateLimitCaptcha(String ip) {
         return RATE_LIMIT_CAPTCHA_PREFIX + ip;
+    }
+
+    public static String rateLimitFileUpload(Long userId) {
+        return RATE_LIMIT_FILE_UPLOAD_PREFIX + userId;
     }
 }

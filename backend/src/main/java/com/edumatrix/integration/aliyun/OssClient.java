@@ -76,6 +76,14 @@ public class OssClient implements ObjectStorage, DisposableBean {
     /** 契约 §7.2 第 4 条「存储区域仅中国大陆」——中国大陆地域的 Location 一律 {@code oss-cn-*}。 */
     private static final String MAINLAND_LOCATION_PREFIX = "oss-cn-";
 
+    /**
+     * 下载档强制的响应 MIME。
+     *
+     * <p>不用真实 MIME：{@code nosniff} 在 302 路径上拿不到（D-4），
+     * 而 {@code application/octet-stream} 是"浏览器无论如何都不会内联渲染"的那一个。
+     */
+    static final String ATTACHMENT_CONTENT_TYPE = "application/octet-stream";
+
     private final String bucket;
     private final OSS internalOss;
     private final OSS publicOss;
@@ -164,13 +172,30 @@ public class OssClient implements ObjectStorage, DisposableBean {
     @Override
     public Optional<String> presignedUrl(String key, String downloadFileName, String contentType,
                                          Disposition disposition, Duration ttl) {
+        GeneratePresignedUrlRequest request =
+                presignRequest(bucket, key, downloadFileName, contentType, disposition, ttl);
+        return Optional.of(publicOss.generatePresignedUrl(request).toString());
+    }
+
+    /**
+     * 组装签名请求（含 D-4 的两个 override 参数）。
+     *
+     * <p><b>拆成 static 是为了可测</b>：本类的构造函数会做启动自检（要连 OSS），
+     * 测试里构造不出实例；而 D-4 那两个参数在不在、值对不对，是必须被测到的东西 ——
+     * 它们是「00-通用约定 §7.4 的下载头基线在 302 路径上唯一的抓手」。
+     * {@code OssPresignParamsTest} 直接调它，并用一个一次性 OSS 客户端签出真实 URL
+     * 断言参数确实落在了地址里（{@code generatePresignedUrl} 是本地签名、不发网络请求）。
+     */
+    static GeneratePresignedUrlRequest presignRequest(String bucket, String key, String downloadFileName,
+                                                      String contentType, Disposition disposition,
+                                                      Duration ttl) {
         GeneratePresignedUrlRequest request = new GeneratePresignedUrlRequest(bucket, key);
         request.setExpiration(new Date(System.currentTimeMillis() + ttl.toMillis()));
 
         ResponseHeaderOverrides overrides = new ResponseHeaderOverrides();
         if (disposition == Disposition.ATTACHMENT) {
             // octet-stream + attachment：nosniff 缺席时，这对组合是阻止浏览器内联渲染的主力
-            overrides.setContentType("application/octet-stream");
+            overrides.setContentType(ATTACHMENT_CONTENT_TYPE);
             overrides.setContentDisposition("attachment; " + rfc5987(downloadFileName));
         } else {
             // D-2 的三种内联档：给真实 MIME + inline。显式写 inline 而不是"什么都不设"——
@@ -179,8 +204,7 @@ public class OssClient implements ObjectStorage, DisposableBean {
             overrides.setContentDisposition("inline; " + rfc5987(downloadFileName));
         }
         request.setResponseHeaders(overrides);
-
-        return Optional.of(publicOss.generatePresignedUrl(request).toString());
+        return request;
     }
 
     @Override

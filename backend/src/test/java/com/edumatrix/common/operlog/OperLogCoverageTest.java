@@ -91,12 +91,16 @@ class OperLogCoverageTest {
      * 如果哪天扫描逻辑本身退化（比如注解元数据丢失、包名改了），
      * 上面那条会以"零个未标注"的姿态<b>全绿</b>，而本条会红。
      *
-     * <p>当前 37 = {@code org} 19（member 15 + node 4）+ {@code system} 18
-     * （user 5 / role 4 / menu 3 / tenant 5 / tenantConfig 1）。
+     * <p>当前 38 = {@code org} 19（member 15 + node 4）+ {@code system} 19
+     * （user 5 / role 4 / menu 3 / tenant 5 / tenantConfig 1 / <b>file 1</b>）。
      * 新增写接口时本条会红 —— <b>那正是提醒去标注解的时刻</b>，请连同数字一起改。
+     *
+     * <p><b>它已经真的红过一次</b>：模块 05 的 C3 把数字钉在 37，C4 加了
+     * {@code SysFileController#upload}（03-01 §7.1 上传文件）之后立刻红，
+     * 于是这一行被改成 38。这就是它存在的样子。
      */
     @Test
-    @DisplayName("写端点总数 = 37（新增写接口时本条会红，提醒去标 @OperLog）")
+    @DisplayName("写端点总数 = 38（新增写接口时本条会红，提醒去标 @OperLog）")
     void writeEndpointCountIsPinned() throws Exception {
         int count = 0;
         for (Class<?> controller : scanControllers()) {
@@ -106,7 +110,7 @@ class OperLogCoverageTest {
                 }
             }
         }
-        assertThat(count).isEqualTo(37);
+        assertThat(count).isEqualTo(38);
     }
 
     private static boolean isWriteEndpoint(Method method) {
