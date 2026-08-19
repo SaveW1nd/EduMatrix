@@ -19,6 +19,7 @@ import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import com.edumatrix.common.file.FileBizType;
+import com.edumatrix.common.response.GlobalExceptionHandler;
 import com.edumatrix.support.IntegrationTest;
 import com.edumatrix.support.TestCurrentContextProvider;
 import com.edumatrix.system.file.controller.SysFileController;
@@ -70,6 +71,9 @@ class SysFileDownloadHeaderIT {
         contextProvider.asTenantUser(TENANT_A, ADMIN_USER_ID, ADMIN_NODE_ID);
         mockMvc = MockMvcBuilders
                 .standaloneSetup(applicationContext.getBean(SysFileController.class))
+                // 挂上真实的全局异常处理器：被拒的下载要验的是「返回了什么」，
+                // 而不是「抛了什么」—— 前者才是客户端真正看到的东西
+                .setControllerAdvice(applicationContext.getBean(GlobalExceptionHandler.class))
                 .build();
     }
 
@@ -110,12 +114,12 @@ class SysFileDownloadHeaderIT {
         MvcResult result = mockMvc.perform(get("/api/v1/system/files/" + saved.getId() + "/download"))
                 .andReturn();
 
-        // standalone 没挂全局异常处理器，BizException 直接冒出来即可证明"没有返回内容"；
-        // 业务码到 HTTP 的映射由 ResponseContractIT 覆盖，这里只确认没有任何地址泄露
-        assertThat(result.getResolvedException()).isNotNull();
+        // 00-通用约定 §2.4 三分法：路径上的资源不可见 → 404，不暴露存在性
+        assertThat(result.getResponse().getStatus()).isEqualTo(404);
         assertThat(result.getResponse().getHeader(HttpHeaders.LOCATION))
                 .as("被拒的下载绝不能带 Location —— 那等于把签名地址送出去了")
                 .isNull();
+        // 响应体里不能出现对象键：它是 OSS 上的真实路径，泄露了就能配合别的口子拼地址
         assertThat(result.getResponse().getContentAsString()).doesNotContain(saved.getFileUrl());
     }
 

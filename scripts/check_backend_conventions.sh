@@ -85,6 +85,32 @@ done < <(find "$ROOT/backend/src" -type f \( -name '*.java' -o -name '*.xml' -o 
 check "backend/src 下源码不含 NUL 字节（否则 grep 把它当二进制，上面三条检查对它全部失灵）" \
       "$(printf '%s' "$NUL_FILES" | grep -c . || true)" "$NUL_FILES"
 
+# --- ⑥ 日志表的查询 Mapper 必须只读（模块 05 新增）--------------------------
+# 【为什么是一条脚本检查而不是一条注释】
+#   sys_login_log 与 sys_oper_log 各有【两个】Mapper：写侧在 auth/ 与 common/operlog/，
+#   读侧在 system/log/。检查③ 拦的是 import、【拦不住表】——「同一张表两份实现」
+#   这件事在本项目没有任何自动守卫，这条补上其中最要紧的一半：
+#   往【只读】那一侧加一个 @Insert/@Update/@Delete，等于给「操作日志可被篡改」开了口，
+#   而契约 §7.2 第 5 条要求这张表保留 ≥ 6 个月、且它是排查越权时唯一的原始事实。
+#
+# 【它会不会红】把任意一个 @Update 加进 system/log/mapper/ 下的文件 → 立刻红。
+LOG_QUERY_MAPPERS="$JAVA_SRC/com/edumatrix/system/log/mapper"
+HITS=""
+if [ -d "$LOG_QUERY_MAPPERS" ]; then
+  # 允许全限定写法：@org.apache.ibatis.annotations.Update 与 @Update 都要抓到。
+  # 【这一段是被自己的变异测试逼出来的】最初只写 "@(Insert|Update|Delete)\b"，
+  # 用 @org.apache.ibatis.annotations.Update 做变异时【检查仍然是绿的】——
+  # 一条抓不住绕写法的检查，正是本项目说的「绿灯不是证据」。
+  HITS=$(grep -rnE "@([A-Za-z_][A-Za-z0-9_]*\\.)*(Insert|Update|Delete)\\b" "$LOG_QUERY_MAPPERS" --include='*.java' 2>/dev/null | strip_comments || true)
+  MAPPER_COUNT=$(find "$LOG_QUERY_MAPPERS" -name '*.java' | wc -l | tr -d ' ')
+  if [ "$MAPPER_COUNT" -eq 0 ]; then
+    # 目录空了 = 检查在空转。宁可报违规，也不要一条永远为绿的检查
+    HITS="$LOG_QUERY_MAPPERS: 目录下没有任何 Mapper —— 本检查正在空转，请确认是否被误删"
+  fi
+fi
+check "日志表查询 Mapper 只读（system/log/mapper 下无 @Insert/@Update/@Delete）" \
+      "$(printf '%s' "$HITS" | grep -c . || true)" "$HITS"
+
 # --- ⑤ ignore() 逃生舱可审计（契约 §2.8）-----------------------------------
 # 不是违规检查，是清单：每一处都必须能说清「为什么这个查询非跨租户不可」。
 IGNORES=$(grep -rn "TenantHelper\.ignore(" "$JAVA_SRC" --include='*.java' 2>/dev/null | strip_comments || true)

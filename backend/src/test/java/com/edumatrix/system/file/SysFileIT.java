@@ -94,7 +94,31 @@ class SysFileIT {
         assertThat(saved.getFileName()).isEqualTo("学生名单-高一3班.xlsx");
         assertThat(saved.getFileUrl()).doesNotContain("学生名单");
         assertThat(saved.getFileType()).isEqualTo("xlsx");
-        assertThat(saved.getTenantId()).isEqualTo(TENANT_A);
+    }
+
+    /**
+     * 租户归属不能拿"内存里那个实体"来断言。
+     *
+     * <p>租户插件是在 <b>SQL 层</b>注入 {@code tenant_id} 的（拦截器改写 INSERT 语句），
+     * <b>不会回填到实体对象上</b> —— {@code saved.getTenantId()} 落库后仍是 {@code null}。
+     * 拿它断言等于什么都没验，而且是"看起来验了"的那种。
+     *
+     * <p>所以换个方向：<b>切到另一个租户会话，同一个 fileId 必须查不到</b>。
+     * 这条走的是与生产完全相同的通道（插件的 {@code WHERE tenant_id = ?}），
+     * 而且它直接对应 §7.2/§7.3 的「跨租户返回 404（不暴露存在性）」。
+     */
+    @Test
+    @DisplayName("落库归属本租户：切到别的租户会话后同一个 fileId 查不到（404）")
+    void uploadedFileBelongsToTheUploaderTenant() throws IOException {
+        SysFile saved = fileService.upload(file("a.xlsx", null, xlsxBytes()), FileBizType.COMMON.code());
+        // 同租户查得到
+        assertThat(fileService.detail(saved.getId()).getFileId()).isEqualTo(String.valueOf(saved.getId()));
+
+        contextProvider.asTenantUser(9999999999999999L, ADMIN_USER_ID, ADMIN_NODE_ID);
+        assertThatThrownBy(() -> fileService.detail(saved.getId()))
+                .isInstanceOf(BizException.class)
+                .extracting(e -> ((BizException) e).getErrorCode())
+                .isEqualTo(ErrorCode.NOT_FOUND);
     }
 
     @Test
