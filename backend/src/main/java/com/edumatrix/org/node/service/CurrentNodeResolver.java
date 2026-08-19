@@ -4,6 +4,7 @@ import org.springframework.stereotype.Service;
 
 import com.edumatrix.common.errorcode.ErrorCode;
 import com.edumatrix.common.response.BizException;
+import com.edumatrix.common.subtree.CurrentNodeProvider;
 import com.edumatrix.common.tenant.CurrentContextProvider;
 import com.edumatrix.common.tenant.TenantHelper;
 import com.edumatrix.org.node.mapper.NodeAccountMapper;
@@ -28,9 +29,16 @@ import com.edumatrix.org.node.mapper.NodeAccountMapper;
  * 而那种测试要么全红（本模块第一次跑就是），要么更糟：<b>假装通过</b>。
  *
  * <p>多一次 {@code sys_user} 点查是这条路的代价，走主键，可接受。
+ *
+ * <h2>模块 08 起实现 {@link CurrentNodeProvider}（{@code common/subtree/}）</h2>
+ * <p>{@code course} 领域也要回答「我在哪个节点」，而检查③ 不许它 import {@code org}。
+ * 于是把能力声明抽到 {@code common/}，<b>实现仍然只有本类一份</b> ——
+ * 加一个 {@code implements} 而不是让模块 08 另写一个，是因为「我在哪个节点」
+ * 是全系统唯一口径（契约 §2.4「全系统只有这一条数据权限规则」）。
+ * {@code org} 领域内部继续直接注入本类，无需改动。
  */
 @Service
-public class CurrentNodeResolver {
+public class CurrentNodeResolver implements CurrentNodeProvider {
 
     private final NodeAccountMapper accountMapper;
 
@@ -39,6 +47,7 @@ public class CurrentNodeResolver {
     }
 
     /** 当前登录人所在的节点；无会话或账号已删除时返回 {@code null}。 */
+    @Override
     public Long currentNodeId() {
         Long userId = TenantHelper.getUserId();
         return userId == null ? null : accountMapper.selectNodeIdByUserId(userId);
@@ -51,6 +60,7 @@ public class CurrentNodeResolver {
      * ——「那意味着过滤逻辑写漏了，正在返回全量数据」。取不到「我在哪」时，
      * 正确的处置是拒绝这次请求，而不是当作没有限制。
      */
+    @Override
     public Long requireCurrentNodeId() {
         Long nodeId = currentNodeId();
         if (nodeId == null) {
