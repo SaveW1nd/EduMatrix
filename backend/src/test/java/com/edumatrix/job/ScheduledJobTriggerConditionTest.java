@@ -6,11 +6,16 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.util.List;
+
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.autoconfigure.task.TaskSchedulingAutoConfiguration;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.scheduling.config.CronTask;
+import org.springframework.scheduling.config.ScheduledTask;
+import org.springframework.scheduling.config.ScheduledTaskHolder;
 import org.springframework.test.context.ActiveProfiles;
 
 import com.edumatrix.common.config.XxlJobConfig;
@@ -108,7 +113,9 @@ class ScheduledJobTriggerConditionTest {
                         .as("两条触发路径同时装配：props=%s", java.util.Arrays.toString(props))
                         .isFalse();
                 assertThat(spring || xxl)
-                        .as("两条触发路径都没装配 —— 那两个合规任务谁都不会触发：props=%s",
+                        .as("两条触发路径的配置类【一个都没装配】：props=%s。"
+                                + "本条只承诺 Bean 层面 —— 「任务是否真的被注册成 CronTask」"
+                                + "由 cronTasksAreActuallyRegistered 验，别把两件事混成一句话",
                                 java.util.Arrays.toString(props))
                         .isTrue();
             });
@@ -154,6 +161,52 @@ class ScheduledJobTriggerConditionTest {
                         + "@Profile(\"!test\") 门控对全部集成测试同时失效")
                 .isNotNull();
         assertThat(profiles.value()).containsExactly("test");
+    }
+
+    // =====================================================================
+    // Bean 在 ≠ 任务被注册：@Scheduled 真的生效了吗
+    // =====================================================================
+
+    /**
+     * <b>Bean 存在只说明配置类被装配了，不说明 {@code @Scheduled} 被注册成了任务。</b>
+     *
+     * <p>上面那几条数的是 Bean。而「{@code @Scheduled} 到底有没有生效」是另一件事，
+     * 它有<b>好几种静默失效的方式</b>：
+     * <ul>
+     *   <li>{@code @EnableScheduling} 被挪走或删掉 —— 配置类照样装配，注解<b>一条都不注册</b>；</li>
+     *   <li>方法签名不合法（非 void、带参）—— Spring 在注册时抛错或跳过；</li>
+     *   <li>cron 常量被改错 —— 任务注册了，但在错误的时刻跑。</li>
+     * </ul>
+     * <p>这三种的共同表现都是<b>应用启动正常、日志里那行「定时触发 = Spring 调度」照样打出来</b>，
+     * 而任务不跑或在错误时刻跑。所以这里直接问 Spring 自己：
+     * {@link ScheduledTaskHolder#getScheduledTasks()} 里有哪些 {@link CronTask}、表达式是什么。
+     *
+     * <p><b>顺带钉住了 cron 与常量的一致性</b>：断言比的是常量本身，
+     * 所以「常量改了而调度中心的登记值没跟着改」这件事本测试拦不住（那只能靠人），
+     * 但「注解上写的和常量不是一个值」会红。
+     */
+    @Test
+    @DisplayName("@Scheduled 真的被注册成两条 CronTask，且表达式 == 两个常量（删 @EnableScheduling 会红）")
+    void cronTasksAreActuallyRegistered() {
+        runner.run(context -> {
+            List<String> expressions = context.getBeansOfType(ScheduledTaskHolder.class).values().stream()
+                    .flatMap(holder -> holder.getScheduledTasks().stream())
+                    .map(ScheduledTask::getTask)
+                    .filter(CronTask.class::isInstance)
+                    .map(CronTask.class::cast)
+                    .map(CronTask::getExpression)
+                    .sorted()
+                    .toList();
+
+            assertThat(expressions)
+                    .as("Spring 实际注册的 CronTask 与预期不符 —— "
+                            + "配置类装配了但 @Scheduled 没生效（@EnableScheduling 被删？"
+                            + "方法签名不合法？），或 cron 与常量不是一个值。"
+                            + "这几种的共同表现都是「启动正常、日志照打、任务不跑」")
+                    .containsExactly(
+                            ScheduledJobTrigger.CRON_ANONYMIZE_ARCHIVED_STUDENT,   // 0 30 2 * * *
+                            ScheduledJobTrigger.CRON_TEMP_FILE_CLEANUP);           // 0 30 3 * * *
+        });
     }
 
     // =====================================================================
