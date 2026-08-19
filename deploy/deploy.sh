@@ -258,11 +258,62 @@ curl -fsS http://127.0.0.1/actuator/health; echo
 echo "--- 验证码（认证白名单，不需要 token）---"
 curl -fsS http://127.0.0.1/api/v1/auth/captcha | head -c 200; echo
 REMOTE
-  log "外网裸 IP 直连："
-  curl -fsS --max-time 15 "http://$HOST/actuator/health" && echo
+  # 【外网冒烟打业务接口，不打 /actuator/health】
+  #   /actuator/* 自本轮起对公网一律 404（见 deploy/prod/Caddyfile 头注释），
+  #   继续用它做外网冒烟会永远打印一行 curl: (22) ... 404 —— 看着像故障、实际是设计，
+  #   而「看着像故障的正常输出」会让人此后忽略这一整段输出。
+  #   换成 §1.1 获取图形验证码：它在 00-通用约定 §2.3 的免登录白名单里，不需要 token，
+  #   且它经过完整链路（Caddy → 应用 → Redis 写验证码），比读一个健康探针证明得更多。
+  log "外网裸 IP 直连（打业务接口；/actuator/* 已对公网关闭）："
+  curl -fsS --max-time 15 "http://$HOST/api/v1/auth/captcha" >/dev/null \
+    && echo "  ✅ GET /api/v1/auth/captcha 200" \
+    || die "外网裸 IP 打不通业务接口"
   log "对照：带 Host 头会被备案拦截（预期 403，不是服务的问题）"
   curl -s -o /dev/null -w "  带 Host: api.hqtw.cn → HTTP %{http_code}\n" \
     --max-time 15 -H "Host: api.hqtw.cn" "http://$HOST/actuator/health"
+
+  verify_actuator_not_public
+}
+
+# ---------------------------------------------------------------------------
+# /actuator/* 必须【不可从公网读取】—— 断言式检查，不满足即让 verify 非 0 退出。
+#
+# 【为什么这两条要写成脚本断言，而不是"改完配置手动 curl 一次"】
+#   那道闸只存在于 deploy/prod/Caddyfile 的两行 import 里。将来谁编辑 Caddyfile
+#   把其中一行弄丢，【没有任何东西会报警】—— caddy validate 照样通过、
+#   部署照样成功、健康检查照样绿，只是指标又悄悄对外了。
+#   这正是本项目反复点名的「不报错的故障」，只能靠每次部署都实测一遍来兜。
+#
+# 【第二条（伪造 X-Forwarded-For）不是多余的】它验的是 Caddyfile 里用的是
+#   remote_ip 而不是 client_ip。client_ip 读的是 X-Forwarded-For ——
+#   请求方可以随便写，用它等于任何人加一行头就绕过去，
+#   而绕过时不报错、日志里看着像本机访问。所以必须有一条专门打这个头的用例。
+#
+# 【为什么只查 prometheus 不查 health】health 是同一段规则命中的同一条路径，
+#   查一条足够；而 prometheus 是真正泄露内容的那一个（uri="/api/v1/..." 逐条列出
+#   + 连接池 + 磁盘 + JVM 明细），断言写在它身上更贴近这道闸存在的理由。
+# ---------------------------------------------------------------------------
+verify_actuator_not_public() {
+  log "⑦ /actuator/* 不可从公网读取（配置漂移守卫）"
+  local code
+
+  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
+    "http://$HOST/actuator/prometheus" || echo 000)
+  if [ "$code" = "404" ]; then
+    printf '  ✅ 外网 GET /actuator/prometheus → HTTP %s\n' "$code"
+  else
+    printf '  ❌ 外网 GET /actuator/prometheus → HTTP %s（期望 404）\n' "$code"
+    die "/actuator/* 对公网可读 —— deploy/prod/Caddyfile 里的 import actuator_local_only 是不是丢了？"
+  fi
+
+  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
+    -H "X-Forwarded-For: 127.0.0.1" "http://$HOST/actuator/prometheus" || echo 000)
+  if [ "$code" = "404" ]; then
+    printf '  ✅ 伪造 X-Forwarded-For: 127.0.0.1 后仍 → HTTP %s\n' "$code"
+  else
+    printf '  ❌ 伪造 X-Forwarded-For: 127.0.0.1 → HTTP %s（期望 404）\n' "$code"
+    die "用伪造头绕过了本机限制 —— Caddyfile 里应该是 remote_ip，不是 client_ip（client_ip 读的就是这个可伪造的头）"
+  fi
 }
 
 status() {
@@ -276,6 +327,7 @@ case "${1:-}" in
   ensure-database) ensure_database ;;
   start)          start ;;
   verify)         verify ;;
+  verify-actuator) verify_actuator_not_public ;;
   verify-charset) verify_charset ;;
   status)         status ;;
   all)            build; ship; ensure_database; start; verify; verify_charset ;;

@@ -14,6 +14,40 @@
 #
 # 【poc.hqtw.cn 不配路由】r1a-ali POC 已停用（本轮 F5）。代码在 git 的
 #   poc/r1a-wechat-hls 分支 poc/r1a-aliplayer/ 下，不需要从服务器抢救。
+#
+# 【/actuator/* 只许本机访问 —— 修的是一处信息泄露】
+#   成因：本文件的两个块原来都是【无路径限制】的 reverse_proxy localhost:8080，
+#   于是 /actuator/* 与业务接口同等对外。实测改动前：
+#     curl http://47.110.142.8/actuator/prometheus  → HTTP 200，26011 字节，无鉴权
+#   泄露的实质内容是 http_server_requests_seconds{uri="/api/v1/..."} ——
+#   它把【整个 API 路径逐条列出】，附各自调用量与状态码分布；另有 hikaricp
+#   连接池、disk_free_bytes、JVM 堆与 GC 明细。
+#   application.yml 只 expose 了 health,info,prometheus（env / heapdump 都没开），
+#   所以这是【信息泄露，不是直接可利用的漏洞】—— 修，但不是救火。
+#   而日志里 GET /** 已积累 121 次 401，这台机器已经被扫描器摸到了。
+#
+#   ⚠ 三个必须踩准的点，改这段之前先读完：
+#   ① 【用 remote_ip，不要用 client_ip】client_ip 读的是 X-Forwarded-For，
+#      而那个头【请求方可以随便写】—— 用它等于任何人加一行
+#      X-Forwarded-For: 127.0.0.1 就绕过去了，且绕过时【不报错、
+#      日志里看着像本机访问】。Caddy 在这台机器上是最外层、没有上游代理，
+#      remote_ip 就是真实来源。将来若在 Caddy 前面加了 SLB/CDN，
+#      那时才需要重新论证该用哪个——【别在没有上游的时候先用 client_ip】。
+#   ② 【respond 404 而不是 403】403 等于确认"这个路径存在但你没权限"，
+#      404 什么都不确认。与 common/file/FileOwnershipRegistry 的 fail-closed 404
+#      是同一个口径。
+#   ③ 【不收紧 application.yml 的 exposure 列表】把 prometheus 从 include 里删掉
+#      是另一种修法，但那样【本机也读不到】，将来上监控还得改回来。
+#      分层是对的：指标继续产，只是不出这台机器。
+#
+#   【为什么是 snippet 而不是把那四行抄进两个块】两个块必须行为一致。
+#   抄两遍的话，将来只改了一个块 —— 而【备案通过后域名块才真正开始接流量】，
+#   那时漏掉的正好是会被访问的那一个。一处定义、两处 import，改不出分叉。
+#
+#   【这道闸每次部署都会被复查】deploy/deploy.sh 的 verify() 里有两条断言
+#   （外网读 /actuator/prometheus 必须 404、伪造 X-Forwarded-For 后仍必须 404），
+#   不满足就让 verify 非 0 退出。只改配置的话，将来谁把下面那两行 import 弄丢了
+#   【没有任何东西会报警】—— 表现是指标又悄悄对外，而部署一切正常。
 # ============================================================================
 # 【admin off 的连带后果：systemctl reload caddy 不可用】
 # reload 是 Caddy 通过本机 admin API（:2019）热加载配置实现的，关掉 API 后它会报
@@ -30,8 +64,20 @@
 	}
 }
 
+# /actuator/* 只许本机访问。定义一次，下面两个站点块各 import 一次 —— 见头注释。
+# remote_ip（不是 client_ip）：Caddy 是最外层，remote_ip 才是不可伪造的真实来源。
+# respond 404（不是 403）：404 连"这个路径存在"都不确认。
+(actuator_local_only) {
+	@actuator_external {
+		path /actuator /actuator/*
+		not remote_ip 127.0.0.1/32 ::1
+	}
+	respond @actuator_external 404
+}
+
 http://api.hqtw.cn {
 	encode gzip
+	import actuator_local_only
 	# 后端按 X-Forwarded-For 取客户端 IP（登录限流、sys_login_log 都要）；
 	# X-Forwarded-For / -Proto 是 Caddy 的默认行为，显式写会被它 warn，故只补 X-Real-IP
 	reverse_proxy localhost:8080 {
@@ -47,6 +93,7 @@ http://api.hqtw.cn {
 
 # IP 直连（备案期间联调用；带 Host 头的请求由上面的块接管）
 :80 {
+	import actuator_local_only
 	reverse_proxy localhost:8080 {
 		header_up X-Real-IP {remote_host}
 	}
