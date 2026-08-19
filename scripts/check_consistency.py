@@ -872,6 +872,12 @@ def check_c18_endpoint_paths():
 # 而那正是要抓的一种写法退化（下一个人拿"待研究""搁置"当状态，工具看不见）。
 F_STATUS_WORDS = ('未定案', '已定案', '已关闭', '已修正', '原则已定案')
 
+# 49~69 是模块 09/10 并行开发的编号分段保留区（模块 09 用 49/51/52/62，模块 10 从 70 起）。
+# 【两个模块都合并后删掉这一行】—— 留着就是一个永久失效的区间：
+# 此后真在 49~69 之间漏登记一条 F，C19 不会喊。
+# 04-实施计划.md §E 表头附近写了同一句话 —— 脚本注释只有改脚本的人看得到。
+RESERVED_GAPS = set(range(49, 70))
+
 def check_c19_f_registry():
     """
     C19 `04-实施计划.md` §E 的 F 清单：同一编号只允许一行、只允许一个状态
@@ -937,13 +943,15 @@ def check_c19_f_registry():
                    f'{num} 同时标着 {len(distinct)} 个状态：{"、".join(sorted(distinct))} '
                    f'—— 同一编号只允许一个状态')
 
-    # ③ 连续性只告警：F-8 是历史缺口（04 §E 已登记），不是错误
+    # ③ 连续性只告警：F-8 是历史缺口（04 §E 已登记），不是错误；
+    #    RESERVED_GAPS 是模块 09/10 并行开发的临时保留区，两个模块合并后连同它一起删
     numbers = sorted(int(n.split('-')[1]) for n in seen)
-    gaps = [n for n in range(1, numbers[-1] + 1) if n not in numbers and n != 8]
+    exempt = {8} | RESERVED_GAPS
+    gaps = [n for n in range(1, numbers[-1] + 1) if n not in numbers and n not in exempt]
     if gaps:
         report('WARN', 'C19', path,
                f'F 编号缺号：{", ".join("F-%d" % g for g in gaps)}'
-               f'（F-8 是已登记的历史缺口，不计入）')
+               f'（F-8 是已登记的历史缺口，F-49~F-69 是并行分段保留区，均不计入）')
 
 
 # ============ C15 心跳请求体签名三处一致（契约 §6.4 / PRD F2-7 / 03-03）

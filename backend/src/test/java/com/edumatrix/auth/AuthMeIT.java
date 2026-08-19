@@ -54,8 +54,15 @@ class AuthMeIT extends AuthIntegrationTestBase {
      * <p><b>62 → 63</b>：模块 07 的 {@code V202608160000} 又补了 {@code org:teacher:list}
      * （拆分前教师连自己那一行都列不出来，F-30）。<b>{@code org:admin:list} 没有绑给它</b> ——
      * 拆分的全部意义就在这一个差别上。
+     *
+     * <p><b>63 → 60</b>：模块 10 的 {@code V202608200000} 撤销了
+     * {@code question:category:add / edit / remove} 三条（F-72）——
+     * 03-04 §1.2 与 PRD F3-1 规则 8 都写「分类树的增删改<b>仅 org_admin</b>」，
+     * 而契约 §10 附表 A 与初始化脚本此前<b>一致地</b>把它们绑给了 teacher，
+     * 于是那道门从来没关上过。教师<b>仍能读</b>分类树（随
+     * {@code question:question:list} 放行），少的只是三个写按钮。
      */
-    private static final int PERMS_TEACHER = 63;
+    private static final int PERMS_TEACHER = 60;
     /** super_admin：<b>31 → 33</b>，拆出的两个 perms 都绑了它。 */
     private static final int PERMS_SUPER_ADMIN = 33;
     private static final int PERMS_STUDENT = 0;
@@ -71,7 +78,7 @@ class AuthMeIT extends AuthIntegrationTestBase {
     }
 
     @Test
-    @DisplayName("判据 5｜teacher：roles 非空、perms 62（模块 06 补了 org:node:list）")
+    @DisplayName("判据 5｜teacher：roles 非空、perms 60（模块 10 撤销了三个分类写权限，F-72）")
     void teacherPerms() throws Exception {
         JsonNode me = me(AuthFixtures.TEACHER_USERNAME);
 

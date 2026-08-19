@@ -111,6 +111,51 @@ fi
 check "日志表查询 Mapper 只读（system/log/mapper 下无 @Insert/@Update/@Delete）" \
       "$(printf '%s' "$HITS" | grep -c . || true)" "$HITS"
 
+# --- ⑦ 题目版本表只增不改（模块 10 新增）------------------------------------
+# 【为什么是一条脚本检查而不是一条注释】
+#   契约 §4 版本规则与 PRD F3-2 规则 3 要求「历史版本不可修改、不可删除」
+#   「无任何更新入口（含管理员）」。第一道守卫是编译期的：
+#   QbQuestionVersionMapper 【不 extends BaseMapper】，于是 updateById / deleteById
+#   这两个方法压根不存在，写出来编译不过。
+#   但编译期护栏挡不住「下一个人给它加上 extends BaseMapper」——那一步不会报错，
+#   而它一旦发生，「历史版本不可改」就退回成一句注释。这条 grep 守的是那一步。
+#
+# 【三条各自抓什么】
+#   1) extends BaseMapper —— 白送四个写方法，最常见的复发路径；
+#      （含全限定写法 extends com.baomidou...BaseMapper，见下方那行注释）
+#   2) Update / Delete 注解 —— 在窄 Mapper 上直接开一个写口子。
+#      写法照抄检查 ⑥ 被自己的变异测试逼出来的全限定名形态：
+#      @org.apache.ibatis.annotations.Update 也要抓到；
+#   3) 全 src/main 内的 UPDATE / DELETE ... qb_question_version ——
+#      抓的是【在别处另写一份】。检查③ 拦 import、拦不住表，检查⑥ 只看一个目录，
+#      这一条是三者里唯一按【表名】兜底的。
+#
+# 【它会不会红 —— 变异验证见提交记录】
+#   A 给 QbQuestionVersionMapper 加 extends BaseMapper<QbQuestionVersion> → 红
+#   B 给它加一个 @Update 方法 → 红
+#   C 在任意 mapper XML 或 Java 里写 UPDATE qb_question_version → 红
+VERSION_MAPPER="$JAVA_SRC/com/edumatrix/question/bank/mapper/QbQuestionVersionMapper.java"
+HITS=""
+if [ -f "$VERSION_MAPPER" ]; then
+  # 全限定写法也要抓到 —— 【这一行是被自己的变异测试逼出来的】：最初写
+  # "extends[[:space:]]+BaseMapper"，用 extends com.baomidou.mybatisplus.core.mapper.BaseMapper
+  # 做变异时【检查仍然是绿的】，与检查 ⑥ 当年踩的是同一个坑。
+  HITS=$(grep -nE "extends[[:space:]]+([A-Za-z_][A-Za-z0-9_]*\.)*BaseMapper\b" "$VERSION_MAPPER" 2>/dev/null | strip_comments || true)
+  HITS="$HITS"$'\n'"$(grep -nE "@([A-Za-z_][A-Za-z0-9_]*\.)*(Update|Delete)\b" "$VERSION_MAPPER" 2>/dev/null | strip_comments || true)"
+else
+  # 目录/文件没了 = 检查在空转。宁可报违规，也不要一条永远为绿的检查（同检查 ⑥）
+  HITS="$VERSION_MAPPER: 文件不存在 —— 本检查正在空转，请确认是否被误删或改名"
+fi
+# 全库按表名兜底：谁在哪里写 UPDATE / DELETE 这张表都算违规
+WRITE_SQL=$(grep -rnEi "(UPDATE[[:space:]]+\`?qb_question_version\`?|DELETE[[:space:]]+FROM[[:space:]]+\`?qb_question_version\`?)" \
+            "$JAVA_SRC" --include='*.java' 2>/dev/null | strip_comments || true)
+if [ -d "$MAPPER_XML" ]; then
+  WRITE_SQL="$WRITE_SQL"$'\n'"$(grep -rnEi "(UPDATE[[:space:]]+\`?qb_question_version\`?|DELETE[[:space:]]+FROM[[:space:]]+\`?qb_question_version\`?)" "$MAPPER_XML" 2>/dev/null || true)"
+fi
+HITS="$HITS"$'\n'"$WRITE_SQL"
+check "题目版本表只增不改（窄 Mapper 不继承 BaseMapper、无写注解、全库无 UPDATE/DELETE qb_question_version）" \
+      "$(printf '%s' "$HITS" | grep -c . || true)" "$HITS"
+
 # --- ⑤ ignore() 逃生舱可审计（契约 §2.8）-----------------------------------
 # 不是违规检查，是清单：每一处都必须能说清「为什么这个查询非跨租户不可」。
 IGNORES=$(grep -rn "TenantHelper\.ignore(" "$JAVA_SRC" --include='*.java' 2>/dev/null | strip_comments || true)
