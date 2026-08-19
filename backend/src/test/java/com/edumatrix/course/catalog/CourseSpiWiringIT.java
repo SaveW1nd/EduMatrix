@@ -79,13 +79,17 @@ class CourseSpiWiringIT extends CourseIntegrationTestBase {
         assertEquals(1, context.getBeansOfType(CurrentNodeProvider.class).size(), "org/node");
     }
 
+    // 方法名保留 onlyCourseOwnerProviderRegistered 而不改成 registeredOwnerProviders：
+    // 模块 09 后合，它要改的正是下面这两行。改方法名会让那次 rebase 的冲突从
+    // 「一处两行」变成「整个方法块」，而这条断言的真实含义已由 @DisplayName 承载。
     @Test
-    @DisplayName("ResourceOwnerProvider 只注册了 COURSE —— 模块 09 / 10 补齐时本条会提醒改")
+    @DisplayName("ResourceOwnerProvider 已注册 COURSE + QUESTION —— 模块 09 补 VIDEO 时本条会提醒改")
     void onlyCourseOwnerProviderRegistered() {
-        assertEquals(1, context.getBeansOfType(ResourceOwnerProvider.class).size());
-        assertEquals(java.util.Set.of(ResourceType.COURSE), resourceOwnerChecker.registeredTypes(),
-                "已注册的资源类型变了：模块 09 补 VIDEO(3)、模块 10 补 QUESTION(2) 时，"
-                        + "请一并更新本条断言");
+        assertEquals(2, context.getBeansOfType(ResourceOwnerProvider.class).size());
+        assertEquals(java.util.Set.of(ResourceType.COURSE, ResourceType.QUESTION),
+                resourceOwnerChecker.registeredTypes(),
+                "已注册的资源类型变了：模块 09 补 VIDEO(3) 时请把这里改成 3 与 "
+                        + "Set.of(COURSE, QUESTION, VIDEO)。模块 10 已补 QUESTION(2)");
     }
 
     @Test
