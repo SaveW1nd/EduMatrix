@@ -42,6 +42,28 @@ import com.xxl.job.core.handler.annotation.XxlJob;
  * 这两件事形似而不同。逐租户方案的副作用是每天多 N 条扫描 SQL（N = 租户数），
  * 对一个每日一次的任务可以忽略。
  *
+ * <h2>⚠ 谁在触发它：两条路径<b>互斥</b>，靠 {@code xxl.job.enabled} 切换（模块 05 补）</h2>
+ * <table border="1">
+ *   <caption>任何时刻只有一条存在</caption>
+ *   <tr><th>{@code xxl.job.enabled}</th><th>触发者</th></tr>
+ *   <tr><td>{@code false} 或未配（<b>现状</b>）</td>
+ *       <td>{@code job/ScheduledJobTrigger}（Spring 调度，过渡期；需方定案暂不部署调度中心，见 F-41）</td></tr>
+ *   <tr><td>{@code true}（<b>将来</b>）</td>
+ *       <td>XXL-Job 调度中心，经 {@link #execute()} 上的 {@code @XxlJob("anonymizeArchivedStudent")}</td></tr>
+ * </table>
+ * <p><b>在模块 05 补上执行器与过渡触发器之前，本任务从来没有被触发过</b> ——
+ * {@code XxlJobSpringExecutor} 全库不存在，{@code @XxlJob} 是惰性注解（F-41）。
+ *
+ * <p><b>切换时 cron 必须与调度中心的登记值逐字一致</b>。过渡期的值在
+ * {@code ScheduledJobTrigger#CRON_ANONYMIZE_ARCHIVED_STUDENT}（{@code 0 30 2 * * *}，每日 02:30）——
+ * 本类的 Javadoc 与 05-工程结构.md §H 只写了「每日一次」、<b>没给时刻</b>，
+ * 02:30 是模块 05 定的（与 {@code DailySettleJob} 00:30、{@code TempFileCleanupJob} 03:30 各错开一小时）。
+ * 登记时照抄。
+ *
+ * <p>互斥由两个 {@code @ConditionalOnProperty} 互为镜像保证，并由
+ * {@code ScheduledJobTriggerConditionTest} 实测钉住 —— <b>双触发不会报错</b>，
+ * 而本任务幂等（靠 {@code anonymized_at IS NULL} 收口），真跑两遍也看不出来。
+ *
  * <h2>逐人一个事务，单个失败不拖垮整批</h2>
  * <p>与建人的「三写一事务」不同：那是<b>一个业务动作的原子性</b>，
  * 这是<b>一批互相独立的动作</b>。一个人脱敏失败不该让另外 99 个也不脱。
