@@ -205,13 +205,11 @@ public class VodVideoService {
         Long myNodeId = guard.myNodeId();
         List<Long> grantedIds = grantReader.grantedResourceIds(ResourceType.VIDEO, myNodeId);
 
-        LambdaQueryWrapper<VodVideo> wrapper = new LambdaQueryWrapper<>();
-        wrapper.and(w -> {
-            w.eq(VodVideo::getOwnerNodeId, myNodeId);
-            if (!grantedIds.isEmpty()) {
-                w.or().in(VodVideo::getId, grantedIds);
-            }
-        });
+        // 可见性谓词抽在 VodVideoVisibilityPredicate —— 模块 11 的接口 37 用同一条，
+        // 差别只在传进去的 ID 清单口径（canUse → canRegrant）。本处不带 source 筛选，
+        // 传 null 取并集（03-03 §7.3 参数表没有该筛选项）
+        LambdaQueryWrapper<VodVideo> wrapper = VodVideoVisibilityPredicate.apply(
+                new LambdaQueryWrapper<>(), myNodeId, grantedIds, null);
         if (query.getVideoName() != null && !query.getVideoName().isBlank()) {
             wrapper.like(VodVideo::getVideoName, query.getVideoName().trim());
         }

@@ -52,6 +52,7 @@ public class QuestionQueryService {
 
     private final QbQuestionMapper questionMapper;
     private final QbCategoryMapper categoryMapper;
+    private final QuestionCategoryScope categoryScope;
     private final QuestionPageMapper pageMapper;
     private final QuestionVersionProvider versionProvider;
     private final QuestionAccessGuard guard;
@@ -62,6 +63,7 @@ public class QuestionQueryService {
 
     public QuestionQueryService(QbQuestionMapper questionMapper,
                                 QbCategoryMapper categoryMapper,
+                                QuestionCategoryScope categoryScope,
                                 QuestionPageMapper pageMapper,
                                 QuestionVersionProvider versionProvider,
                                 QuestionAccessGuard guard,
@@ -71,6 +73,7 @@ public class QuestionQueryService {
                                 ObjectMapper objectMapper) {
         this.questionMapper = questionMapper;
         this.categoryMapper = categoryMapper;
+        this.categoryScope = categoryScope;
         this.pageMapper = pageMapper;
         this.versionProvider = versionProvider;
         this.guard = guard;
@@ -111,30 +114,14 @@ public class QuestionQueryService {
     /**
      * 分类筛选<b>含其全部子孙分类</b>（03-04 §2.1 参数表逐字）。
      *
+     * <p><b>实现已抽到 {@link QuestionCategoryScope}</b>：模块 11 的接口 37
+     *（我可授权的资源列表，03-02 §9.1）也按分类筛，两处必须是同一条口径 ——
+     * 否则同一个分类树在两个页面上出不同的结果，而两边都返回 200。
+     *
      * @return {@code null} 表示不按分类筛（不是空集 —— 空集会把结果筛成 0 行）
      */
     private List<Long> categoryWithDescendants(Long categoryId) {
-        if (categoryId == null) {
-            return null;
-        }
-        List<QbCategory> all = categoryMapper.selectList(new LambdaQueryWrapper<>());
-        Map<Long, List<Long>> childrenOf = new LinkedHashMap<>();
-        all.forEach(row -> childrenOf.computeIfAbsent(row.getParentId(), k -> new ArrayList<>())
-                .add(row.getId()));
-
-        Set<Long> collected = new LinkedHashSet<>();
-        List<Long> frontier = new ArrayList<>(List.of(categoryId));
-        while (!frontier.isEmpty()) {
-            List<Long> next = new ArrayList<>();
-            for (Long id : frontier) {
-                if (!collected.add(id)) {
-                    continue;   // 分类树成环时的兜底：收过就不再展开
-                }
-                next.addAll(childrenOf.getOrDefault(id, List.of()));
-            }
-            frontier = next;
-        }
-        return List.copyOf(collected);
+        return categoryScope.withDescendants(categoryId);
     }
 
     /** 归属节点名与创建人姓名 —— 一页最多 100 行，两次批量查询，不逐行点查。 */

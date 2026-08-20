@@ -1,5 +1,9 @@
 package com.edumatrix.vod.media.service;
 
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.Map;
+
 import org.springframework.stereotype.Component;
 
 import com.edumatrix.common.resource.ResourceOwnerProvider;
@@ -40,5 +44,25 @@ public class VodVideoOwnerProvider implements ResourceOwnerProvider {
         }
         VodVideo video = videoMapper.selectById(resourceId);
         return video == null ? null : video.getOwnerNodeId();
+    }
+
+    /**
+     * 批量版：一条 {@code selectBatchIds} 代替 N 次点查。
+     *
+     * <p>模块 11 的接口 38 单次最多 500 个 {@code resourceIds}，走默认实现就是 500 次往返 ——
+     * 慢，但<b>不报错</b>。覆写的理由只有性能，语义与逐个查逐字相同。
+     */
+    @Override
+    public Map<Long, Long> ownerNodeIdsOf(Collection<Long> resourceIds) {
+        if (resourceIds == null || resourceIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, Long> owners = new HashMap<>();
+        for (VodVideo video : videoMapper.selectBatchIds(resourceIds)) {
+            if (video.getOwnerNodeId() != null) {
+                owners.put(video.getId(), video.getOwnerNodeId());
+            }
+        }
+        return owners;
     }
 }
