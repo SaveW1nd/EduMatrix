@@ -212,6 +212,42 @@ class GrantHealthIT extends GrantIntegrationTestBase {
                 .path("list").get(0).path("detectedTime").asText()).isNotBlank();
     }
 
+    // =====================================================================
+    // F-100：机构根的授权行不得被报成悬挂（n.parent_id > 0 那个守卫）
+    // =====================================================================
+
+    @Test
+    @DisplayName("⚠ F-100：机构根【自授】的行不进悬挂清单 —— 它之上只有不参与租户内授权的平台根")
+    void grantOnTenantRootIsNotDangling() throws Exception {
+        String token = loginAs(GrantFixtures.ROOT);
+
+        // 先查实：接口 38 到底允不允许把资源授给机构根自己。
+        // 子树判定是 isInSubtree(我, 目标)，机构根的 ancestors 只有哨兵 0，
+        // 所以【只有机构根管理员授给自己】这一条路径能过 —— 其余一律 10302
+        JsonNode granted = postWithToken("/api/v1/org/grants", token, body("""
+                {"resourceType":1,"resourceIds":["%d"],"targetNodeIds":["%d"]}
+                """.formatted(GrantFixtures.C1, GrantFixtures.ROOT)));
+        assertThat(code(granted))
+                .as("若这里是 10302，说明这条路径被校验堵死了，下面那个守卫就是死代码；"
+                        + "实测它返回 200 —— 于是守卫是真的，只是此前没有任何用例覆盖它")
+                .isEqualTo(200);
+        assertThat(grantFixtures.activeGrantCount(1, GrantFixtures.C1, GrantFixtures.ROOT))
+                .isEqualTo(1);
+
+        JsonNode health = getWithToken(HEALTH + "?type=dangling", token);
+        assertThat(data(health).path("summary").path("danglingCount").asInt())
+                .as("机构根之上只有平台根，而平台根不参与租户内授权 —— "
+                        + "机构根的授权行永远查不到「上级」，不能因此被报成悬挂。\n"
+                        + "【本条钉的是行为，不是某一处实现】：今天挡住它的是租户插件给 "
+                        + "JOIN 的父节点注入的 p.tenant_id（平台根 tenant_id=0，匹配不上），"
+                        + "而不是 selectSuspects 里那个 n.parent_id > 0 —— "
+                        + "单删那个条件本条【不会红】（实测）。\n"
+                        + "它会红的是那两道闸【一起没了】：父节点改 LEFT JOIN 且删掉守卫 —— "
+                        + "实测 expected: 0 but was: 1。见 F-100")
+                .isZero();
+        assertThat(data(health).path("summary").path("crossScopeCount").asInt()).isZero();
+    }
+
     // ================================================================ 辅助
 
     /** 真悬挂：ROOT 授给 A1、A1 授给 T1，然后【只撤 A1 那一行】（模拟级联回收失效）。 */
@@ -239,6 +275,10 @@ class GrantHealthIT extends GrantIntegrationTestBase {
                         + "VALUES (?, ?, 4, ?, ?, NOW(), ?, ?, NOW(), NOW(), 0)",
                 1971000000000006001L, GrantFixtures.T2, GrantFixtures.A1, GrantFixtures.A2,
                 GrantFixtures.userIdOf(GrantFixtures.ROOT), GrantFixtures.TENANT_ID);
+    }
+
+    private static String body(String json) {
+        return json.replace("\n", " ");
     }
 
     private Double gauge(String name, String tenant) {

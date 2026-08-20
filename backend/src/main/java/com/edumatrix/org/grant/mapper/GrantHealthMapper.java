@@ -47,9 +47,33 @@ public interface GrantHealthMapper {
      *
      * <p>还要在 Java 侧去掉「父节点恰好是该资源 owner」的那些 —— 那不是悬挂。
      *
-     * <p>{@code parent_id > 0} 把机构根排除在外：机构根之上是平台根（{@code id = 0}），
-     * 平台不参与租户内授权，机构根的授权行<b>永远查不到「上级」</b>，
-     * 不排除的话每个机构的根节点授权都会被报成悬挂。
+     * <h2>⚠ {@code n.parent_id > 0} 今天是<b>冗余</b>的 —— 我起初写的理由是错的</h2>
+     * <p>原话是「不排除的话每个机构的根节点授权都会被报成悬挂」。<b>实测不成立</b>：
+     * 把这个条件删掉，全部 IT 仍然全绿。真正排除机构根那一行的是<b>另一处</b> ——
+     * 租户插件给 JOIN 的父节点注入了 {@code p.tenant_id = <当前租户>}，
+     * 而平台根是 {@code tenant_id = 0}，于是
+     * {@code JOIN org_node p ON p.id = 0 AND p.tenant_id = <租户>} <b>压根匹配不上</b>，
+     * 那一行被 INNER JOIN 自己挡掉了。
+     *
+     * <p>（前提是对的：{@code org_node} 里 {@code id = 0, parent_id = -1, deleted_at = 0}
+     * 确实是<b>一行真实数据</b>，不是哨兵值。错的是「谁在挡它」。）
+     *
+     * <h2>那为什么留着它 —— 两个改动会让它立刻承重</h2>
+     * <ol>
+     *   <li><b>父节点改成 {@code LEFT JOIN}</b>（一个很合理的重构：想把「父节点行都没了」
+     *       的情况也报出来）—— 那时 {@code p} 匹配不上不再过滤行，机构根的授权行直接进清单；
+     *   <li><b>{@code org_node} 被加进平台行放行名单</b>（插件对 {@code sys_role} /
+     *       {@code sys_menu} 就会生成 {@code OR tenant_id = 0}）—— 那时 JOIN 命中平台根，同上。
+     * </ol>
+     * <p><b>实测确认</b>：把父 JOIN 改成 {@code LEFT JOIN} <b>并</b>删掉本条件，
+     * {@code GrantHealthIT#grantOnTenantRootIsNotDangling} <b>红</b>
+     *（{@code expected: 0 but was: 1}）。也就是说这条守卫<b>不是死代码</b>，
+     * 只是今天有第二道闸挡在它前面。
+     *
+     * <p><b>而「机构根能不能被授权」这条路径是通的</b>：接口 38 的子树判定是
+     * {@code isInSubtree(我, 目标)}，机构根的 {@code ancestors} 只有哨兵 {@code 0}，
+     * 于是<b>只有机构根管理员授给自己</b>能过（其余一律 {@code 10302}）——
+     * 实测返回 200，不是被校验堵死的死路。
      */
     @Select("SELECT g.id, g.resource_type AS resourceType, g.resource_id AS resourceId, "
             + "       g.target_node_id AS targetNodeId, n.node_name AS targetNodeName, "
