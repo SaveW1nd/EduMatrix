@@ -1,5 +1,6 @@
 package com.edumatrix.org.grant.controller;
 
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -11,11 +12,14 @@ import com.edumatrix.common.response.PageResult;
 import com.edumatrix.common.response.R;
 import com.edumatrix.common.operlog.OperLog;
 import com.edumatrix.org.grant.dto.GrantCreateReq;
+import com.edumatrix.org.grant.dto.GrantRevokeReq;
 import com.edumatrix.org.grant.dto.GrantableResourceQueryReq;
 import com.edumatrix.org.grant.dto.NodeGrantedResourceQueryReq;
 import com.edumatrix.org.grant.service.GrantQueryService;
+import com.edumatrix.org.grant.service.GrantRevokeService;
 import com.edumatrix.org.grant.service.GrantWriteService;
 import com.edumatrix.org.grant.vo.GrantCreatedVO;
+import com.edumatrix.org.grant.vo.GrantRevokedVO;
 import com.edumatrix.org.grant.vo.GrantableResourceVO;
 import com.edumatrix.org.grant.vo.NodeGrantedResourceVO;
 
@@ -40,11 +44,14 @@ public class OrgGrantController {
 
     private final GrantQueryService grantQueryService;
     private final GrantWriteService grantWriteService;
+    private final GrantRevokeService grantRevokeService;
 
     public OrgGrantController(GrantQueryService grantQueryService,
-                              GrantWriteService grantWriteService) {
+                              GrantWriteService grantWriteService,
+                              GrantRevokeService grantRevokeService) {
         this.grantQueryService = grantQueryService;
         this.grantWriteService = grantWriteService;
+        this.grantRevokeService = grantRevokeService;
     }
 
     /**
@@ -75,6 +82,27 @@ public class OrgGrantController {
     @OperLog(module = "资源授权", action = "授权资源给节点")
     public R<GrantCreatedVO> grant(@Valid @RequestBody GrantCreateReq req) {
         return R.ok(grantWriteService.grant(req));
+    }
+
+    /**
+     * 接口 39 §9.3 撤销资源授权（<b>级联子树</b>）。
+     * {@code org_admin}；{@code teacher}（仅可撤销自己授给名下学员的授权）。
+     *
+     * <p><b>{@code DELETE} 携带 JSON 请求体</b>：批量撤销无法用路径参数表达（§9.3 说明段）。
+     *
+     * <p><b>级联是强制行为，请求体里没有关闭开关</b>（§9.3、契约 §2.5 规则 5）。
+     * 响应通过 {@code cascadeDetail} 完整披露影响面，供操作者确认。
+     *
+     * <p>⚠ {@code sys_oper_log} 这一行目前<b>只含入参</b>（切面序列化的是参数、不是返回值），
+     * 而 04 §B 规则 17 / PRD FR-4 规则 7 要求它<b>含级联影响的节点数与学员数</b> ——
+     * 那两个数字现在只在<b>响应</b>里。缺口已登记，修它要动模块 05 的公共切面，
+     * 不由本模块单方面决定。
+     */
+    @DeleteMapping("/grants")
+    @SaCheckPermission("org:grant:revoke")
+    @OperLog(module = "资源授权", action = "撤销资源授权（级联子树）")
+    public R<GrantRevokedVO> revoke(@Valid @RequestBody GrantRevokeReq req) {
+        return R.ok(grantRevokeService.revokeCascade(req));
     }
 
     /**

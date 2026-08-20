@@ -110,7 +110,7 @@ class OperLogCoverageTest {
      * 如果哪天扫描逻辑本身退化（比如注解元数据丢失、包名改了），
      * 上面那条会以"零个未标注"的姿态<b>全绿</b>，而本条会红。
      *
-     * <p>当前 43 = {@code org} 20（member 15 + node 4 + <b>grant 1</b>）+ {@code system} 19
+     * <p>当前 44 = {@code org} 21（member 15 + node 4 + <b>grant 2</b>）+ {@code system} 19
      * （user 5 / role 4 / menu 3 / tenant 5 / tenantConfig 1 / <b>file 1</b>）
      * + {@code auth} 4（login / refresh / logout / changePassword，
      * 其中前三个在 {@link #EXEMPT} 里）。
@@ -120,12 +120,18 @@ class OperLogCoverageTest {
      * {@code SysFileController#upload}（03-01 §7.1 上传文件）之后立刻红，改成 38；
      * 随后 {@code auth} 域纳入扫描（§1.6 补标）又红一次，改成 42；
      * 模块 11 的 C4 加了 {@code OrgGrantController#grant}（03-02 §9.2 授权资源给节点）
-     * 第三次红，改成 43 —— 而 PRD FR-1 规则 9 逐字要求「所有授权/撤销写
-     * {@code sys_oper_log}」，这一红正好落在那条要求上。
+     * 第三次红，改成 43；C5 加了 {@code #revoke}（§9.3 撤销资源授权）第四次红，改成 44
+     * —— 而 PRD FR-1 规则 9 逐字要求「所有<b>授权/撤销</b>写 {@code sys_oper_log}」，
+     * 这两红正好各落在那条要求的一半上。
      * 这就是它存在的样子。
+     *
+     * <p><b>⚠ 但「标了注解」不等于「日志内容达标」</b>：切面序列化的是<b>入参</b>，
+     * 而 04 §B 模块 11 规则 17 / PRD FR-4 规则 7 要求撤销那一行<b>含级联影响的节点数与学员数</b>
+     * —— 那两个数字在<b>返回值</b>里，本测试<b>看不到也管不着</b>。缺口已登记。
+     * 写在这里是因为：本条全绿最容易让人以为「操作日志这块齐了」。
      */
     @Test
-    @DisplayName("写端点总数 = 43（新增写接口时本条会红，提醒去标 @OperLog）")
+    @DisplayName("写端点总数 = 44（新增写接口时本条会红，提醒去标 @OperLog）")
     void writeEndpointCountIsPinned() throws Exception {
         int count = 0;
         for (Class<?> controller : scanControllers()) {
@@ -135,7 +141,7 @@ class OperLogCoverageTest {
                 }
             }
         }
-        assertThat(count).isEqualTo(43);
+        assertThat(count).isEqualTo(44);
     }
 
     private static boolean isWriteEndpoint(Method method) {

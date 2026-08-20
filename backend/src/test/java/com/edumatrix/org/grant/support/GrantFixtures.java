@@ -138,6 +138,9 @@ public final class GrantFixtures {
     public void clean() {
         for (long tenant : new long[]{TENANT_ID, TENANT2_ID}) {
             jdbc.update("DELETE FROM org_resource_grant WHERE tenant_id = ?", tenant);
+            // 撤销授权【不删】学习记录（契约 §2.5 规则 5），所以用例会留下 vod_watch_progress 行 ——
+            // 夹具必须自己收拾，否则下一个用例的「一行不删」断言会数到上一个用例的残留
+            jdbc.update("DELETE FROM vod_watch_progress WHERE tenant_id = ?", tenant);
             jdbc.update("DELETE FROM crs_course WHERE tenant_id = ?", tenant);
             jdbc.update("DELETE FROM qb_question WHERE tenant_id = ?", tenant);
             jdbc.update("DELETE FROM qb_category WHERE tenant_id = ?", tenant);
