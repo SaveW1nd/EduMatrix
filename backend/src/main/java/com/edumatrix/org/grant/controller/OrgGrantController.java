@@ -16,6 +16,7 @@ import com.edumatrix.org.grant.dto.GrantRevokeReq;
 import com.edumatrix.org.grant.dto.GrantableResourceQueryReq;
 import com.edumatrix.org.grant.dto.NodeGrantedResourceQueryReq;
 import com.edumatrix.org.grant.service.GrantQueryService;
+import com.edumatrix.org.grant.service.GrantOperLogWriter;
 import com.edumatrix.org.grant.service.GrantRevokeService;
 import com.edumatrix.org.grant.service.GrantWriteService;
 import com.edumatrix.org.grant.vo.GrantCreatedVO;
@@ -79,7 +80,8 @@ public class OrgGrantController {
      */
     @PostMapping("/grants")
     @SaCheckPermission("org:grant:grant")
-    @OperLog(module = "资源授权", action = "授权资源给节点")
+    @OperLog(module = GrantOperLogWriter.MODULE_GRANT,
+            action = GrantOperLogWriter.ACTION_GRANT)
     public R<GrantCreatedVO> grant(@Valid @RequestBody GrantCreateReq req) {
         return R.ok(grantWriteService.grant(req));
     }
@@ -93,14 +95,21 @@ public class OrgGrantController {
      * <p><b>级联是强制行为，请求体里没有关闭开关</b>（§9.3、契约 §2.5 规则 5）。
      * 响应通过 {@code cascadeDetail} 完整披露影响面，供操作者确认。
      *
-     * <p>⚠ {@code sys_oper_log} 这一行目前<b>只含入参</b>（切面序列化的是参数、不是返回值），
-     * 而 04 §B 规则 17 / PRD FR-4 规则 7 要求它<b>含级联影响的节点数与学员数</b> ——
-     * 那两个数字现在只在<b>响应</b>里。缺口已登记，修它要动模块 05 的公共切面，
-     * 不由本模块单方面决定。
+     * <h2>本端点写<b>两条</b> {@code sys_oper_log}，各记一个事实</h2>
+     * <p>切面那条记「谁、何时、从哪个 IP、撤了哪些资源（<b>入参</b>）、耗时、成败」；
+     * {@code GrantOperLogWriter#revokeImpact} 在<b>撤销事务内</b>再写一条，记
+     * 「这次撤销<b>实际影响了谁</b>」—— 行数 / 节点数 / 学员数，
+     * 那正是 04 §B 规则 17 与 PRD FR-4 规则 7 要的两个数字。
+     *
+     * <p><b>合并成一条做不到</b>：切面在 {@code finally} 里写，那时它拿不到返回值；
+     * 领域侧在事务内写，那时 {@code ip} / {@code cost_ms} 还不知道。
+     * 两者各自只写自己确实知道的东西。与 {@code OrgStudentService} 的
+     * 「监护人同意留痕」<b>完全同型</b>（那个端点也标着 {@code @OperLog}）。
      */
     @DeleteMapping("/grants")
     @SaCheckPermission("org:grant:revoke")
-    @OperLog(module = "资源授权", action = "撤销资源授权（级联子树）")
+    @OperLog(module = GrantOperLogWriter.MODULE_GRANT,
+            action = GrantOperLogWriter.ACTION_REVOKE)
     public R<GrantRevokedVO> revoke(@Valid @RequestBody GrantRevokeReq req) {
         return R.ok(grantRevokeService.revokeCascade(req));
     }

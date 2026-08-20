@@ -233,6 +233,58 @@ class GrantRevokeIT extends GrantIntegrationTestBase {
                 .isEqualTo(2);
     }
 
+    // =====================================================================
+    // 规则 17：影响面必须【落进 sys_oper_log】，不是只在响应里
+    // =====================================================================
+
+    @Test
+    @DisplayName("⚠ 规则 17：撤销写两条日志，影响面那条含节点数与学员数")
+    void revokeImpactIsPersistedToOperLog() throws Exception {
+        seedFourLevelChain();
+
+        deleteWithToken(GRANTS, loginAs(GrantFixtures.ROOT), body("""
+                {"resourceType":1,"resourceIds":["%d"],"targetNodeIds":["%d"]}
+                """.formatted(GrantFixtures.C1, GrantFixtures.A1)));
+
+        assertThat(operLogCount("撤销资源授权（级联子树）"))
+                .as("切面那条：谁、何时、从哪个 IP、撤了哪些资源（入参）")
+                .isEqualTo(1);
+
+        String params = jdbcTemplate.queryForObject(
+                "SELECT params FROM sys_oper_log WHERE tenant_id = ? AND action = ?",
+                String.class, GrantFixtures.TENANT_ID, "撤销影响面留痕");
+        assertThat(params)
+                .as("04 §B 规则 17 / PRD FR-4 规则 7：日志【含】级联影响的节点数与学员数。"
+                        + "「响应里有」和「日志里有」在合规上是两回事 —— 响应不留痕，"
+                        + "事后无从查证，而 sys_oper_log 按契约 §7.2 第 5 条要留 ≥6 个月，"
+                        + "是排查越权时唯一的原始事实")
+                .contains("\"revokedCount\":10")
+                .contains("\"affectedNodeCount\":10")
+                .contains("\"affectedStudentCount\":8")
+                .contains("\"cascadeRevokedCount\":9");
+    }
+
+    @Test
+    @DisplayName("规则 17：撤销失败时【不留】影响面日志（同事务，一起回滚）")
+    void noImpactLogWhenRevokeFails() throws Exception {
+        seedFourLevelChain();
+
+        deleteWithToken(GRANTS, loginAs(GrantFixtures.ROOT), body("""
+                {"resourceType":1,"resourceIds":["%d"],"targetNodeIds":["%d","1971000000000009996"]}
+                """.formatted(GrantFixtures.C1, GrantFixtures.A1)));
+
+        assertThat(operLogCount("撤销影响面留痕"))
+                .as("撤销整体回滚了却留下一条「影响了 10 个节点」，比没有这条记录更糟")
+                .isZero();
+    }
+
+    private int operLogCount(String action) {
+        Integer n = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM sys_oper_log WHERE tenant_id = ? AND action = ?",
+                Integer.class, GrantFixtures.TENANT_ID, action);
+        return n == null ? 0 : n;
+    }
+
     // ================================================================ 辅助
 
     /** 甲(ROOT) → 乙(A1) → 丙(T1) → 8 名学员，共 10 行。 */

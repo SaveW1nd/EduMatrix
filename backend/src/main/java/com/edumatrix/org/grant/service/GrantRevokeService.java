@@ -67,17 +67,20 @@ public class GrantRevokeService {
     private static final int NODE_TYPE_STUDENT = 3;
 
     private final GrantCascadeMapper cascadeMapper;
+    private final GrantOperLogWriter grantOperLogWriter;
     private final OrgNodeMapper nodeMapper;
     private final GrantableResourceReader grantableReader;
     private final SubtreeScopeHelper subtreeScope;
     private final CurrentNodeProvider currentNodeProvider;
 
     public GrantRevokeService(GrantCascadeMapper cascadeMapper,
+                              GrantOperLogWriter grantOperLogWriter,
                               OrgNodeMapper nodeMapper,
                               GrantableResourceReader grantableReader,
                               SubtreeScopeHelper subtreeScope,
                               CurrentNodeProvider currentNodeProvider) {
         this.cascadeMapper = cascadeMapper;
+        this.grantOperLogWriter = grantOperLogWriter;
         this.nodeMapper = nodeMapper;
         this.grantableReader = grantableReader;
         this.subtreeScope = subtreeScope;
@@ -170,6 +173,12 @@ public class GrantRevokeService {
         vo.setCascadeDetail(details);
         vo.setLearningRecordsRetained(true);
         vo.setRevokeTime(LocalDateTime.now());
+
+        // 【规则 17 / PRD FR-4 规则 7 的落地点，在同一事务内】
+        // 切面写的那一行只有【入参】，里面没有任何影响面数字。这一行补上「实际影响了谁」。
+        // 用 writeOrThrow：撤销落了库而它唯一的影响面记录静默丢失，比这次撤销失败更糟 ——
+        // 撤销可以重试，「那次撤销当时影响了谁」重建不出来
+        grantOperLogWriter.revokeImpact(vo);
         return vo;
     }
 
