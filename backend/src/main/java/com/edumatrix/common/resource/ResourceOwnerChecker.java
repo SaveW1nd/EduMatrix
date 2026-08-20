@@ -164,13 +164,38 @@ public class ResourceOwnerChecker {
      * @return {@code candidateIds} 中<b>可再下发</b>的那些，保持传入顺序；空集合法
      */
     public Set<Long> regrantableIds(ResourceType type, Collection<Long> candidateIds, Long nodeId) {
+        // 祖先链走缓存 —— 【在改树的事务内不能用这个重载】，见另一个重载的注释
+        return regrantableIds(type, candidateIds, nodeId,
+                nodeId == null ? null : ancestorCache.get(nodeId));
+    }
+
+    /**
+     * {@link #regrantableIds(ResourceType, Collection, Long)} 的显式祖先链版本。
+     *
+     * <h2>⚠ 什么时候<b>必须</b>用这个重载：在改树的事务内</h2>
+     * <p>另一个重载从 {@code node:anc:} <b>缓存</b>取祖先链，而缓存的失效
+     * <b>必须等事务提交之后</b>（契约 §2.3、{@code NodeAncestorCache#evictSubtree} 的注释：
+     * 提交前清会留下「缓存已清、库里还是旧值」的窗口，那一瞬间的请求会把旧值写回缓存，
+     * 于是移动做完了、缓存却是错的，且再也不会自己好）。
+     *
+     * <p>后果是：<b>在节点移动事务内调用缓存版，读到的是移动【之前】的树</b>。
+     * 模块 11 接管 {@code revokeOutOfScopeGrants} 时实测到过这个形态 ——
+     * 被移动的教师用旧链判定，旧上级仍持有该资源，于是判成「链完整」而
+     * <b>没有进跨管辖清单</b>；而他名下的学员因为没被缓存过、走了库里的新值，
+     * 反倒判对了。表现是「清单里有 8 名学员、独独漏掉那个教师」，<b>接口返回 200</b>。
+     *
+     * <p>所以改树的事务里必须把<b>那个事务自己读到的</b> {@code ancestors} 传进来 ——
+     * 判定逻辑仍然只有这一份，变的只是「用哪个快照」，而那一点<b>在调用点显式可见</b>。
+     *
+     * @param ancestors 目标节点的祖级路径逗号串（含首位哨兵 {@code 0}）；
+     *                  {@code null} 按「无祖先」处理
+     */
+    public Set<Long> regrantableIds(ResourceType type, Collection<Long> candidateIds, Long nodeId,
+                                    String ancestors) {
         if (type == null || nodeId == null || candidateIds == null || candidateIds.isEmpty()) {
             return Set.of();
         }
         List<Long> ids = List.copyOf(new LinkedHashSet<>(candidateIds));
-
-        // 祖先链：根 → 我的父节点。哨兵 0 已被 parseAncestorIds 跳过
-        String ancestors = ancestorCache.get(nodeId);
         List<Long> chain = ancestors == null ? List.of() : NodePath.parseAncestorIds(ancestors);
 
         Map<Long, Long> owners = provider(type).ownerNodeIdsOf(ids);

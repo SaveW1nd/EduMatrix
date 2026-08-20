@@ -250,8 +250,16 @@ public final class GrantFixtures {
                 userId + 500000L, userId, roleOf(nodeType), tenantId);
     }
 
+    /**
+     * @param parentAncestors 父节点的<b>自身路径前缀</b>（即父节点的 ancestors + 父节点 id），
+     *                        <b>不要再拼一次 parentId</b> —— 拼两次会造出
+     *                        {@code 0,ROOT,A1,T1,T1} 这种重复段。
+     *                        重复段【不会让任何断言变红】：前缀 LIKE 照样匹配、
+     *                        parseAncestorIds 也容忍重复，所以它能一直藏着，
+     *                        直到某处拿 ancestors 去拼别的东西为止（C8 就是这么撞上的）
+     */
     private void student(long id, long parentId, String parentAncestors, String name) {
-        node(id, parentId, parentAncestors + "," + parentId, name, 3, TENANT_ID);
+        node(id, parentId, parentAncestors, name, 3, TENANT_ID);
         jdbc.update("INSERT INTO org_student (id, node_id, user_id, status, tenant_id, "
                         + "create_time, update_time, deleted_at) VALUES (?, ?, ?, 0, ?, NOW(), NOW(), 0)",
                 id + 500, id, userIdOf(id), TENANT_ID);

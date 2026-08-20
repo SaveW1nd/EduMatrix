@@ -23,9 +23,9 @@ import com.edumatrix.org.member.mapper.OrgStudentMapper;
 import com.edumatrix.org.member.mapper.OrgTeacherMapper;
 import com.edumatrix.org.node.entity.OrgNode;
 import com.edumatrix.org.node.entity.OrgNodeChangeLog;
-import com.edumatrix.org.node.mapper.NodeGrantScopeMapper;
 import com.edumatrix.org.node.mapper.OrgNodeMapper;
 import com.edumatrix.org.node.vo.NodeMovedVO;
+import com.edumatrix.org.grant.service.OutOfScopeGrantResolver;
 import com.edumatrix.org.node.vo.OutOfScopeGrantVO;
 
 import io.micrometer.core.instrument.MeterRegistry;
@@ -69,7 +69,7 @@ public class NodeMoveService {
     private final OrgNodeMapper nodeMapper;
     private final OrgStudentMapper studentMapper;
     private final OrgTeacherMapper teacherMapper;
-    private final NodeGrantScopeMapper grantScopeMapper;
+    private final OutOfScopeGrantResolver outOfScopeGrantResolver;
     private final NodeChangeLogWriter changeLogWriter;
     private final SubtreeScopeHelper subtreeScopeHelper;
     private final NodeAncestorCache nodeAncestorCache;
@@ -79,7 +79,7 @@ public class NodeMoveService {
     public NodeMoveService(OrgNodeMapper nodeMapper,
                            OrgStudentMapper studentMapper,
                            OrgTeacherMapper teacherMapper,
-                           NodeGrantScopeMapper grantScopeMapper,
+                           OutOfScopeGrantResolver outOfScopeGrantResolver,
                            NodeChangeLogWriter changeLogWriter,
                            SubtreeScopeHelper subtreeScopeHelper,
                            NodeAncestorCache nodeAncestorCache,
@@ -88,7 +88,7 @@ public class NodeMoveService {
         this.nodeMapper = nodeMapper;
         this.studentMapper = studentMapper;
         this.teacherMapper = teacherMapper;
-        this.grantScopeMapper = grantScopeMapper;
+        this.outOfScopeGrantResolver = outOfScopeGrantResolver;
         this.changeLogWriter = changeLogWriter;
         this.subtreeScopeHelper = subtreeScopeHelper;
         this.nodeAncestorCache = nodeAncestorCache;
@@ -246,28 +246,18 @@ public class NodeMoveService {
         // =================================================================
         // 响应：跨管辖授权清单（同事务内算，见下方注释）
         // =================================================================
-        List<OutOfScopeGrantVO> outOfScopeGrants = collectOutOfScopeGrants(movingNodeId, newPrefix);
-        if (opts.isRevokeOutOfScopeGrants() && !outOfScopeGrants.isEmpty()) {
-            // 【本模块不执行回收】04-实施计划.md 模块 06 规则 8 逐字：「本模块先把字段与开关
-            // 做出来，级联回收动作在模块 11 接上」，且工单「涉及表」把 org_resource_grant
-            // 列在【只读】栏。在这里写一段撤销就是越过工单替模块 11 做设计。
-            // 留一条 WARN 而不是静默：调用方传了 true 却什么都没发生，必须有人看得见。
-            //
-            // 【F-27 已定案（选项 b）：不改实现，改分册措辞】03-02 §3.4 的三处
-            //（说明段 / 请求参数表 revokeOutOfScopeGrants / 响应字段说明 outOfScopeGrants）
-            // 已改成与本实现一致，并各带一个「〔模块 11 落地后本段恢复为…〕」的显式标记。
-            //
-            // 【接手时看这里】验收标准写在
-            //   04-实施计划.md §B「11 资源授权引擎」→「做完什么算做完」的【最后一条】，
-            // 逐字给了 true / false 两条 Given-When-Then，并要求同步还原 §3.4 那三处措辞、
-            // 删除本段 WARN 与这段注释。
-            // 【那一条才是强制检查点】——F 清单会越来越长没人逐条回看，
-            // 而「做完什么算做完」是模块 11 完工的判据，必须被逐条对照
-            log.warn("revokeOutOfScopeGrants=true 但本模块只做字段与开关，未执行回收"
-                            + "（04-实施计划.md 模块 06 规则 8，级联回收在模块 11）："
-                            + "nodeId={} 跨管辖授权 {} 条，可经 03-02 接口 39 手动撤销",
-                    movingNodeId, outOfScopeGrants.size());
+        // 判定与回收都在【模块 11 的 OutOfScopeGrantResolver】里 —— 契约 §2.5 规则 9 的完整判据
+        // 要读三张资源表的 owner_node_id 并对授权链做判定，那不在本模块的涉及表内。
+        // 本模块负责的是「在 ancestors 重算之后、同一事务内」把它叫起来
+        List<OutOfScopeGrantResolver.OutOfScopeGrantRow> outOfScopeRows =
+                outOfScopeGrantResolver.collect(movingNodeId, newPrefix);
+        if (opts.isRevokeOutOfScopeGrants()) {
+            // 【必须级联】清单是按「链断没断」逐层算的：教师跨管辖、而其名下学员的链
+            // 经过该教师仍然完整，于是学员不在清单里。只撤清单里的行会让学员当场变成悬挂授权。
+            // 走的是与接口 39 同一条 GrantCascadeMapper#revokeSubtree
+            outOfScopeGrantResolver.revokeCascade(outOfScopeRows, opts.getReason());
         }
+        List<OutOfScopeGrantVO> outOfScopeGrants = outOfScopeGrantResolver.toVo(outOfScopeRows);
 
         NodeMovedVO vo = buildVO(moving, target, newSelfAncestors, changeType,
                 affectedNodeCount, outOfScopeGrants, changeLog, oldParentId);
@@ -469,45 +459,6 @@ public class NodeMoveService {
             return OrgNodeChangeLog.CHANGE_TYPE_TEACHER_REASSIGN;
         }
         return OrgNodeChangeLog.CHANGE_TYPE_NODE_MOVE;
-    }
-
-    /**
-     * 跨管辖授权清单（契约 §2.5 规则 9）。
-     *
-     * <p><b>在同一事务内、步骤 5 之后算</b>：判定依据是移动<b>之后</b>的祖先链，
-     * 而同事务读得到自己尚未提交的写入。不能推到提交后 —— 它要进本次响应。
-     *
-     * <p>判定：授权人所在节点在移动后<b>既不是</b>目标节点自身、<b>也不在</b>其祖先链上。
-     * 口径的另一半（资源 {@code owner_node_id} 与有效授权链）需要模块 08/09/10 的表，
-     * 不在本模块涉及表内，由模块 11 补齐 —— 见 {@code NodeGrantScopeMapper} 类注释。
-     */
-    private List<OutOfScopeGrantVO> collectOutOfScopeGrants(Long movingNodeId, String newPrefix) {
-        List<OutOfScopeGrantVO> result = new ArrayList<>();
-        for (NodeGrantScopeMapper.GrantScopeRow row
-                : grantScopeMapper.selectSubtreeGrants(movingNodeId, newPrefix)) {
-            Long granterNodeId = row.getGranterNodeId();
-            if (granterNodeId == null) {
-                // 授权人账号已删除：谁授的已无从判定，不当作跨管辖（避免把一条查不清的
-                // 记录塞进操作者的待办）。它属于「悬挂授权」，归模块 11 的巡检
-                continue;
-            }
-            if (granterNodeId.equals(row.getTargetNodeId())) {
-                continue;
-            }
-            if (NodePath.parseAncestorIds(row.getTargetAncestors()).contains(granterNodeId)) {
-                // 授权人仍在祖先链上 —— 管辖关系没变
-                continue;
-            }
-            OutOfScopeGrantVO vo = new OutOfScopeGrantVO();
-            vo.setResourceType(row.getResourceType());
-            vo.setResourceId(row.getResourceId());
-            // resourceName 在 crs_course / qb_question / vod_video 里，不在本模块涉及表内
-            vo.setResourceName(null);
-            vo.setTargetNodeId(row.getTargetNodeId());
-            vo.setTargetNodeName(row.getTargetNodeName());
-            result.add(vo);
-        }
-        return result;
     }
 
     private NodeMovedVO buildVO(OrgNode moving, OrgNode target, String newSelfAncestors,

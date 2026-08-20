@@ -159,25 +159,40 @@ class NodeMoveIT extends OrgIntegrationTestBase {
     }
 
     @Test
-    @DisplayName("契约 §2.5 规则 9：移动后由原上级授予的授权进 outOfScopeGrants，且不被自动撤销")
+    @DisplayName("契约 §2.5 规则 9：移动后授权链断掉的进 outOfScopeGrants，且不被自动撤销")
     void outOfScopeGrantsAreReportedButNotRevoked() throws Exception {
-        // A1 把一门课授权给 P 子树里的 T1；P 移走后 A1 不再在 T1 的祖先链上
-        orgFixtures.grantResource(1962000000000009001L, 1, 1957000000000000001L,
-                OrgFixtures.T1, OrgFixtures.A1);
-        // 对照组：ROOT 授予的那条 —— ROOT 移动后仍是祖先，不算跨管辖
-        orgFixtures.grantResource(1962000000000009002L, 1, 1957000000000000002L,
-                OrgFixtures.T1, OrgFixtures.ROOT);
+        // 【判据已由模块 11 补齐】原先这条用的是模块 06 只能算的那半个判据
+        //（「授权人所在节点还在不在祖先链上」），资源 ID 是编的、根本不在 crs_course 里。
+        // 契约 §2.5 规则 9 的完整判据要读 owner_node_id 与【有效授权链】，
+        // 于是读不到资源的行一律判为「不可再下发」——对照组也会进清单。故改用真实课程。
+        long courseIntact = 1962000000000008001L;   // ROOT 自有，逐级授到 T1：链完整
+        long courseBroken = 1962000000000008002L;   // A1 自有：P 移走后 A1 不在链上，链断
+        orgFixtures.course(courseIntact, "链完整的课程", OrgFixtures.ROOT);
+        orgFixtures.course(courseBroken, "原上级自有的课程", OrgFixtures.A1);
+
+        // 逐级显式授权（契约 §2.5 规则 3：每一层都要有），含【移动后的新父】A2
+        long seq = 1962000000000009000L;
+        for (long node : new long[]{OrgFixtures.A2, OrgFixtures.P, OrgFixtures.A3, OrgFixtures.T1}) {
+            orgFixtures.grantResource(++seq, 1, courseIntact, node, OrgFixtures.ROOT);
+        }
+        orgFixtures.grantResource(++seq, 1, courseBroken, OrgFixtures.T1, OrgFixtures.A1);
 
         String token = loginAs(OrgFixtures.ROOT);
         JsonNode response = move(token, OrgFixtures.P, OrgFixtures.A2);
 
         assertThat(code(response)).isEqualTo(200);
         JsonNode grants = data(response).path("outOfScopeGrants");
-        assertThat(data(response).path("outOfScopeGrantCount").asInt()).isEqualTo(1);
+        assertThat(data(response).path("outOfScopeGrantCount").asInt())
+                .as("只有 A1 自有的那门课链断了：P 移到 A2 之下后，A1 既不在 T1 的祖先链上，"
+                        + "链上也没有任何一层持有它。ROOT 那门逐级授到位的不算")
+                .isEqualTo(1);
         assertThat(grants).hasSize(1);
-        assertThat(grants.get(0).path("resourceId").asText()).isEqualTo("1957000000000000001");
+        assertThat(grants.get(0).path("resourceId").asText()).isEqualTo(String.valueOf(courseBroken));
         assertThat(grants.get(0).path("targetNodeId").asText())
                 .isEqualTo(String.valueOf(OrgFixtures.T1));
+        assertThat(grants.get(0).path("resourceName").asText())
+                .as("resourceName 在模块 06 恒为 null，模块 11 接手后才有值")
+                .isEqualTo("原上级自有的课程");
         // 「不自动撤销」——否则每次转移都会静默中断学员正在学的课程
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT COUNT(1) FROM org_resource_grant WHERE target_node_id = ? AND deleted_at = 0",
