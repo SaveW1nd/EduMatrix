@@ -172,7 +172,7 @@ class GrantNoValidityIT extends GrantIntegrationTestBase {
     // =====================================================================
 
     @Test
-    @DisplayName("⚠ 接口 41：探针行默认就返回；expired 恒 false、validEnd 恒 null、includeExpired 恒无差别")
+    @DisplayName("⚠ 接口 41：探针行默认就返回；validEnd 恒 null；响应里【没有】expired 这个字段")
     void interface41ReturnsTheExpiredRow() throws Exception {
         probeGrant(GrantFixtures.A1, GrantFixtures.ROOT);
 
@@ -185,16 +185,17 @@ class GrantNoValidityIT extends GrantIntegrationTestBase {
                 .isEqualTo(1);
 
         JsonNode row = plain.path("list").get(0);
-        assertThat(row.path("expired").asBoolean()).isFalse();
         assertThat(row.path("validEnd").isNull())
-                .as("需方定案点名：接口 41 的 validEnd【恒为 null】，不是缺陷")
+                .as("需方定案点名：接口 41 的 validEnd【恒为 null】，不是缺陷 —— "
+                        + "它是一条【事实】字段（「没有到期日」），null 是它的真实取值")
                 .isTrue();
         assertThat(row.path("validStart").isNull()).isTrue();
-
-        assertThat(data(getWithToken(path + "?includeExpired=true", token)).path("total").asInt())
-                .as("includeExpired 保留但【恒无差别】：没有任何一行会「过期」。"
-                        + "参数不删是因为删它是接口签名变更")
-                .isEqualTo(1);
+        assertThat(row.has("expired"))
+                .as("expired 是对那个事实的【判断】，判断的对象没了、字段已删（F-107）。\n"
+                        + "断的是【字段在不在】而不是【值是不是 false】—— 后者在字段被删掉之后"
+                        + "照样绿（Jackson 取不到就是 false），那样这条用例就再也拦不住"
+                        + "「有人把它加回来、恒写 false」")
+                .isFalse();
     }
 
     // =====================================================================

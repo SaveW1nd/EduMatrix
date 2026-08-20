@@ -150,7 +150,6 @@ class GrantQueryIT extends GrantIntegrationTestBase {
         assertThat(row.path("grantByName").asText()).isEqualTo("IT11 授权引擎机构");
         assertThat(row.path("grantSource").asInt()).isEqualTo(1);
         assertThat(row.path("grantSourceName").asText()).isEqualTo("手动选择");
-        assertThat(row.path("expired").asBoolean()).isFalse();
     }
 
     @Test

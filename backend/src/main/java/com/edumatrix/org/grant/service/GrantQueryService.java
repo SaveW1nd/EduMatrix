@@ -202,8 +202,8 @@ public class GrantQueryService {
         }
 
         // 【授权没有有效期，于是这里不再过滤】——需方 2026-08-21 定案。
-        // req.includeExpired() 保留但【恒无差别】：没有任何一行会「过期」。
-        // 参数不删是因为它在接口 41 的参数表里，删它是接口签名变更；行为恒定已写进文档
+        // 原先的 includeExpired 参数已删除（F-107）：它恒无差别，勾上与不勾逐字节相同，
+        // 与「调了没反应」的空壳接口是同一个形状
         List<OrgResourceGrant> visible = rows;
 
         Map<String, String> resourceNames = resourceNamesOf(visible);
@@ -227,9 +227,9 @@ public class GrantQueryService {
             vo.setResourceName(resourceName);
             vo.setTargetNodeId(row.getTargetNodeId());
             vo.setTargetNodeName(nodeNames.get(row.getTargetNodeId()));
-            // validStart / validEnd 【恒为 null】、expired 【恒为 false】——
-            // 授权一律永久有效（需方 2026-08-21 定案），字段保留、无人赋值
-            vo.setExpired(false);
+            // validStart / validEnd 【恒为 null】—— 授权一律永久有效（需方 2026-08-21 定案）。
+            // 那两个是【事实】字段（「没有到期日」），字段保留、无人赋值；
+            // 而 expired 是对那个事实的【判断】，判断的对象没了，字段已删（F-107）
             vo.setGrantSource(row.getGrantSource());
             vo.setGrantSourceName(OrgResourceGrant.sourceName(row.getGrantSource()));
             vo.setSourceRefId(row.getSourceRefId());
