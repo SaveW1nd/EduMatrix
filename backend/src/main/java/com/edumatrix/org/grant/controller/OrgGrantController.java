@@ -16,18 +16,21 @@ import com.edumatrix.org.grant.dto.GrantCreateReq;
 import com.edumatrix.org.grant.dto.GrantHealthQueryReq;
 import com.edumatrix.org.grant.dto.GrantRevokeReq;
 import com.edumatrix.org.grant.dto.GrantValidityUpdateReq;
+import com.edumatrix.org.grant.dto.TransferPrecheckReq;
 import com.edumatrix.org.grant.dto.GrantableResourceQueryReq;
 import com.edumatrix.org.grant.dto.NodeGrantedResourceQueryReq;
 import com.edumatrix.org.grant.service.GrantQueryService;
 import com.edumatrix.org.grant.service.GrantOperLogWriter;
 import com.edumatrix.org.grant.service.GrantRevokeService;
 import com.edumatrix.org.grant.service.GrantValidityService;
+import com.edumatrix.org.grant.service.TransferPrecheckService;
 import com.edumatrix.org.grant.service.GrantWriteService;
 import com.edumatrix.org.grant.vo.GrantCreatedVO;
 import com.edumatrix.org.grant.vo.GrantHealthRowVO;
 import com.edumatrix.org.grant.vo.GrantRevokedVO;
 import com.edumatrix.org.grant.vo.GrantValidityUpdatedVO;
 import com.edumatrix.org.grant.vo.GrantableResourceVO;
+import com.edumatrix.org.grant.vo.TransferPrecheckVO;
 import com.edumatrix.org.grant.vo.NodeGrantedResourceVO;
 
 import cn.dev33.satoken.annotation.SaCheckOr;
@@ -53,15 +56,18 @@ public class OrgGrantController {
     private final GrantWriteService grantWriteService;
     private final GrantRevokeService grantRevokeService;
     private final GrantValidityService grantValidityService;
+    private final TransferPrecheckService transferPrecheckService;
 
     public OrgGrantController(GrantQueryService grantQueryService,
                               GrantWriteService grantWriteService,
                               GrantRevokeService grantRevokeService,
-                              GrantValidityService grantValidityService) {
+                              GrantValidityService grantValidityService,
+                              TransferPrecheckService transferPrecheckService) {
         this.grantQueryService = grantQueryService;
         this.grantWriteService = grantWriteService;
         this.grantRevokeService = grantRevokeService;
         this.grantValidityService = grantValidityService;
+        this.transferPrecheckService = transferPrecheckService;
     }
 
     /**
@@ -139,6 +145,32 @@ public class OrgGrantController {
             action = GrantOperLogWriter.ACTION_EDIT_VALIDITY)
     public R<GrantValidityUpdatedVO> updateValidity(@Valid @RequestBody GrantValidityUpdateReq req) {
         return R.ok(grantValidityService.updateValidity(req));
+    }
+
+    /**
+     * 接口 52 §6.12 归属变更影响面预检。<b>仅 {@code org_admin}</b>。
+     *
+     * <p><b>只读预检，不改任何数据</b> —— 所以<b>不标 {@code @OperLog}</b>
+     *（它是 {@code POST} 只因为 500 个 ID 放不进 query string，
+     * 与接口 36 按标签批量选人同为读语义）。
+     *
+     * <p>它把接口 20 / 21 / 22 执行<b>之后</b>才会显现的影响面提前摊开：
+     * 学员原有的授权按契约 §2.5 规则 6 <b>合法保留</b>，但新上级的祖先链上无人持有 ——
+     * <b>新导师看不到这门课，也无法再下发</b>，而操作者当场毫无感知。
+     *
+     * <p>无权授予的资源<b>不返回 {@code 10301}</b>，以 {@code grantableByMe = false} 标记：
+     * 那是执行接口 38 时的拒绝码，在只读预检里抛它会让整个预检失败。
+     *
+     * <p><b>perms 取 {@code org:student:transfer} 而不是 {@code org:student:assign}</b>：
+     * §6.12 权限栏写「仅 {@code org_admin}」，而 {@code sys_role_menu} 里
+     * {@code assign} 也绑给了 {@code teacher}、只有 {@code transfer} 是管理员独有
+     *（那条菜单的备注逐字：「03-02 §2.3：teacher 不可调用」）。
+     * 权限的真相在初始化数据里，代码里不写第二份 —— 这里只是<b>挑对了哪一个</b>。
+     */
+    @PostMapping("/students/transfer-precheck")
+    @SaCheckPermission("org:student:transfer")
+    public R<TransferPrecheckVO> transferPrecheck(@Valid @RequestBody TransferPrecheckReq req) {
+        return R.ok(transferPrecheckService.precheck(req));
     }
 
     /**

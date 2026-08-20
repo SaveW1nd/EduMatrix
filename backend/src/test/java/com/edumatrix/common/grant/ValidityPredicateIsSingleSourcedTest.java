@@ -31,8 +31,14 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class ValidityPredicateIsSingleSourcedTest {
 
-    private static final List<Class<?>> MAPPERS_WRITING_VALIDITY_PREDICATE =
-            List.of(ResourceGrantMapper.class, NodeGrantScopeMapper.class);
+    private static final List<Class<?>> MAPPERS_WRITING_VALIDITY_PREDICATE = List.of(
+            ResourceGrantMapper.class,
+            NodeGrantScopeMapper.class,
+            // 模块 11 新增的四个（按类注释的要求登记进来）：
+            com.edumatrix.org.grant.mapper.GrantHealthMapper.class,
+            com.edumatrix.org.grant.mapper.OutOfScopeGrantMapper.class,
+            com.edumatrix.org.grant.mapper.TransferPrecheckMapper.class,
+            com.edumatrix.org.grant.mapper.GrantValidityMapper.class);
 
     @Test
     @DisplayName("valid_end 的上界一律 >= NOW()；出现 > NOW() 即为 D7 那个分叉重现")

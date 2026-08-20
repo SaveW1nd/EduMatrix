@@ -67,11 +67,23 @@ class OperLogCoverageTest {
      *
      * <p><b>不豁免 {@code changePassword}</b>：改密是安全相关事件，
      * 落在 PRD §7.3 第 7 条「敏感操作记 {@code sys_oper_log}」里（需方定案）。
+     *
+     * <p><b>第四个（模块 11）：{@code transferPrecheck} 是 {@code POST} 但<b>只读</b></b>。
+     * 03-02 §6.12 说明段逐字「<b>只读预检，不改任何数据</b>」；
+     * 它用 {@code POST} 的唯一理由是「500 个 ID 放不进 query string」——
+     * 与接口 36 按标签批量选人<b>同为读语义</b>。
+     * 给一个不改数据的接口记操作日志，会让 {@code sys_oper_log} 里混进一批
+     * 「什么都没发生」的行，而那张表恰恰是<b>排查越权时要看的原始事实</b>——
+     * 噪声越多，真正的那一行越难找。
+     *
+     * <p><b>这条豁免的边界很窄，别推广</b>：判据是「这个端点改不改数据」，
+     * 不是「它是不是 POST」。接口 38 / 39 / 40 同样是写端点、一个都不豁免。
      */
     private static final Set<String> EXEMPT = Set.of(
             "AuthController#login",
             "AuthController#refresh",
-            "AuthController#logout");
+            "AuthController#logout",
+            "OrgGrantController#transferPrecheck");
 
     private static final Set<Class<?>> WRITE_MAPPINGS =
             Set.of(PostMapping.class, PutMapping.class, DeleteMapping.class);
@@ -110,7 +122,7 @@ class OperLogCoverageTest {
      * 如果哪天扫描逻辑本身退化（比如注解元数据丢失、包名改了），
      * 上面那条会以"零个未标注"的姿态<b>全绿</b>，而本条会红。
      *
-     * <p>当前 45 = {@code org} 22（member 15 + node 4 + <b>grant 3</b>）+ {@code system} 19
+     * <p>当前 46 = {@code org} 23（member 15 + node 4 + <b>grant 4</b>）+ {@code system} 19
      * （user 5 / role 4 / menu 3 / tenant 5 / tenantConfig 1 / <b>file 1</b>）
      * + {@code auth} 4（login / refresh / logout / changePassword，
      * 其中前三个在 {@link #EXEMPT} 里）。
@@ -121,7 +133,9 @@ class OperLogCoverageTest {
      * 随后 {@code auth} 域纳入扫描（§1.6 补标）又红一次，改成 42；
      * 模块 11 的 C4 加了 {@code OrgGrantController#grant}（03-02 §9.2 授权资源给节点）
      * 第三次红，改成 43；C5 加了 {@code #revoke}（§9.3 撤销资源授权）第四次红，改成 44；
-     * C6 加了 {@code #updateValidity}（§9.4 修改授权有效期）第五次红，改成 45
+     * C6 加了 {@code #updateValidity}（§9.4 修改授权有效期）第五次红，改成 45；
+     * C10 加了 {@code #transferPrecheck}（§6.12 归属变更影响面预检）第六次红，改成 46
+     * —— 而那一个进了 {@link #EXEMPT}：它是 {@code POST} 但<b>只读</b>
      * —— 而 PRD FR-1 规则 9 逐字要求「所有<b>授权/撤销</b>写 {@code sys_oper_log}」，
      * 这两红正好各落在那条要求的一半上。
      * 这就是它存在的样子。
@@ -138,7 +152,7 @@ class OperLogCoverageTest {
      * 写在这里是因为：本条全绿最容易让人以为「操作日志这块齐了」。
      */
     @Test
-    @DisplayName("写端点总数 = 45（新增写接口时本条会红，提醒去标 @OperLog）")
+    @DisplayName("写端点总数 = 46（新增写接口时本条会红，提醒去标 @OperLog）")
     void writeEndpointCountIsPinned() throws Exception {
         int count = 0;
         for (Class<?> controller : scanControllers()) {
@@ -148,7 +162,7 @@ class OperLogCoverageTest {
                 }
             }
         }
-        assertThat(count).isEqualTo(45);
+        assertThat(count).isEqualTo(46);
     }
 
     private static boolean isWriteEndpoint(Method method) {
