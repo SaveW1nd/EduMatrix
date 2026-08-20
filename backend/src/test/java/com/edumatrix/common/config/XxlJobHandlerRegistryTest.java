@@ -53,7 +53,11 @@ class XxlJobHandlerRegistryTest {
             // 模块 09  转码事件消费（03-03 §7.2）。调度中心登记 cron 0/10 * * * * ?
             // ⚠ 与过渡期的 fixedDelay 10s【语义不同】（固定节拍 vs 完成后再等），
             //   切换时不是「照抄」而是「换语义」——见 VodEventConsumeJob 类注释与 F-68
-            "vodEventConsume"));
+            "vodEventConsume",
+            // 模块 11  每日 04:30 授权健康度巡检（PRD FR-7、契约 §2.5 规则 6）。
+            // 调度中心登记 cron 与 ScheduledJobTrigger.CRON_GRANT_CONSISTENCY 【照抄】
+            //（都是 0 30 4 * * *，与模块 09 那条不同，这条【是】照抄不是换语义）
+            "grantConsistency"));
 
     @Test
     @DisplayName("XxlJobConfig 里确实有一个产出 XxlJobSpringExecutor 的 @Bean 方法")

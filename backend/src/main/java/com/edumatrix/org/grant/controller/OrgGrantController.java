@@ -13,6 +13,7 @@ import com.edumatrix.common.response.PageResult;
 import com.edumatrix.common.response.R;
 import com.edumatrix.common.operlog.OperLog;
 import com.edumatrix.org.grant.dto.GrantCreateReq;
+import com.edumatrix.org.grant.dto.GrantHealthQueryReq;
 import com.edumatrix.org.grant.dto.GrantRevokeReq;
 import com.edumatrix.org.grant.dto.GrantValidityUpdateReq;
 import com.edumatrix.org.grant.dto.GrantableResourceQueryReq;
@@ -23,6 +24,7 @@ import com.edumatrix.org.grant.service.GrantRevokeService;
 import com.edumatrix.org.grant.service.GrantValidityService;
 import com.edumatrix.org.grant.service.GrantWriteService;
 import com.edumatrix.org.grant.vo.GrantCreatedVO;
+import com.edumatrix.org.grant.vo.GrantHealthRowVO;
 import com.edumatrix.org.grant.vo.GrantRevokedVO;
 import com.edumatrix.org.grant.vo.GrantValidityUpdatedVO;
 import com.edumatrix.org.grant.vo.GrantableResourceVO;
@@ -137,6 +139,23 @@ public class OrgGrantController {
             action = GrantOperLogWriter.ACTION_EDIT_VALIDITY)
     public R<GrantValidityUpdatedVO> updateValidity(@Valid @RequestBody GrantValidityUpdateReq req) {
         return R.ok(grantValidityService.updateValidity(req));
+    }
+
+    /**
+     * 接口 51 §9.6 授权健康度巡检结果查询。<b>仅 {@code org_admin}</b>。
+     *
+     * <p><b>只读，一个授权行都不改。</b> 两个修复动作复用既有接口：
+     * 一键回收走接口 39（级联逻辑与手动撤销<b>完全相同</b>，没有第二套语义）、
+     * 补授上级走接口 38 —— 不为巡检另开写接口（§9.6 说明段那张表）。
+     *
+     * <p><b>{@code danglingCount} 与 {@code crossScopeCount} 分开返回，从不相加</b>：
+     * 合并会让任何一次教师调岗或学员转交都使指标永久非 0，最终运维关掉告警、
+     * 真悬挂也没人看（契约 §2.5 规则 6，F-20 踩过一次）。
+     */
+    @GetMapping("/grants/health")
+    @SaCheckPermission("org:grantHealth:list")
+    public R<PageResult<GrantHealthRowVO>> health(@Valid GrantHealthQueryReq req) {
+        return R.ok(grantQueryService.health(req));
     }
 
     /**

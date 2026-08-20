@@ -48,6 +48,15 @@ public final class MetricsRegistry {
      */
     public static final String TAG_REASON = "reason";
 
+    /**
+     * 标签名：租户。
+     *
+     * <p>巡检类指标必须带它 —— 不带的话多个租户的值互相覆盖，
+     * 运维看到 {@code grant_dangling_count = 3} <b>不知道是哪个机构的 3</b>，
+     * 而这个指标的处置动作（一键回收 / 补授上级）必须落到具体机构才做得了。
+     */
+    public static final String TAG_TENANT = "tenant";
+
     // ======================================================================
     // 契约 §7.1 十项（11 个名字）
     // ======================================================================
@@ -72,6 +81,23 @@ public final class MetricsRegistry {
      * 都使指标永久非 0，持续假警报，最终结果是运维关掉告警、真悬挂也没人看。
      */
     public static final String GRANT_DANGLING_COUNT = "grant_dangling_count";
+
+    /**
+     * Gauge，<b>不进告警</b>。模块 11。
+     *
+     * <p>契约 §2.5 规则 6 的<b>跨管辖</b>授权：节点移动（教师调岗 / 学员转交）的
+     * <b>合法产物</b>，学生仍可正常使用、新上级看不到也无法再下发，<b>只作待办</b>。
+     *
+     * <p><b>契约 §7.1 只说了「{@code crossScopeCount} 单独打点」，没有给指标名</b>，
+     * 本名由模块 11 定（已登记，需方可推翻）。取 {@code grant_} 前缀与
+     * {@link #GRANT_DANGLING_COUNT} 对齐，读的人一眼能看出是一对。
+     *
+     * <p><b>它与 {@link #GRANT_DANGLING_COUNT} 从头到尾是两个变量、两个 Gauge、
+     * 两个响应字段，中间没有任何一处相加</b>。合并计数会让任何一次教师调岗或学员转交
+     * 都使指标永久非 0，持续假警报，最终结果是运维关掉告警、真悬挂也没人看。
+     * 本项目在 F-20 已经为这条踩过一次。
+     */
+    public static final String GRANT_CROSS_SCOPE_COUNT = "grant_cross_scope_count";
 
     /**
      * Histogram，告警线 P99 &gt; 2000。模块 11。

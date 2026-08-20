@@ -98,6 +98,21 @@ public class ResourceOwnerChecker {
     }
 
     /**
+     * 批量取归属节点（转发给该类型的 {@link ResourceOwnerProvider#ownerNodeIdsOf}）。
+     *
+     * <p>巡检与批量校验用它 —— 逐个 {@link #ownerNodeIdOf} 是 N 次往返，
+     * 慢，但<b>不报错</b>。
+     *
+     * @return 只含<b>查得到</b>的资源；不存在 / 已删除 / 跨租户的键<b>不出现</b>
+     */
+    public Map<Long, Long> ownerNodeIdsOf(ResourceType type, Collection<Long> resourceIds) {
+        if (resourceIds == null || resourceIds.isEmpty()) {
+            return Map.of();
+        }
+        return provider(type).ownerNodeIdsOf(resourceIds);
+    }
+
+    /**
      * <b>严格</b>归属判定：{@code owner_node_id == nodeId}。写操作（编排 / 编辑 / 删除 /
      * 上下架）用它，不通过一律 403（契约 §2.5 规则 8）。
      */

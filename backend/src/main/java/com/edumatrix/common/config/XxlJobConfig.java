@@ -72,7 +72,8 @@ public class XxlJobConfig {
             // 这条必须是 WARN 且说清后果 —— 它是「启用了但没接上」唯一的痕迹
             log.warn("XXL-Job 执行器已启用，但 xxl.job.admin-addresses 为空 —— "
                     + "执行器不会注册到任何调度中心，两个任务（anonymizeArchivedStudent / "
-                    + "tempFileCleanup）永远不会被触发，而应用本身不会有任何异常");
+                    + "tempFileCleanup、vodEventConsume、grantConsistency）永远不会被触发，"
+                    + "而应用本身不会有任何异常");
         }
         if (accessToken == null || accessToken.isBlank()) {
             // 空 token = 任何能访问 9999 端口的人都能让执行器跑任意已注册的 handler。
@@ -85,7 +86,7 @@ public class XxlJobConfig {
                 appName, port,
                 adminAddresses == null || adminAddresses.isBlank() ? "(未配置)" : adminAddresses,
                 logPath + "/xxl-job",
-                "anonymizeArchivedStudent, tempFileCleanup");
+                "anonymizeArchivedStudent, tempFileCleanup, vodEventConsume, grantConsistency");
         return executor;
     }
 }

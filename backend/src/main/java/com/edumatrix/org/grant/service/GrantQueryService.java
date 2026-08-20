@@ -26,11 +26,14 @@ import com.edumatrix.common.subtree.CurrentNodeProvider;
 import com.edumatrix.common.subtree.NodeNameReader;
 import com.edumatrix.common.subtree.SubtreeScopeHelper;
 import com.edumatrix.common.account.UserNameReader;
+import com.edumatrix.org.grant.dto.GrantHealthQueryReq;
 import com.edumatrix.org.grant.dto.GrantableResourceQueryReq;
 import com.edumatrix.org.grant.dto.NodeGrantedResourceQueryReq;
 import com.edumatrix.org.grant.entity.OrgResourceGrant;
 import com.edumatrix.org.grant.mapper.GrantSourceRefMapper;
 import com.edumatrix.org.grant.mapper.OrgResourceGrantMapper;
+import com.edumatrix.org.grant.vo.GrantHealthRowVO;
+import com.edumatrix.org.grant.vo.GrantHealthSummaryVO;
 import com.edumatrix.org.grant.vo.GrantableResourceVO;
 import com.edumatrix.org.grant.vo.NodeGrantedResourceVO;
 
@@ -56,6 +59,8 @@ public class GrantQueryService {
     private static final int ROWS_WARN_THRESHOLD = 5000;
 
     private final GrantableResourceReader grantableReader;
+    private final GrantHealthService healthService;
+    private final org.springframework.data.redis.core.StringRedisTemplate redisTemplate;
     private final ResourceGrantReader grantReader;
     private final ResourceOwnerChecker ownerChecker;
     private final OrgResourceGrantMapper grantMapper;
@@ -66,6 +71,8 @@ public class GrantQueryService {
     private final UserNameReader userNameReader;
 
     public GrantQueryService(GrantableResourceReader grantableReader,
+                             GrantHealthService healthService,
+                             org.springframework.data.redis.core.StringRedisTemplate redisTemplate,
                              ResourceGrantReader grantReader,
                              ResourceOwnerChecker ownerChecker,
                              OrgResourceGrantMapper grantMapper,
@@ -75,6 +82,8 @@ public class GrantQueryService {
                              NodeNameReader nodeNameReader,
                              UserNameReader userNameReader) {
         this.grantableReader = grantableReader;
+        this.healthService = healthService;
+        this.redisTemplate = redisTemplate;
         this.grantReader = grantReader;
         this.ownerChecker = ownerChecker;
         this.grantMapper = grantMapper;
@@ -334,5 +343,84 @@ public class GrantQueryService {
             case OrgResourceGrant.SOURCE_TEMPLATE -> sourceRefMapper.selectTemplateName(refId);
             default -> null;
         };
+    }
+
+    // =====================================================================
+    // 接口 51 §9.6 授权健康度巡检结果查询
+    // =====================================================================
+
+    /**
+     * <b>只读，一个授权行都不改</b>（§9.6 说明段）。
+     *
+     * <p>两个修复动作<b>复用既有接口</b>：一键回收走接口 39（级联逻辑与手动撤销
+     * <b>完全相同</b>，没有第二套语义）、补授上级走接口 38。不为巡检另开写接口。
+     *
+     * <p>{@code danglingCount} 与 {@code crossScopeCount} <b>分开返回</b>，
+     * 且 {@code summary} 与当前 {@code type} 无关 —— 页面 A2 的两张卡片是一起看的。
+     */
+    public PageResult<GrantHealthRowVO> health(GrantHealthQueryReq req) {
+        Long myNodeId = currentNodeProvider.requireCurrentNodeId();
+        GrantHealthService.HealthView view = healthService.view(
+                req.getType(), req.getResourceType(), myNodeId,
+                (targetNodeId, ancestors) -> myNodeId.equals(targetNodeId)
+                        || com.edumatrix.common.subtree.NodePath.parseAncestorIds(ancestors)
+                        .contains(myNodeId));
+
+        List<com.edumatrix.org.grant.mapper.GrantHealthMapper.HealthRow> all = view.rows();
+        int pageNum = PageResult.normalizePageNum(req.getPageNum());
+        int pageSize = PageResult.normalizePageSize(req.getPageSize());
+        int from = Math.min((pageNum - 1) * pageSize, all.size());
+        int to = Math.min(from + pageSize, all.size());
+        List<com.edumatrix.org.grant.mapper.GrantHealthMapper.HealthRow> page =
+                all.subList(from, to);
+
+        Map<String, String> resourceNames = resourceNamesOfHealth(page);
+        Map<Long, String> nodeNames = nodeNameReader.nodeNames(page.stream()
+                .map(com.edumatrix.org.grant.mapper.GrantHealthMapper.HealthRow::getParentNodeId)
+                .filter(java.util.Objects::nonNull).distinct().toList());
+        LocalDateTime detectedTime = lastRunOf();
+
+        boolean expiring = "expiring".equals(req.getType());
+        List<GrantHealthRowVO> list = new ArrayList<>(page.size());
+        for (var row : page) {
+            GrantHealthRowVO vo = new GrantHealthRowVO();
+            vo.setResourceType(row.getResourceType());
+            vo.setResourceId(row.getResourceId());
+            vo.setResourceName(resourceNames.get(nameKey(row.getResourceType(), row.getResourceId())));
+            vo.setTargetNodeId(row.getTargetNodeId());
+            vo.setTargetNodeName(row.getTargetNodeName());
+            // §9.6 字段说明：expiring 时 missingNodeId 为 null
+            vo.setMissingNodeId(expiring ? null : row.getParentNodeId());
+            vo.setMissingNodeName(expiring ? null : nodeNames.get(row.getParentNodeId()));
+            vo.setValidEnd(row.getValidEnd());
+            vo.setDetectedTime(detectedTime);
+            list.add(vo);
+        }
+        return PageResult.of(all.size(), list,
+                new GrantHealthSummaryVO(view.danglingCount(), view.crossScopeCount()));
+    }
+
+    /** 该租户最近一轮巡检的完成时刻；从未巡检过时 {@code null}（见 {@code GrantHealthRowVO}）。 */
+    private LocalDateTime lastRunOf() {
+        Long tenantId = com.edumatrix.common.tenant.TenantHelper.getTenantIdOrNull();
+        if (tenantId == null) {
+            return null;
+        }
+        String value = redisTemplate.opsForValue()
+                .get(com.edumatrix.common.redis.RedisKeys.grantHealthLastRun(tenantId));
+        return value == null ? null
+                : LocalDateTime.parse(value,
+                        java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+    }
+
+    private Map<String, String> resourceNamesOfHealth(
+            List<com.edumatrix.org.grant.mapper.GrantHealthMapper.HealthRow> rows) {
+        Map<ResourceType, Set<Long>> byType = new EnumMap<>(ResourceType.class);
+        rows.forEach(row -> ResourceType.of(row.getResourceType()).ifPresent(type ->
+                byType.computeIfAbsent(type, k -> new LinkedHashSet<>()).add(row.getResourceId())));
+        Map<String, String> names = new LinkedHashMap<>();
+        byType.forEach((type, ids) -> grantableReader.namesOf(type, ids)
+                .forEach((id, name) -> names.put(nameKey(type.code(), id), name)));
+        return names;
     }
 }
