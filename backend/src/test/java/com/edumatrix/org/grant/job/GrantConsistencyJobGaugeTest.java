@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 
 import com.edumatrix.common.metrics.MetricsRegistry;
 import com.edumatrix.org.grant.mapper.GrantTenantMapper;
+import com.edumatrix.org.grant.service.GrantHealthService;
 
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -25,7 +26,21 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * 每条用例自己 {@code new} 一个 {@link SimpleMeterRegistry} 与一个 Job，<b>与顺序无关</b>。
  *
  * <p>{@code healthService} / {@code redisTemplate} 传 {@code null} 是安全的：
- * 这几条路径都不进 {@code scanTenant()}（0 租户或取租户就抛），构造器也只做赋值与注册。
+ * 那几条路径都不进 {@code scanTenant()}（0 租户或取租户就抛），构造器也只做赋值与注册。
+ * <b>唯一真的进得去的那条</b>（{@link #signalMeansRanToCompletionNotRanToStart}）传的是
+ * {@link #diesDuringScan()}，在碰到 {@code redisTemplate} 之前就抛了。
+ *
+ * <h2>三颗钉子，钉的是三件不同的事</h2>
+ * <table border="1">
+ *   <caption>F-101 定案的三个属性，各有一条用例与一次变异</caption>
+ *   <tr><th>属性</th><th>用例</th><th>变异</th></tr>
+ *   <tr><td><b>初值</b></td><td>{@link #gaugeExistsAtConstructionWithZero}</td>
+ *       <td>M26 改成 {@code System.currentTimeMillis()}</td></tr>
+ *   <tr><td><b>单位</b></td><td>{@link #valueIsEpochSecondsNotMillis}</td>
+ *       <td>M27 把 set 挪进 {@code scanTenant()}</td></tr>
+ *   <tr><td><b>位置</b></td><td>{@link #signalMeansRanToCompletionNotRanToStart}</td>
+ *       <td>M28 把 set 挪到循环<b>前</b></td></tr>
+ * </table>
  */
 class GrantConsistencyJobGaugeTest {
 
@@ -38,6 +53,22 @@ class GrantConsistencyJobGaugeTest {
 
     private static GrantConsistencyJob job(MeterRegistry registry, GrantTenantMapper mapper) {
         return new GrantConsistencyJob(null, mapper, null, registry);
+    }
+
+    /**
+     * 扫描途中的进程级故障。
+     *
+     * <p><b>必须抛 {@code Error} 而不是 {@code RuntimeException}</b>：后者会被 {@code run()} 里的
+     * {@code catch (RuntimeException)} 兜住、循环照常走完，末尾那句 set 于是照常执行 ——
+     * set 摆在循环前还是循环后<b>结论恒同</b>，拿它当探针这条用例一个分叉都区分不了。
+     */
+    private static GrantHealthService diesDuringScan() {
+        return new GrantHealthService(null, null) {
+            @Override
+            public HealthScan scan() {
+                throw new Error("探针：扫描途中的进程级故障（等价于进程被杀）");
+            }
+        };
     }
 
     @Test
@@ -104,5 +135,28 @@ class GrantConsistencyJobGaugeTest {
                 .as("毫秒值会让 time() - x 变成一个巨大的负数，告警【永远不触发】——"
                         + "而那与「一切正常」在监控上同样长得一模一样")
                 .isBetween((double) before, (double) after);
+    }
+
+    @Test
+    @DisplayName("⚠ 钉【位置】：扫描途中中断 → 信号仍为 0 ——「跑完了」不是「开始跑了」")
+    void signalMeansRanToCompletionNotRanToStart() {
+        MeterRegistry registry = new SimpleMeterRegistry();
+        GrantConsistencyJob job = new GrantConsistencyJob(
+                diesDuringScan(), tenants(List.of(1971L)), null, registry);
+
+        assertThatThrownBy(job::run)
+                .as("探针必须是 Error —— 理由见 diesDuringScan() 的注释")
+                .isInstanceOf(Error.class);
+
+        assertThat(registry.find(METRIC).gauge().value())
+                .as("【这条钉的是 set 的位置，不是异常处理】—— 与 gaugeExistsAtConstructionWithZero "
+                        + "钉初值（M26）、valueIsEpochSecondsNotMillis 钉单位（M27）是同一组三件事：\n"
+                        + "位置决定这个信号【叫什么名字】：写在循环【后】它是「上次跑完」，"
+                        + "挪到循环【前】就变成「上次开始跑」，而告警文案与阈值都是按前者写的。\n"
+                        + "分叉场景是【进程在扫描途中被杀】：多租户时一轮可能跑几分钟，发版重启正好撞上 —— "
+                        + "循环前的版本已经记下「跑过了」、告警安静 26 小时，而大部分租户根本没扫到。\n"
+                        + "没有这条，将来有人做个很合理的重构（「记一个开始时刻和一个结束时刻吧」）"
+                        + "把它上提，全绿通过。")
+                .isZero();
     }
 }

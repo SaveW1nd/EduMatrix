@@ -135,7 +135,13 @@ public class GrantConsistencyJob {
         // 「跑完了、只是没有租户可扫」与「压根没跑」必须区分得开。
         //
         // 若 selectActiveTenantIds 自己抛异常导致 run() 中断、本句不执行 ——
-        // 那正是【期望行为】：信号变陈旧、26h 后告警触发。
+        // 那正是【期望行为】：信号变陈旧、26h 后告警触发。扫描途中的 Error 同理。
+        //
+        // 【这一句必须在循环之后，不能上提到循环之前】——位置决定这个信号叫什么名字：
+        // 在循环后它是「上次跑完」，挪到循环前就变成「上次开始跑」，
+        // 而告警阈值 26h 是按前者写的。分叉场景是进程在扫描途中被杀：
+        // 循环前的版本已记下「跑过了」、告警安静一整天，而大部分租户根本没扫到。
+        // GrantConsistencyJobGaugeTest#signalMeansRanToCompletionNotRanToStart 钉住这件事。
         lastRunEpochSeconds.set(Instant.now().getEpochSecond());
         log.info("授权健康度巡检完成：{} 个租户", tenantIds.size());
         return tenantIds.size();
