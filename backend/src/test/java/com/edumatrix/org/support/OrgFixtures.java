@@ -147,6 +147,7 @@ public final class OrgFixtures {
             jdbc.update("DELETE FROM org_node_change_log WHERE node_id = ?", nodeId);
             jdbc.update("DELETE FROM org_node WHERE id = ?", nodeId);
         }
+        jdbc.update("DELETE FROM crs_course WHERE tenant_id = ?", TENANT_ID);
         jdbc.update("DELETE FROM sys_login_log WHERE username LIKE 'it06\\_%'");
         jdbc.update("DELETE FROM sys_tenant WHERE id = ?", TENANT_ID);
     }
@@ -232,6 +233,24 @@ public final class OrgFixtures {
     }
 
     /** 授权一行资源给某节点，授权人取 {@code granterNodeId} 对应的账号。 */
+    /**
+     * 插一门<b>真实</b>课程（{@code crs_course}）。
+     *
+     * <h2>为什么模块 11 落地后必须有真课程</h2>
+     * <p>契约 §2.5 规则 9 的完整判据是「授权行的 {@code target_node_id} 当前祖先链
+     * 不再包含该资源 {@code owner_node_id} <b>或其有效授权链</b>」—— 它要<b>读 owner</b>。
+     * 本夹具原先只插授权行、资源 ID 是编的，模块 06 那时的判据只看
+     * 「授权人所在节点还在不在祖先链上」，读不读得到资源无所谓。
+     * 判据补齐之后，读不到资源的行一律判为「不可再下发」，于是<b>对照组也会进清单</b>。
+     */
+    public void course(long id, String name, long ownerNodeId) {
+        jdbc.update("INSERT INTO crs_course (id, course_name, owner_node_id, cover_file_id, "
+                        + "subject, description, status, lesson_count, total_duration, tenant_id, "
+                        + "create_by, create_time, update_time, deleted_at) "
+                        + "VALUES (?, ?, ?, NULL, '数学', '简介', 1, 0, 0, ?, ?, NOW(), NOW(), 0)",
+                id, name, ownerNodeId, TENANT_ID, userIdOf(ROOT));
+    }
+
     public void grantResource(long grantId, int resourceType, long resourceId,
                               long targetNodeId, long granterNodeId) {
         jdbc.update("INSERT INTO org_resource_grant (id, resource_type, resource_id, "

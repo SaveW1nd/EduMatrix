@@ -35,13 +35,15 @@
  *       {@code org/member/mapper/OrgStudentMapper}（前两条）与
  *       {@code org/member/mapper/OrgTeacherMapper#addStudentCount}（第三条），
  *       <b>SQL 与整段注释逐字保留</b>，本类已删除。{@code NodeMoveService} 改注入那两个 Mapper；
- *   <li><b>【未到期，交模块 11】</b>{@code mapper/NodeGrantScopeMapper} ——
- *       {@code org_resource_grant} 的窄只读，算移动响应的 {@code outOfScopeGrants}。
- *       届时连同 {@code revokeOutOfScopeGrants=true} 的级联回收动作一起实现
- *       （本模块只做字段与开关，契约 §2.5 规则 9、04-实施计划.md 模块 06 规则 8）。
- *       <b>模块 07 已核对：本条不到期，一个字未动。</b>
- *       模块 11 接手时另见 03-02 §6.12（接口 52 归属变更影响面预检）——
- *       它的签名在模块 07 敲定、实现落在模块 11，依赖的正是本 Mapper 缺的那一半判定；
+ *   <li><b>【已交接，模块 11】</b>{@code mapper/NodeGrantScopeMapper} 的
+ *       {@code selectSubtreeGrants} —— 算移动响应的 {@code outOfScopeGrants}。
+ *       本模块当时只做了<b>字段与开关</b>，{@code revokeOutOfScopeGrants=true} 只记一条 WARN。
+ *       模块 11 落地后：查询搬到 {@code org/grant/mapper/OutOfScopeGrantMapper}，
+ *       判定补齐为契约 §2.5 规则 9 的完整判据（复用 {@code ResourceOwnerChecker.canRegrant}），
+ *       级联回收接上 {@code GrantCascadeMapper#revokeSubtree}，
+ *       {@code NodeMoveService} 里那段 WARN 与占位注释<b>已删除</b>。
+ *       {@code NodeGrantScopeMapper} 只剩节点详情的 {@code grantedResourceStat} 一条，常驻。
+ *       另见 03-02 §6.12（接口 52 归属变更影响面预检），同样落在模块 11；
  *   <li><b>【经核对不交接，常驻】</b>{@code mapper/NodeAccountMapper} —— {@code sys_user}
  *       的窄读写（§3.1/§3.2 的 {@code refUserName}/{@code refUserPhone}、§3.3 的姓名同步、
  *       §3.6 的重置密码）。<b>原登记的交接对象是「{@code system/user} 将来对外暴露的 Service」，

@@ -192,8 +192,9 @@ check "题目版本表只增不改（窄 Mapper 不继承 BaseMapper、无写注
 #   MemberFixtures(+500000)  [1967000000000600001 .. 1967000000000600119]
 #   CourseFixtures(+500000)  [1968000000000600001 .. 1968000000000600021]
 #   QuestionFixtures(+500000)[1969000000000600001 .. 1969000000000600021]（模块 10）
-# 靠的【不是】偏移量互不相同 —— Course / Member / Question 三家用的都是 +500000L，
-# 靠的是【租户前缀互不相同】（1960 / 1962 / 1967 / 1968 / 1969，两两相距 ≥ 1e15），
+#   GrantFixtures(+500000)   [1971000000000600001 .. 1971000000000600038]（模块 11）
+# 靠的【不是】偏移量互不相同 —— Course / Member / Question / Grant 四家用的都是 +500000L，
+# 靠的是【租户前缀互不相同】（1960 / 1962 / 1967 / 1968 / 1969 / 1971，两两相距 ≥ 1e15），
 # 而最大偏移量只有 6e5，跨不过去。也就是说：偏移量撞车无所谓，【租户前缀撞车才致命】。
 # 这一点【纯属各模块各挑一个前缀的巧合，没有任何东西在保证它】——
 # 第六个夹具挑了一个已被占用的前缀就会撞上，而后果是「只在特定执行顺序下才出现」的
@@ -202,6 +203,8 @@ check "题目版本表只增不改（窄 Mapper 不继承 BaseMapper、无写注
 # 【本条上线当天就逮到了真的，不是变异】模块 10 的 QuestionFixtures 是第五个夹具，
 # rebase 到含模块 10 的 main 之后本条立刻红，逼着算了一次值域（1969 前缀，不相交）
 # 才登记进去。它要的就是这个动作。
+# 【第二次生效：模块 11 的 GrantFixtures】同样是先红、再算值域（1971 前缀，与前五家不相交）、
+# 再登记。两次都不是靠人记得看注释，是靠脚本红。
 #
 # 【本检查不做值域求交】那需要把每个夹具的节点 ID 常量也解析出来，shell 做不可靠。
 # 它做的是【钉住清单】：出现第五套派生规则（或第五个夹具文件）就红，
@@ -215,6 +218,7 @@ FIXTURE_SQL='INSERT INTO sys_user_role'
 # 已登记的派生规则：<夹具文件>|<主键偏移量>
 EXPECTED_FIXTURE_KEYS='auth/support/AuthFixtures.java|1000L
 course/catalog/support/CourseFixtures.java|500000L
+org/grant/support/GrantFixtures.java|500000L
 org/member/support/MemberFixtures.java|500000L
 org/support/OrgFixtures.java|7L
 question/support/QuestionFixtures.java|500000L'

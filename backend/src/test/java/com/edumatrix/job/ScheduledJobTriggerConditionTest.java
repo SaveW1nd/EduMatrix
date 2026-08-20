@@ -28,6 +28,7 @@ import org.springframework.test.context.ActiveProfiles;
 
 import com.edumatrix.common.config.SchedulerConfig;
 import com.edumatrix.common.config.XxlJobConfig;
+import com.edumatrix.org.grant.job.GrantConsistencyJob;
 import com.edumatrix.org.member.job.AnonymizeArchivedStudentJob;
 import com.edumatrix.support.IntegrationTest;
 
@@ -78,6 +79,7 @@ class ScheduledJobTriggerConditionTest {
                 .withBean(AnonymizeArchivedStudentJob.class, () -> mock(AnonymizeArchivedStudentJob.class))
                 .withBean(TempFileCleanupJob.class, () -> mock(TempFileCleanupJob.class))
                 .withBean(VodEventConsumeJob.class, () -> consumeJob)
+                .withBean(GrantConsistencyJob.class, () -> mock(GrantConsistencyJob.class))
                 .withUserConfiguration(SchedulerConfig.class, ScheduledJobTrigger.class, XxlJobConfig.class);
     }
 
@@ -208,7 +210,7 @@ class ScheduledJobTriggerConditionTest {
      * 但「注解上写的和常量不是一个值」会红。
      */
     @Test
-    @DisplayName("@Scheduled 真的被注册成两条 CronTask，且表达式 == 两个常量（删 @EnableScheduling 会红）")
+    @DisplayName("@Scheduled 真的被注册成三条 CronTask，且表达式 == 三个常量（删 @EnableScheduling 会红）")
     void cronTasksAreActuallyRegistered() {
         runner.run(context -> {
             List<String> expressions = context.getBeansOfType(ScheduledTaskHolder.class).values().stream()
@@ -227,7 +229,8 @@ class ScheduledJobTriggerConditionTest {
                             + "这几种的共同表现都是「启动正常、日志照打、任务不跑」")
                     .containsExactly(
                             ScheduledJobTrigger.CRON_ANONYMIZE_ARCHIVED_STUDENT,   // 0 30 2 * * *
-                            ScheduledJobTrigger.CRON_TEMP_FILE_CLEANUP);           // 0 30 3 * * *
+                            ScheduledJobTrigger.CRON_TEMP_FILE_CLEANUP,            // 0 30 3 * * *
+                            ScheduledJobTrigger.CRON_GRANT_CONSISTENCY);           // 0 30 4 * * *
         });
     }
 
@@ -245,16 +248,22 @@ class ScheduledJobTriggerConditionTest {
         AnonymizeArchivedStudentJob anonymize = mock(AnonymizeArchivedStudentJob.class);
         TempFileCleanupJob cleanup = mock(TempFileCleanupJob.class);
         VodEventConsumeJob consume = mock(VodEventConsumeJob.class);
+        GrantConsistencyJob grantConsistency = mock(GrantConsistencyJob.class);
         when(cleanup.run()).thenReturn(new TempFileCleanupJob.CleanupSummary(0, 0));
         when(consume.run()).thenReturn(0);
+        when(grantConsistency.run()).thenReturn(0);
 
-        ScheduledJobTrigger trigger = new ScheduledJobTrigger(anonymize, cleanup, consume);
+        ScheduledJobTrigger trigger =
+                new ScheduledJobTrigger(anonymize, cleanup, consume, grantConsistency);
         trigger.triggerAnonymizeArchivedStudent();
         trigger.triggerTempFileCleanup();
         trigger.triggerVodEventConsume();
+        trigger.triggerGrantConsistency();
 
         verify(anonymize).run();
         verify(anonymize, never()).execute();
+        verify(grantConsistency).run();
+        verify(grantConsistency, never()).execute();
         verify(cleanup).run();
         verify(cleanup, never()).execute();
         verify(consume).run();
@@ -271,7 +280,8 @@ class ScheduledJobTriggerConditionTest {
         when(cleanup.run()).thenReturn(new TempFileCleanupJob.CleanupSummary(0, 0));
         when(consume.run()).thenReturn(0);
 
-        ScheduledJobTrigger trigger = new ScheduledJobTrigger(anonymize, cleanup, consume);
+        ScheduledJobTrigger trigger = new ScheduledJobTrigger(anonymize, cleanup, consume,
+                mock(GrantConsistencyJob.class));
 
         org.assertj.core.api.Assertions
                 .assertThatCode(trigger::triggerAnonymizeArchivedStudent)
@@ -303,7 +313,7 @@ class ScheduledJobTriggerConditionTest {
      * {@code @Scheduled} 删掉 → 任务数变 2 → 本条红。
      */
     @Test
-    @DisplayName("全部 ScheduledTask 恰好三条：两条 cron + 一条 fixedDelay 10s（摘掉消费任务会红）")
+    @DisplayName("全部 ScheduledTask 恰好四条：三条 cron + 一条 fixedDelay 10s（摘掉任一个都会红）")
     void allScheduledTasksArePinned() {
         runner.run(context -> {
             List<Task> tasks = context.getBeansOfType(ScheduledTaskHolder.class).values().stream()
@@ -314,14 +324,15 @@ class ScheduledJobTriggerConditionTest {
             assertThat(tasks)
                     .as("注册的调度任务数与预期不符。加/删 Job 时：① 去调度中心登记 handler 名与 cron；"
                             + "② 更新 XxlJobHandlerRegistryTest 的清单；③ 更新本条与 05-工程结构.md §H")
-                    .hasSize(3);
+                    .hasSize(4);
 
             List<String> crons = tasks.stream()
                     .filter(CronTask.class::isInstance).map(CronTask.class::cast)
                     .map(CronTask::getExpression).sorted().toList();
             assertThat(crons).containsExactly(
                     ScheduledJobTrigger.CRON_ANONYMIZE_ARCHIVED_STUDENT,
-                    ScheduledJobTrigger.CRON_TEMP_FILE_CLEANUP);
+                    ScheduledJobTrigger.CRON_TEMP_FILE_CLEANUP,
+                    ScheduledJobTrigger.CRON_GRANT_CONSISTENCY);
 
             List<Duration> delays = tasks.stream()
                     .filter(FixedDelayTask.class::isInstance).map(FixedDelayTask.class::cast)
@@ -430,7 +441,8 @@ class ScheduledJobTriggerConditionTest {
             return 0;
         });
 
-        ScheduledJobTrigger trigger = new ScheduledJobTrigger(anonymize, cleanup, consume);
+        ScheduledJobTrigger trigger = new ScheduledJobTrigger(anonymize, cleanup, consume,
+                mock(GrantConsistencyJob.class));
         ThreadPoolTaskScheduler vodPool = pool("probe-vod-");
         ThreadPoolTaskScheduler dailyPool = pool("probe-daily-");
         try {

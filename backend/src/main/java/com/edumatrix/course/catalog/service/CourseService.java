@@ -153,27 +153,17 @@ public class CourseService {
     /**
      * 把 §0.2 的可见性判定翻成 wrapper 条件。
      *
+     * <p><b>实现已抽到 {@link CourseVisibilityPredicate}</b>：模块 11 的接口 37
+     *（我可授权的资源列表）要的是同一条谓词，只是 ID 清单换成了 {@code canRegrant} 口径。
+     * 照抄一遍就是两份同源实现，而两份都返回 200。
+     *
      * @return 传入的 wrapper；若筛选条件导致<b>结果必然为空</b>（只要被授权而一条授权都没有）
      *         则返回 {@code null}，调用方直接回空页 —— 拼一个 {@code id IN ()} 是语法错误
      */
     private LambdaQueryWrapper<CrsCourse> applyVisibility(LambdaQueryWrapper<CrsCourse> wrapper,
                                                           Long myNodeId, List<Long> grantedIds,
                                                           Integer grantType) {
-        boolean onlyOwn = grantType != null && grantType == 1;
-        boolean onlyGranted = grantType != null && grantType == 2;
-        if (onlyGranted) {
-            if (grantedIds.isEmpty()) {
-                return null;
-            }
-            wrapper.in(CrsCourse::getId, grantedIds).ne(CrsCourse::getOwnerNodeId, myNodeId);
-            return wrapper;
-        }
-        if (onlyOwn || grantedIds.isEmpty()) {
-            wrapper.eq(CrsCourse::getOwnerNodeId, myNodeId);
-            return wrapper;
-        }
-        wrapper.and(w -> w.eq(CrsCourse::getOwnerNodeId, myNodeId).or().in(CrsCourse::getId, grantedIds));
-        return wrapper;
+        return CourseVisibilityPredicate.apply(wrapper, myNodeId, grantedIds, grantType);
     }
 
     // =====================================================================

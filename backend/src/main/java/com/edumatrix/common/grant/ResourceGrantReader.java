@@ -1,8 +1,12 @@
 package com.edumatrix.common.grant;
 
+import java.util.Collection;
 import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Component;
@@ -30,6 +34,11 @@ import com.edumatrix.common.resource.ResourceType;
  * 「上级拥有 ≠ 我自动拥有；<b>父级授权给了我的下级也不等于授权给了我</b>」。
  * 因此本类<b>没有任何一个方法接受「子树」这个概念</b> —— 传进来的
  * {@code nodeId} 永远只与 {@code target_node_id} 做<b>精确相等</b>比较。
+ *
+ * <p><b>唯一的例外是 {@link #grantHolders}，而它不是例外</b>：它接受的是
+ * <b>祖先链</b>（向上）不是子树（向下），服务的也是另一个问题 ——
+ * 「我能不能<b>再下发</b>」（契约 §2.5 规则 9），不是「我能不能<b>用</b>」（规则 4）。
+ * 那个方法的注释里逐条写了为什么两者不冲突，<b>改它之前先读那一段</b>。
  *
  * <h2>有效期</h2>
  * <p>{@code valid_start IS NULL OR valid_start <= NOW()} 且
@@ -68,6 +77,50 @@ public class ResourceGrantReader {
             return Collections.emptyList();
         }
         return grantMapper.selectActiveResourceIds(type.code(), nodeId);
+    }
+
+    /**
+     * 「这些候选节点里，谁当前有效持有这些资源」—— 契约 §2.5 规则 9 的<b>链判定</b>用它。
+     *
+     * <h2>⚠ 唯一一个接受「一串节点」的方法，而本类的类注释说没有这种方法</h2>
+     * <p>类注释那句「<b>本类没有任何一个方法接受「子树」这个概念</b>」<b>仍然成立</b>：
+     * 这里传进来的是<b>祖先链</b>（向上），不是子树（向下），且它服务的是
+     * <b>另一个问题</b> —— 不是「我能不能用」，而是「我能不能<b>再下发</b>」。
+     *
+     * <table border="1">
+     *   <caption>两个问题，两条规则，两种回溯策略</caption>
+     *   <tr><th>问题</th><th>方法</th><th>回溯祖先链</th><th>依据</th></tr>
+     *   <tr><td>我能不能<b>用</b> X</td><td>{@link #hasGrant}</td><td><b>否</b></td>
+     *       <td>契约 §2.5 规则 4</td></tr>
+     *   <tr><td>我能不能<b>再下发</b> X</td><td>本方法（经 {@code ResourceOwnerChecker.canRegrant}）</td>
+     *       <td><b>是</b></td><td>契约 §2.5 规则 9</td></tr>
+     * </table>
+     *
+     * <p><b>这两条看起来像冲突，不是冲突。</b> 规则 4 禁的是拿祖先链去判「能不能用」——
+     * 那会让「上级有 = 下级自动有」，继承就从后门回来了。规则 9 的判据
+     * <b>本身写的就是链</b>：「{@code target_node_id} 当前祖先链不再包含该资源
+     * {@code owner_node_id} 或其有效授权链时，该行只读」。
+     * <b>不看链就判不出链断没断</b>。
+     *
+     * <p>写这么长是因为下一个人读到「回溯祖先链」四个字的第一反应会是「这违反规则 4」，
+     * 然后把它删掉 —— 而删掉之后<b>什么都不会报错</b>，只是调岗的教师又能把
+     * 原校区的课授给新校区的学员了（契约 §2.5 规则 9 逐字描述的资产穿透）。
+     *
+     * @return {@code resourceId → 持有它的节点集合}；没有任何持有者的资源<b>键不出现</b>
+     */
+    public Map<Long, Set<Long>> grantHolders(ResourceType type, Collection<Long> resourceIds,
+                                             Collection<Long> candidateNodeIds) {
+        if (type == null || resourceIds == null || resourceIds.isEmpty()
+                || candidateNodeIds == null || candidateNodeIds.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        Map<Long, Set<Long>> holders = new LinkedHashMap<>();
+        for (ResourceGrantMapper.GrantHolderRow row : grantMapper.selectGrantHolders(
+                type.code(), List.copyOf(resourceIds), List.copyOf(candidateNodeIds))) {
+            holders.computeIfAbsent(row.getResourceId(), k -> new LinkedHashSet<>())
+                    .add(row.getTargetNodeId());
+        }
+        return holders;
     }
 
     /**

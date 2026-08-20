@@ -110,6 +110,19 @@ public final class RedisKeys {
      */
     public static final String RATE_LIMIT_FILE_UPLOAD_PREFIX = "rate:file:upload:";
 
+    /**
+     * 授权健康度巡检<b>最近一轮完成时刻</b>（按租户），值是 {@code yyyy-MM-dd HH:mm:ss}。
+     *
+     * <p>03-02 §9.6 的 {@code detectedTime}。需方定案 F-83：巡检结果<b>不落快照</b>，
+     * 接口与 Job 调<b>同一个 Mapper 方法</b>实时算 —— 快照方案有一整类
+     * 「快照丢了 → 页面显示 0 条悬挂 → 与真健康无法区分」的静默故障，
+     * 而这个指标的告警线恰好是 {@code > 0}。
+     *
+     * <p>于是 Redis 里只存<b>一个时间戳</b>：它丢了，{@code detectedTime} 回 {@code null}，
+     * <b>清单本身照常是准的</b> —— 丢的是「上次什么时候跑的」，不是「有没有问题」。
+     */
+    public static final String GRANT_HEALTH_LAST_RUN_PREFIX = "grant:health:lastrun:";
+
     // =====================================================================
     // 拼接助手 —— 让「前缀 + 变量」这件事也只有一种写法
     // =====================================================================
@@ -140,6 +153,11 @@ public final class RedisKeys {
 
     public static String loginLock(String username) {
         return LOGIN_LOCK_PREFIX + username;
+    }
+
+    /** {@link #GRANT_HEALTH_LAST_RUN_PREFIX} + 租户 ID。 */
+    public static String grantHealthLastRun(Long tenantId) {
+        return GRANT_HEALTH_LAST_RUN_PREFIX + tenantId;
     }
 
     public static String rateLimitLogin(String ip) {

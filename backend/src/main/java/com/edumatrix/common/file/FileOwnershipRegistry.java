@@ -30,7 +30,7 @@ import org.springframework.stereotype.Component;
  * </table>
  * <p>「暂时下不了」优于「能下且不该下」。
  *
- * <h2>当前<b>一律 404</b> 的 bizType 清单（每落地一个模块就少一条）</h2>
+ * <h2>当前<b>一律 404</b> 的 bizType 清单（每落地一个模块就少一条；模块 11 已划掉一条）</h2>
  * <ul>
  *   <li>{@code import_excel} / {@code fail_report} / {@code credential_sheet}
  *       —— 待<b>模块 17</b> 注册（读 {@code org_import_task.create_by}）；</li>
@@ -38,10 +38,22 @@ import org.springframework.stereotype.Component;
  *       注意 03-05 §4.8 的 {@code downloadUrl} 是那个接口自己签发的、
  *       走它自己的 {@code 40003} 校验，不受本注册表影响；</li>
  *   <li>{@code answer} —— 待<b>模块 15</b> 注册（学生本人 / 作业创建人叠加子树 / org_admin）；</li>
- *   <li>{@code material_attach} —— 待<b>模块 11</b> 注册（走 {@code GrantChecker} 判
- *       「该学生节点被显式授权该课程」）。<b>这一条是 B-3 定案新加的</b>，
- *       与 03-01 §7.3 原文「其余 bizType 本租户已登录用户可下载」有意分叉，见 F-38。
- *       解除条件写在 {@code 04-实施计划.md} 模块 11 的「做完什么算做完」里。</li>
+ * </ul>
+ *
+ * <h2>已解除的（模块 11）</h2>
+ * <ul>
+ *   <li>{@code material_attach} —— <b>已由模块 11 注册</b>：
+ *       {@code course/catalog/MaterialAttachOwnershipChecker}（F-91：判定要读
+ *       {@code crs_material} / {@code crs_lesson}，而检查③ 禁止 {@code org} 域 import
+ *       {@code course} 域，故实现落在拥有那两张表的领域）。
+ *       两支判定取自 {@code crs_material.owner_node_id} 的 DDL 列注释：
+ *       <b>管理端</b>按该列做子树过滤、<b>使用端</b>走所属课时 → 课程 → 课程授权
+ *       （{@code ResourceOwnerChecker.canUse}，与 03-03 §6.3 的 {@code 20013} 判定逐条相同）。
+ *       <b>查不到归属仍然拒</b>（孤儿附件）—— 放行才是危险的那一侧。
+ *       <p><b>解除的行为判据在 {@code org/grant/MaterialAttachDownloadIT}</b>：
+ *       未授权学生 404、已授权学生拿得到文件。<b>两侧都要断言</b> ——
+ *       只断言未授权那一侧的话，把 {@code canAccess} 写死 {@code false} 也全绿，
+ *       而那等于这次解除什么都没解除。</li>
  * </ul>
  *
  * <h2>启动时把清单打出来</h2>

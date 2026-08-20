@@ -9,11 +9,13 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.annotation.Scheduled;
 
 import com.edumatrix.common.config.SchedulerConfig;
+import com.edumatrix.org.grant.job.GrantConsistencyJob;
 import com.edumatrix.org.member.job.AnonymizeArchivedStudentJob;
 
 /**
  * <b>过渡期</b>定时触发器：在调度中心（{@code xxl-job-admin}）落地之前，用 Spring 自带调度
- * 把两个 Job 触发起来。需方定案（F-41）：<b>暂时不部署调度中心</b>。
+ * 把<b>四个</b> Job 触发起来（三个日任务 + 一个高频任务）。
+ * 需方定案（F-41）：<b>暂时不部署调度中心</b>。
  *
  * <h2>两条触发路径<b>互斥</b>，靠 {@code xxl.job.enabled} 一个开关切换</h2>
  * <table border="1">
@@ -29,9 +31,9 @@ import com.edumatrix.org.member.job.AnonymizeArchivedStudentJob;
  * {@code matchIfMissing = true}）。
  *
  * <p><b>为什么必须靠"只装配一个"来保证互斥，而不是靠"记得别同时开"</b>：
- * 两条路径同时生效<b>不会报错</b> —— 任务只是每天跑两遍。而这两个 Job 恰好都是幂等的
- * （脱敏靠 {@code anonymized_at IS NULL} 收口，清理靠 {@code deleted_at} 收口），
- * 所以<b>真跑两遍也看不出来</b>。这正是本项目定义的头号故障形态，
+ * 两条路径同时生效<b>不会报错</b> —— 任务只是每天跑两遍。而这些 Job 恰好都是幂等的
+ * （脱敏靠 {@code anonymized_at IS NULL} 收口，清理靠 {@code deleted_at} 收口，
+ * <b>巡检压根不写库</b>），所以<b>真跑两遍也看不出来</b>。这正是本项目定义的头号故障形态，
  * 故互斥性由 {@code ScheduledJobTriggerConditionTest} 用 Spring 上下文<b>实测</b>钉住，
  * 不靠"读代码觉得互斥"。
  *
@@ -51,7 +53,7 @@ import com.edumatrix.org.member.job.AnonymizeArchivedStudentJob;
  * 且两个 Job 的 {@code run()} 的 Javadoc 本来就写着「供测试直接调用（不经 XXL-Job 调度器）」。
  * 走 {@code execute()} 会变成「Spring 调度触发 XXL-Job 薄壳」这种将来一定有人看不懂的路径。
  *
- * <p><b>顺带一个硬约束</b>：两个 {@code run()} 都有返回值（{@code CleanupSummary} / {@code int}），
+ * <p><b>顺带一个硬约束</b>：这些 {@code run()} 都有返回值（{@code CleanupSummary} / {@code int}），
  * 而 {@code @Scheduled} 要求 <b>void 且无参</b> —— 所以本类的包装方法不是多余的一层，
  * 是<b>必需的</b>。这也是「不要在 {@code run()} 上直接加 {@code @Scheduled}」的技术原因之一。
  *
@@ -137,24 +139,47 @@ public class ScheduledJobTrigger {
      */
     public static final String FIXED_DELAY_VOD_EVENT_CONSUME = "10000";
 
+    /**
+     * 授权健康度巡检，<b>每日 04:30</b>（模块 11）。将来在调度中心登记时<b>照抄本值</b>。
+     *
+     * <h2>为什么是 04:30（F-90）</h2>
+     * <p>03-02 §9.6 只写「巡检每日低峰按租户分批执行」，<b>没有给时刻</b>；
+     * 该节响应示例里的 {@code detectedTime} 是 {@code 03:10:00}，
+     * 但那是<b>示例值不是规范</b>。取 04:30 是延续既有纪律：
+     * {@code DailySettleJob} 00:30 → {@code anonymizeArchivedStudent} 02:30 →
+     * {@code tempFileCleanup} 03:30 → <b>本任务 04:30</b>，各错开一小时。
+     *
+     * <p>三个日任务共用 {@code taskScheduler}（<b>1 个线程，串行</b>），
+     * 一个跑久了会推迟下一个 —— 错开一小时是为此留的余量。
+     * <b>不为它新增第三个调度器 Bean</b>：那会让
+     * {@code SchedulerConfig} 里「默认池必须显式存在」的那条隔离断言重新变脆
+     *（Boot 的 {@code TaskSchedulerConfiguration} 挂 {@code @ConditionalOnMissingBean}，
+     * 多一个 {@code TaskScheduler} 就会让默认的整个退避）。巡检是<b>日</b>任务，
+     * 不是模块 09 那种 10 秒一轮的高频任务，进默认池是合适的。
+     */
+    public static final String CRON_GRANT_CONSISTENCY = "0 30 4 * * *";
+
     private final AnonymizeArchivedStudentJob anonymizeJob;
     private final TempFileCleanupJob tempFileCleanupJob;
     private final VodEventConsumeJob vodEventConsumeJob;
+    private final GrantConsistencyJob grantConsistencyJob;
 
     public ScheduledJobTrigger(AnonymizeArchivedStudentJob anonymizeJob,
                                TempFileCleanupJob tempFileCleanupJob,
-                               VodEventConsumeJob vodEventConsumeJob) {
+                               VodEventConsumeJob vodEventConsumeJob,
+                               GrantConsistencyJob grantConsistencyJob) {
         this.anonymizeJob = anonymizeJob;
         this.tempFileCleanupJob = tempFileCleanupJob;
         this.vodEventConsumeJob = vodEventConsumeJob;
+        this.grantConsistencyJob = grantConsistencyJob;
         // 「谁在触发」必须一眼看见，而不是靠读配置推断 —— 与 OssClient 那行
         // 「对象存储 = …」同一个用途。XXL-Job 那条路径生效时，
         // XxlJobConfig 会打它自己的那一行，两条互斥所以日志里只会出现一条
         log.info("定时触发 = Spring 调度（过渡期，xxl.job.enabled=false；调度中心未部署，见 F-41）"
                         + "｜日任务[{}]：anonymizeArchivedStudent[{}]、tempFileCleanup[{}]"
-                        + "｜高频任务[{}]：vodEventConsume[fixedDelay {}ms]",
+                        + "、grantConsistency[{}]｜高频任务[{}]：vodEventConsume[fixedDelay {}ms]",
                 SchedulerConfig.DEFAULT_SCHEDULER,
-                CRON_ANONYMIZE_ARCHIVED_STUDENT, CRON_TEMP_FILE_CLEANUP,
+                CRON_ANONYMIZE_ARCHIVED_STUDENT, CRON_TEMP_FILE_CLEANUP, CRON_GRANT_CONSISTENCY,
                 SchedulerConfig.VOD_EVENT_SCHEDULER, FIXED_DELAY_VOD_EVENT_CONSUME);
     }
 
@@ -172,6 +197,20 @@ public class ScheduledJobTrigger {
     @Scheduled(cron = CRON_TEMP_FILE_CLEANUP)
     public void triggerTempFileCleanup() {
         runQuietly("tempFileCleanup", () -> tempFileCleanupJob.run());
+    }
+
+    /**
+     * 授权健康度巡检（PRD FR-7、契约 §2.5 规则 6）。
+     *
+     * <p><b>本方法与 {@code GrantConsistencyJob#execute()} 上的
+     * {@code @XxlJob("grantConsistency")} 必须同时存在</b> ——
+     * 两条触发路径互斥、任何时刻只生效一条，<b>只登记一边的后果是：
+     * 切换到调度中心的那一刻，这个任务静默消失</b>，
+     * 而「悬挂授权没人巡检」不会有任何东西报错。
+     */
+    @Scheduled(cron = CRON_GRANT_CONSISTENCY)
+    public void triggerGrantConsistency() {
+        runQuietly("grantConsistency", () -> grantConsistencyJob.run());
     }
 
     /**

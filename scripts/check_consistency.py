@@ -952,6 +952,97 @@ def check_c19_f_registry():
                f'（F-8 是已登记的历史缺口，F-49~F-69 是并行分段保留区，均不计入）')
 
 
+# ============ C20 §A 核对行的逐模块数 = §B 该模块「涉及接口」表的行数
+
+def check_c20_module_interface_counts():
+    """C20 `04-实施计划.md` §A 核对行里每个模块的数字，必须 == §B 该模块表的行数
+
+    【它补的是 §A 那一行自己的盲区，而那个盲区已经漏掉过一个接口】
+    §A 的核对行自称「验证没有接口无人认领、也没有模块认领了不存在的接口」，
+    但它只校验【求和】：36 + 52 + 34 + 31 + 8 = 161 恒成立，
+    与每个模块的数字对不对【无关】。
+
+    模块 11 落地时发现：原文写 `07:21 + 11:6`，而 §B 模块 07 的表只有 20 行、
+    模块 11 的表只有 6 行 —— 03-02 §6.12（接口 52 归属变更影响面预检）逐字写着
+    「签名在模块 07 敲定，实现落在模块 11」，于是 52 号【被计数认领、却不在任何
+    模块的实现清单里】，全库无人实现它。而这件事对所有工具都是隐形的：
+    C5 只比对目录/正文/README 三处计数，19 条检查一条都不看 §A 的逐模块拆分。
+
+    【判定】对 §A 里形如 `06:6` 的每一项，找到 §B 中 `### 06 …` 那一节的
+    「涉及接口（分册，N 个）」标题与其下的表格行数，三者必须一致：
+      · 标题里的 N == 表格行数（写了 N 却少列一行）
+      · §A 的数字 == N（§A 与 §B 各说各的）
+
+    【空转守卫】一个模块都没扫到就报违规。§A 那一行或 §B 的标题格式一变，
+    本条会静默变成永远为绿 —— 而它守的东西恰恰是「没人注意到的不一致」。
+
+    【它会不会红 —— 已做变异验证，下面是实测输出】
+      把 §A 的 `11:7` 改成 `11:6`：
+        ❌ 1 错误 —— "§A 核对行说模块 11 有 6 个接口，而 §B 该模块表列了 7 行"
+      把 §B 模块 11 表里删掉一行（标题仍写 7 个）：
+        ❌ 2 错误 —— §B 标题与表行数不符 + §A 与 §B 不符
+      恢复后：✅ 0 错 0 警。
+    """
+    path = os.path.join(DOCS, '04-实施计划.md')
+    text = read(path)
+
+    # §A 核对行：抓 `06:6`、`07:20` 这类
+    m = re.search(r'^\*\*接口分配核对\*\*：(.+?)。', text, re.M)
+    if not m:
+        report('ERROR', 'C20', path, '未定位到 §A「接口分配核对」那一行，本项失效')
+        return
+    declared = {mod: int(n) for mod, n in re.findall(r'(\d{2}):(\d+)', m.group(1))}
+    if not declared:
+        report('ERROR', 'C20', path, '§A 核对行里一个 `模块:数量` 都没解析出来，本项失效')
+        return
+
+    # §B 每个模块的「涉及接口（…，N 个）」标题 + 其下表格行数
+    actual = {}
+    for section in re.finditer(r'^### (\d{2}) .*?(?=^### \d{2} |\Z)', text, re.S | re.M):
+        mod = section.group(1)
+        body = section.group(0)
+        head = re.search(r'\*\*涉及接口（[^）]*?，(\d+) 个）\*\*', body)
+        if not head:
+            continue
+        # 表体行数：各模块的引用写法不一样（有的是「03-02 接口 37 …」，
+        # 有的是「§7.1 | 上传文件 | …」），所以【不匹配引用文本】，
+        # 只数标题之后第一张表的表体行 —— 跳过表头与 |---| 分隔行，遇到非表格行即止。
+        # 绑格式的判据在这里会漏数成 0，而 0 恰好长得像「这个模块没有接口」
+        rows = 0
+        seen_header = False
+        for line in body[head.end():].split('\n'):
+            stripped = line.strip()
+            if not stripped.startswith('|'):
+                if seen_header:
+                    break        # 表结束
+                continue         # 标题与表之间的空行
+            if set(stripped) <= set('|- :'):
+                seen_header = True   # |---|---| 分隔行
+                continue
+            if not seen_header:
+                continue         # 表头行
+            rows += 1
+        actual.setdefault(mod, []).append((int(head.group(1)), rows))
+
+    if not actual:
+        report('ERROR', 'C20', path,
+               '§B 里一个「涉及接口（…，N 个）」标题都没扫到 —— 本检查正在空转')
+        return
+
+    for mod, entries in sorted(actual.items()):
+        head_total = sum(head for head, _ in entries)
+        row_total = sum(rows for _, rows in entries)
+        if head_total != row_total:
+            report('ERROR', 'C20', path,
+                   f'§B 模块 {mod} 的标题写着 {head_total} 个接口，而表格只有 {row_total} 行')
+        if mod in declared and declared[mod] != row_total:
+            report('ERROR', 'C20', path,
+                   f'§A 核对行说模块 {mod} 有 {declared[mod]} 个接口，'
+                   f'而 §B 该模块表列了 {row_total} 行 —— '
+                   f'差额那几个接口【被计数认领、却不在任何实现清单里】，'
+                   f'而 §A 那一行自称就是防这件事的')
+
+
 # ============ C15 心跳请求体签名三处一致（契约 §6.4 / PRD F2-7 / 03-03）
 
 def check_c15_heartbeat_signature():
@@ -1309,6 +1400,7 @@ def main():
         ('C17', check_c17_json_examples),
         ('C18', check_c18_endpoint_paths),
         ('C19', check_c19_f_registry),
+        ('C20', check_c20_module_interface_counts),
     ]
     for code, fn in checks:
         if only and code != only:
@@ -1335,6 +1427,7 @@ def main():
         'C17': 'JSON 示例内部自洽（nodeType/userType/childCount）',
         'C18': '端点路径存在性（正文引用 ↔ 接口目录）',
         'C19': 'F 清单编号唯一 + 状态唯一',
+        'C20': '§A 逐模块接口数 = §B 该模块表行数',
     }
     errors = [r for r in results if r[0] == 'ERROR']
     warns = [r for r in results if r[0] == 'WARN']
