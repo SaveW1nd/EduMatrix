@@ -100,6 +100,59 @@ public final class MetricsRegistry {
     public static final String GRANT_CROSS_SCOPE_COUNT = "grant_cross_scope_count";
 
     /**
+     * Gauge，<b>不带任何标签</b>，值为巡检 {@code run()} 最近一次<b>跑完</b>的 epoch 秒。模块 11。
+     *
+     * <h2>它回答的是另一个问题：<b>巡检本身还活着吗</b></h2>
+     * <p>{@link #GRANT_DANGLING_COUNT} 与 {@link #GRANT_CROSS_SCOPE_COUNT} 是
+     * <b>per-tenant</b> 的，且只在<b>该租户被首次扫到之后</b>才注册。于是有两种情况
+     * 它们一条序列都没有，而<b>那与「一切健康」在告警上长得一模一样</b>：
+     * <ul>
+     *   <li>调度器压根没触发（{@code @Scheduled} 被删、profile 门控误伤、切到调度中心却没登记）；
+     *   <li>系统里<b>一个租户都还没有</b>（生产上线初期就是这样）。
+     * </ul>
+     *
+     * <p>本指标<b>不带 tenant 标签、在构造器里注册</b>，因而<b>永远存在</b>；
+     * 它与 per-tenant 那两个<b>不是二选一，各自能发现对方发现不了的事</b>：
+     * <table border="1">
+     *   <caption>三种故障，两种信号</caption>
+     *   <tr><th>故障</th><th>job 级</th><th>per-tenant</th></tr>
+     *   <tr><td>调度器没触发</td><td><b>发现得了</b></td><td>要先有租户</td></tr>
+     *   <tr><td>0 租户</td><td><b>发现得了</b></td><td>发现不了</td></tr>
+     *   <tr><td>单个租户连续失败</td><td>发现不了（job 照常完成）</td><td><b>发现得了</b></td></tr>
+     * </table>
+     *
+     * <h2>⚠ 初值必须是 0，<b>绝不能照抄模块 09</b></h2>
+     * <p>{@code VodEventConsumeService} 把它那个 lag 指标初始化为
+     * {@code System.currentTimeMillis()}，注释写着「否则重启后立刻报 lag=∞」——
+     * <b>那对一个 10 秒一轮的消费者是对的</b>：重启后几秒内就会有真实值，
+     * 先给个当下时刻只是避免一次无意义的瞬时告警。
+     *
+     * <p><b>日任务照抄就错了</b>：初值取当下会让「任务从不触发」在每次重启后
+     * <b>被掩盖整整一天</b>；而<b>当部署比一天更频繁时它被永久掩盖</b> ——
+     * 每次发版都把计时器重置，告警<b>永远差最后一步</b>，而看起来一切正常。
+     *
+     * <p>初值 {@code 0} 的含义是<b>「从未跑过」</b>：{@code time() - 0} 是一个巨大的数，
+     * 告警<b>立刻触发</b>。刚部署完看到它报警是<b>期望行为</b>，不是误报 ——
+     * 那时巡检确实还没跑过。
+     *
+     * <h2>告警规则（两条，各管一件事）</h2>
+     * <pre>
+     * time() - grant_consistency_last_run_epoch_seconds &gt; 93600   # 26h：巡检没跑
+     * grant_dangling_count &gt; 0                                    # 有真悬挂
+     * </pre>
+     * <p>26h = 24h 周期 + 2h 余量。<b>有了第一条之后，第二条才允许「缺席」</b> ——
+     * 缺席由第一条负责喊，第二条只管有没有真悬挂。
+     *
+     * <h2>为什么不用那个 Redis 键代替</h2>
+     * <p>{@code RedisKeys.grantHealthLastRun(tenantId)} 写在 {@code scanTenant()} <b>里面</b>、
+     * 键还带租户后缀 —— <b>0 租户就一个键都不写</b>，与它要替换的 Gauge 是<b>同一个盲点</b>。
+     * 那个键回答的是「<b>这个租户</b>上次被扫是什么时候」（也是 {@code detectedTime} 的来源），
+     * 是对的问题，只是不在这个位置上。两个都留，各答各的。
+     */
+    public static final String GRANT_CONSISTENCY_LAST_RUN_EPOCH_SECONDS =
+            "grant_consistency_last_run_epoch_seconds";
+
+    /**
      * Histogram，告警线 P99 &gt; 2000。模块 11。
      * <p>{@code org_resource_grant} 单节点持有的授权行数。
      * <b>盯它而不是盯表总量</b> —— 点查的扫描行数只由单节点持有量决定，
