@@ -34,6 +34,8 @@
         <sa-token.version>1.44.0</sa-token.version>
         <xxl-job.version>2.4.2</xxl-job.version>
         <aliyun-oss.version>3.17.4</aliyun-oss.version>
+        <aliyun-vod.version>2.16.34</aliyun-vod.version>
+        <aliyun-mns.version>1.3.1</aliyun-mns.version>
         <poi.version>5.2.5</poi.version>
         <owasp-html-sanitizer.version>20260313.1</owasp-html-sanitizer.version>
         <!-- flyway / mysql-connector-j / micrometer 的版本由 spring-boot-starter-parent 统一管理，此处不写死 -->
@@ -178,6 +180,25 @@
           这正是「以为存在、实际从未生效」那一族，故写死在这里并在
           OssClientJaxbPresenceTest 里断言三个类可加载。
         -->
+        <!--
+          点播（模块 09 / 12）与轻量消息队列（模块 09）。
+          【为什么是这两个坐标】03-03 §7.2 定案：转码事件走 XXL-Job 拉取轻量消息队列（原 MNS），
+          不是 HTTP 回调——去掉回调端点后，全部免登录接口里再没有一个能写库（契约 §2.8）。
+          两者都在 Maven Central 上（拉取前实测确认）。
+          【消费方只有 integration/aliyun/**】05-工程结构.md §G2：
+          任何业务包里出现 @Value("${ALIYUN_...}") 都是越界。
+        -->
+        <dependency>
+            <groupId>com.aliyun</groupId>
+            <artifactId>aliyun-java-sdk-vod</artifactId>
+            <version>${aliyun-vod.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.aliyun.mns</groupId>
+            <artifactId>aliyun-sdk-mns</artifactId>
+            <version>${aliyun-mns.version}</version>
+        </dependency>
+
         <dependency>
             <groupId>com.aliyun.oss</groupId>
             <artifactId>aliyun-sdk-oss</artifactId>

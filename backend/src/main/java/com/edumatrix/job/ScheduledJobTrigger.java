@@ -8,6 +8,7 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.annotation.Scheduled;
 
+import com.edumatrix.common.config.SchedulerConfig;
 import com.edumatrix.org.member.job.AnonymizeArchivedStudentJob;
 
 /**
@@ -96,8 +97,13 @@ public class ScheduledJobTrigger {
      * <p>{@code AnonymizeArchivedStudentJob} 的 Javadoc 与 05-工程结构.md §H 只写了
      * 「每日一次」，<b>没有给具体时刻</b>，故本值由模块 05 定，依据是与另两个日任务错开：
      * {@code DailySettleJob} 00:30（§H）→ 本任务 02:30 → {@code TempFileCleanupJob} 03:30。
-     * 各隔一小时，一个跑久了也不会追上下一个（Spring 默认调度线程池只有 1 个线程，
-     * 串行执行 —— 这在两个日任务的量级上是合适的，但别再往里塞第三个高频任务）。
+     * 各隔一小时，一个跑久了也不会追上下一个（两个日任务共用的
+     * {@code taskScheduler} 只有 1 个线程，串行执行 —— 这在两个日任务的量级上是合适的，
+     * 但别再往里塞第三个高频任务）。
+     *
+     * <p><b>模块 09 的消费任务正是那个「第三个高频任务」，处置是给它一个独立的调度器
+     * 而不是塞进这个池</b>：见 {@link #FIXED_DELAY_VOD_EVENT_CONSUME} 与
+     * {@code common/config/SchedulerConfig}。
      *
      * <p>承载的是契约 §7.2 第 3 条 / 《个保法》第 31 条的 <b>30 日不可逆脱敏</b>。
      */
@@ -114,19 +120,42 @@ public class ScheduledJobTrigger {
      */
     public static final String CRON_TEMP_FILE_CLEANUP = "0 30 3 * * *";
 
+    /**
+     * 转码事件消费的触发间隔，<b>10 秒</b>（模块 09；03-03 §7.2、04 §B 模块 09 对外产出）。
+     *
+     * <h2>为什么是 {@code fixedDelay} 而不是 cron</h2>
+     * <p>{@code fixedDelay} 是<b>上一轮跑完之后</b>再等 10s：天然背压，云端慢的时候自动降频，
+     * 且永远不会有两轮重叠。cron 是固定节拍，上一轮没跑完时下一轮照样到点排队。
+     *
+     * <p><b>代价必须写下来</b>：切换到调度中心时登记的是 cron {@code 0/10 * * * * ?}，
+     * 与本值<b>语义不同</b> —— 那不是「照抄」而是「换语义」。已登记 <b>F-68</b>，
+     * {@code VodEventConsumeJob} 的类注释里有同一张表。
+     *
+     * <h2>它跑在 {@code vodEventTaskScheduler} 上，不在上面那个池里</h2>
+     * <p>{@code @Scheduled(scheduler = ...)} 显式绑定（Spring Framework 6.1 起支持）。
+     * 理由与「一个卡死时另外两个还跑不跑」的证明见 {@code common/config/SchedulerConfig}。
+     */
+    public static final String FIXED_DELAY_VOD_EVENT_CONSUME = "10000";
+
     private final AnonymizeArchivedStudentJob anonymizeJob;
     private final TempFileCleanupJob tempFileCleanupJob;
+    private final VodEventConsumeJob vodEventConsumeJob;
 
     public ScheduledJobTrigger(AnonymizeArchivedStudentJob anonymizeJob,
-                               TempFileCleanupJob tempFileCleanupJob) {
+                               TempFileCleanupJob tempFileCleanupJob,
+                               VodEventConsumeJob vodEventConsumeJob) {
         this.anonymizeJob = anonymizeJob;
         this.tempFileCleanupJob = tempFileCleanupJob;
+        this.vodEventConsumeJob = vodEventConsumeJob;
         // 「谁在触发」必须一眼看见，而不是靠读配置推断 —— 与 OssClient 那行
         // 「对象存储 = …」同一个用途。XXL-Job 那条路径生效时，
         // XxlJobConfig 会打它自己的那一行，两条互斥所以日志里只会出现一条
         log.info("定时触发 = Spring 调度（过渡期，xxl.job.enabled=false；调度中心未部署，见 F-41）"
-                        + "｜任务：anonymizeArchivedStudent[{}]、tempFileCleanup[{}]",
-                CRON_ANONYMIZE_ARCHIVED_STUDENT, CRON_TEMP_FILE_CLEANUP);
+                        + "｜日任务[{}]：anonymizeArchivedStudent[{}]、tempFileCleanup[{}]"
+                        + "｜高频任务[{}]：vodEventConsume[fixedDelay {}ms]",
+                SchedulerConfig.DEFAULT_SCHEDULER,
+                CRON_ANONYMIZE_ARCHIVED_STUDENT, CRON_TEMP_FILE_CLEANUP,
+                SchedulerConfig.VOD_EVENT_SCHEDULER, FIXED_DELAY_VOD_EVENT_CONSUME);
     }
 
     /**
@@ -143,6 +172,16 @@ public class ScheduledJobTrigger {
     @Scheduled(cron = CRON_TEMP_FILE_CLEANUP)
     public void triggerTempFileCleanup() {
         runQuietly("tempFileCleanup", () -> tempFileCleanupJob.run());
+    }
+
+    /**
+     * 转码事件消费（03-03 §7.2）。<b>跑在独立的 {@code vodEventTaskScheduler} 上</b> ——
+     * 与上面两个合规日任务互不阻塞，理由见 {@code common/config/SchedulerConfig}。
+     */
+    @Scheduled(fixedDelayString = FIXED_DELAY_VOD_EVENT_CONSUME,
+            scheduler = SchedulerConfig.VOD_EVENT_SCHEDULER)
+    public void triggerVodEventConsume() {
+        runQuietly("vodEventConsume", () -> vodEventConsumeJob.run());
     }
 
     /**

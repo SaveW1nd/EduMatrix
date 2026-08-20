@@ -42,9 +42,10 @@ class QuestionSpiWiringIT extends QuestionIntegrationTestBase {
     }
 
     @Test
-    @DisplayName("ResourceOwnerProvider 共两个：COURSE(模块 08) + QUESTION(模块 10)，VIDEO 待模块 09")
+    @DisplayName("ResourceOwnerProvider 共三个：COURSE(模块 08) + QUESTION(模块 10) + VIDEO(模块 09)")
     void ownerProvidersAreCourseAndQuestion() {
-        assertEquals(2, context.getBeansOfType(ResourceOwnerProvider.class).size(),
-                "模块 09 补 VIDEO 时这里应变成 3 —— 本条与 CourseSpiWiringIT 那条互为镜像");
+        assertEquals(3, context.getBeansOfType(ResourceOwnerProvider.class).size(),
+                "契约 §2.5 穷举三类受管资源，现已全部注册 —— 本条与 CourseSpiWiringIT 那条互为镜像，"
+                        + "两处要一起改（模块 09 落地时正是靠本条才发现镜像有第二份）");
     }
 }

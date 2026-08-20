@@ -49,7 +49,11 @@ class XxlJobHandlerRegistryTest {
      */
     private static final Set<String> EXPECTED_HANDLERS = new TreeSet<>(Set.of(
             "anonymizeArchivedStudent",   // 模块 07  每日一次   删除请求脱敏（PRD F7-3）
-            "tempFileCleanup"));          // 模块 05  每日 03:30 敏感文件 7 天保留期清理（§7.4）
+            "tempFileCleanup",            // 模块 05  每日 03:30 敏感文件 7 天保留期清理（§7.4）
+            // 模块 09  转码事件消费（03-03 §7.2）。调度中心登记 cron 0/10 * * * * ?
+            // ⚠ 与过渡期的 fixedDelay 10s【语义不同】（固定节拍 vs 完成后再等），
+            //   切换时不是「照抄」而是「换语义」——见 VodEventConsumeJob 类注释与 F-68
+            "vodEventConsume"));
 
     @Test
     @DisplayName("XxlJobConfig 里确实有一个产出 XxlJobSpringExecutor 的 @Bean 方法")

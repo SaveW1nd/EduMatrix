@@ -29,6 +29,25 @@ public final class MetricsRegistry {
     /** {@link #API_PERMISSION_DENIED_TOTAL} 的标签：403 / 404 / 10107。 */
     public static final String TAG_CODE = "code";
 
+    /**
+     * {@link #VOD_CALLBACK_ORPHAN_TOTAL} 的标签：孤儿的<b>成因</b>（模块 09）。
+     *
+     * <p>三种成因性质完全不同，混成一个数字就没法处置：
+     * <ul>
+     *   <li>{@code parse_failed} —— <b>我们的代码错</b>：报文形状与解析器对不上。
+     *       这是本模块最可能的生产事故（假实现全绿而生产上每条消息都解析失败）；</li>
+     *   <li>{@code video_not_found} —— <b>数据问题</b>：按 {@code (provider, vod_file_id)}
+     *       反查不到媒资行；</li>
+     *   <li>{@code unexpected_status} —— <b>状态机被别的路径改过</b>：CAS 前置集之外。</li>
+     * </ul>
+     *
+     * <p><b>用标签而不是新造指标名</b>：契约 §7.1 的 11 个名字是穷举、不得另造，
+     * 而 {@link #HEARTBEAT_REJECT_TOTAL}{@code {rule}} 与
+     * {@link #API_PERMISSION_DENIED_TOTAL}{@code {code}} 是既有的带标签先例。
+     * 告警线「&gt; 0」对总量仍然成立。
+     */
+    public static final String TAG_REASON = "reason";
+
     // ======================================================================
     // 契约 §7.1 十项（11 个名字）
     // ======================================================================

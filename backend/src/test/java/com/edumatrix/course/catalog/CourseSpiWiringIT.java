@@ -12,8 +12,9 @@ import com.edumatrix.common.course.CourseCounterRefresher;
 import com.edumatrix.common.course.LessonVisibilityChecker;
 import com.edumatrix.common.file.FileMetaReader;
 import com.edumatrix.common.file.InlineFileUrlProvider;
-import com.edumatrix.common.media.TempVideoRefReader;
 import com.edumatrix.common.media.VideoRefReader;
+import com.edumatrix.common.course.LessonVideoRefCounter;
+import com.edumatrix.common.grant.ResourceGrantReader;
 import com.edumatrix.common.resource.ResourceOwnerChecker;
 import com.edumatrix.common.resource.ResourceOwnerProvider;
 import com.edumatrix.common.resource.ResourceType;
@@ -50,6 +51,10 @@ class CourseSpiWiringIT extends CourseIntegrationTestBase {
     @Autowired
     private ResourceOwnerChecker resourceOwnerChecker;
 
+    /** 手工构造窄注册表时要传它 —— 本条只验分发，不验授权，传真的即可。 */
+    @Autowired
+    private ResourceGrantReader grantReader;
+
     @Test
     @DisplayName("VideoRefReader 恰好一个实现 —— 模块 09 到期删 TempVideoRefReader 的机器守卫")
     void videoRefReaderHasExactlyOneImplementation() {
@@ -58,8 +63,9 @@ class CourseSpiWiringIT extends CourseIntegrationTestBase {
                 "VideoRefReader 的实现不是一个：" + beans.keySet()
                         + "。模块 09 落地时必须【删掉】common/media/TempVideoRefReader 与 "
                         + "common/media/mapper/VideoRefMapper，而不是再加一个");
-        assertTrue(beans.values().iterator().next() instanceof TempVideoRefReader,
-                "模块 09 已接管？那请把本条改成断言 VodVideoRefProvider，并删掉临时构件");
+        assertEquals("VodVideoRefProvider", beans.values().iterator().next().getClass().getSimpleName(),
+                "VideoRefReader 的实现不是模块 09 的正式实现 —— 临时构件 TempVideoRefReader "
+                        + "与 common/media/mapper/VideoRefMapper 已随模块 09 删除，不该再出现");
     }
 
     @Test
@@ -83,21 +89,56 @@ class CourseSpiWiringIT extends CourseIntegrationTestBase {
     // 模块 09 后合，它要改的正是下面这两行。改方法名会让那次 rebase 的冲突从
     // 「一处两行」变成「整个方法块」，而这条断言的真实含义已由 @DisplayName 承载。
     @Test
-    @DisplayName("ResourceOwnerProvider 已注册 COURSE + QUESTION —— 模块 09 补 VIDEO 时本条会提醒改")
+    @DisplayName("ResourceOwnerProvider 三类受管资源全部注册（COURSE + QUESTION + VIDEO）")
     void onlyCourseOwnerProviderRegistered() {
-        assertEquals(2, context.getBeansOfType(ResourceOwnerProvider.class).size());
-        assertEquals(java.util.Set.of(ResourceType.COURSE, ResourceType.QUESTION),
+        assertEquals(3, context.getBeansOfType(ResourceOwnerProvider.class).size());
+        assertEquals(java.util.Set.of(ResourceType.COURSE, ResourceType.QUESTION, ResourceType.VIDEO),
                 resourceOwnerChecker.registeredTypes(),
-                "已注册的资源类型变了：模块 09 补 VIDEO(3) 时请把这里改成 3 与 "
-                        + "Set.of(COURSE, QUESTION, VIDEO)。模块 10 已补 QUESTION(2)");
+                "已注册的资源类型变了。契约 §2.5 穷举三类受管资源：课程(1) 题目(2) 视频(3)，"
+                        + "现已全部补齐（模块 08 / 10 / 09）。将来新增第四类时改这里");
     }
 
+    /**
+     * 未注册的类型必须<b>响亮失败</b>，不静默返回 {@code false}。
+     *
+     * <h2>⚠ 本条的探针换了，因为原来那个已经不存在了（F-66）</h2>
+     * <p>原写法是拿容器里的 {@code resourceOwnerChecker} 去问 {@code VIDEO} ——
+     * 那时它还没被注册。而 {@link ResourceType} <b>穷举只有三个值</b>
+     * （契约 §2.5：课程 / 题目 / 视频），模块 08 / 10 / 09 补齐之后
+     * <b>再也没有"未注册的类型"可探</b>，这条断言会随最后一个提供方落地而自然失效。
+     *
+     * <p>而它守的东西没有失效：「未注册即响亮失败」这条纪律管的是<b>将来新增</b>的资源类型，
+     * 静默返回 {@code false} 会让授权引擎判定「你不是 owner」而接口 200、字段齐全、结果错
+     * （本项目 1 号失败模式）。守卫不能随被守对象补齐而消失 ——
+     * 那正是「以为存在、实际从未生效的保障」的又一条产生路径。
+     *
+     * <p>故改为<b>手工构造一个只装了 {@code COURSE} 的注册表</b>再问 {@code VIDEO}：
+     * 不依赖"还有哪个类型没注册"，永远可测；断言的仍是同一件事。
+     */
     @Test
-    @DisplayName("未注册的类型在真实上下文里同样响亮失败，不静默返回 false")
+    @DisplayName("未注册的类型响亮失败，不静默返回 false（探针不再依赖『还有类型没注册』）")
     void unregisteredTypeStillFailsLoudly() {
+        ResourceOwnerProvider courseOnly = context.getBeansOfType(ResourceOwnerProvider.class)
+                .values().stream()
+                .filter(provider -> provider.resourceType() == ResourceType.COURSE)
+                .findFirst().orElseThrow();
+        ResourceOwnerChecker narrow =
+                new ResourceOwnerChecker(java.util.List.of(courseOnly), grantReader);
+
         IllegalStateException error = org.junit.jupiter.api.Assertions.assertThrows(
                 IllegalStateException.class,
-                () -> resourceOwnerChecker.isOwner(ResourceType.VIDEO, 1L, 1L));
-        assertTrue(error.getMessage().contains("模块 09"), error.getMessage());
+                () -> narrow.isOwner(ResourceType.VIDEO, 1L, 1L));
+        assertTrue(error.getMessage().contains("尚未注册"), error.getMessage());
+        assertTrue(error.getMessage().contains("响亮失败"), error.getMessage());
+    }
+
+    /**
+     * 模块 09 新增的跨领域 SPI（F-62）：{@code vod} 不能 import {@code course}（检查③），
+     * 而媒资列表的 {@code refLessonCount} 与删除拦截的 {@code 20016} 都要读 {@code crs_lesson}。
+     */
+    @Test
+    @DisplayName("LessonVideoRefCounter 恰好一个实现（模块 09 消费，实现在 course/catalog）")
+    void lessonVideoRefCounterHasExactlyOneImplementation() {
+        assertEquals(1, context.getBeansOfType(LessonVideoRefCounter.class).size());
     }
 }

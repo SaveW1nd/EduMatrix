@@ -32,11 +32,11 @@ import com.edumatrix.common.grant.ResourceGrantReader;
  * 模块 11 的 {@code GrantChecker.owns} 收敛到 {@link #canUse}（已改 04 §B 模块 11 对外产出）。
  *
  * <h2>未注册的类型抛异常，不返回 false</h2>
- * <p>模块 08 只注册 {@link ResourceType#COURSE}；{@code VIDEO} 由模块 09、
- * {@code QUESTION} 由模块 10 各补一个 {@link ResourceOwnerProvider}。
- * 在那之前问它们的归属<b>必须响亮失败</b> —— 返回 {@code false} 的表现是
- * 「授权引擎静默判定你不是 owner」，接口 200、字段齐全、结果错，
- * 正是本项目 1 号失败模式。
+ * <p>三类受管资源（契约 §2.5 穷举）现已全部注册：{@link ResourceType#COURSE} 由模块 08、
+ * {@link ResourceType#QUESTION} 由模块 10、{@link ResourceType#VIDEO} 由模块 09。
+ * <b>但「未注册即响亮失败」这条纪律仍然生效</b>，因为它管的是<b>将来新增</b>的资源类型 ——
+ * 返回 {@code false} 的表现是「授权引擎静默判定你不是 owner」，
+ * 接口 200、字段齐全、结果错，正是本项目 1 号失败模式。
  */
 @Component
 public class ResourceOwnerChecker {
@@ -91,9 +91,12 @@ public class ResourceOwnerChecker {
     private ResourceOwnerProvider provider(ResourceType type) {
         ResourceOwnerProvider provider = providers.get(type);
         if (provider == null) {
-            throw new IllegalStateException("resourceType=" + type + " 尚未注册 ResourceOwnerProvider —— "
-                    + "视频由模块 09、题目由模块 10 各补一个（见 04-实施计划.md 对应模块的"
-                    + "「做完什么算做完」）。此处响亮失败，而不是返回 false 制造一次静默的越权判定");
+            // 三类受管资源（COURSE / QUESTION / VIDEO，契约 §2.5 穷举）现已全部注册，
+            // 正常路径走不到这里。留着它是因为「未注册即响亮失败」这条纪律对
+            // 【将来新增的资源类型】同样成立 —— 而那时返回 false 仍然是最坏的选项
+            throw new IllegalStateException("resourceType=" + type + " 尚未注册 ResourceOwnerProvider。"
+                    + "每类受管资源必须由其所属领域注册一个提供方；此处【响亮失败】，"
+                    + "而不是返回 false 制造一次静默的越权判定（接口 200、字段齐全、结果错）");
         }
         return provider;
     }

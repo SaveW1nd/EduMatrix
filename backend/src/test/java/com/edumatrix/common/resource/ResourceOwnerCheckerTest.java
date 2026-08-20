@@ -80,8 +80,15 @@ class ResourceOwnerCheckerTest {
                 List.of(provider(ResourceType.COURSE, Map.of())), grantReader(false));
         IllegalStateException error = assertThrows(IllegalStateException.class,
                 () -> checker.isOwner(ResourceType.VIDEO, 1L, 100L));
-        assertTrue(error.getMessage().contains("模块 09"),
+        // ⚠ 本断言原先钉的是 contains("模块 09") —— 那时 VIDEO 还没注册。
+        // 模块 09 补齐 VIDEO 之后那句话就过期了（三类受管资源现已全部注册），
+        // 而【钉一个会过期的具体模块号】正是这条断言自己要防的形态：
+        // 它要保证的是「错误信息说得清该干什么」，不是「错误信息里有『模块 09』四个字」。
+        // 故改为钉住那句不随模块补齐而失效的处置指引。
+        assertTrue(error.getMessage().contains("所属领域注册一个提供方"),
                 "错误信息里要写清谁来补，否则下一个人只知道炸了：" + error.getMessage());
+        assertTrue(error.getMessage().contains("响亮失败"),
+                "要说清这是有意抛的，不是意外：" + error.getMessage());
     }
 
     @Test

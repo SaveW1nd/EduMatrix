@@ -28,6 +28,29 @@
 #      模块 10 的 V202608200000 装进了共享库，本分支 18 条 IT 因此红。
 #   两种都不报「你们撞了」，只报一个看起来像自己代码有问题的失败。
 #
+# 【⚠ 它【不】解决什么，以及一条比它更大的教训】
+#   容器隔离分开的是【不同 worktree】。它不解决同一个 worktree 内的并发，
+#   更不解决「对环境的假设错了」这一整类问题。
+#
+#   本项目开发模块 09 期间【四次】因环境假设出错而【把症状误判成代码问题】：
+#     ① 同一 worktree 起两个 mvn  → xxl-job "Address already in use"、
+#        IT 只跑 34 条（应为 420+）、一片 expected 30006 but was 500
+#     ② cwd 漂移（两次）          → "No tests matching pattern XxxIT"，
+#        看着像 failsafe 没匹配上，实际是文件根本【不在源树里】
+#     ③ TraceIdTaskDecorator 一度做成注入 → ScheduledJobTriggerConditionTest 以
+#        「与被测的互斥性毫无关系」的原因红
+#   四次的共同形态：【报错指向代码，根因在环境】。
+#   处置：一次只跑一个 mvn（后台跑就等它打出退出码，别靠估时间）、一律用绝对路径、
+#   看到「不该红的东西红了」先怀疑环境再怀疑代码。
+#
+# 【⚠ 它【不】解决什么：同一个 worktree 里同时跑两个 mvn】
+#   容器隔离分开的是【不同 worktree】。同一个 worktree 内起两个 mvn 会抢同一个
+#   target/ 与同一套容器，表现是：xxl-job 执行器端口 "Address already in use"、
+#   IT 只跑了一部分就收尾、以及一堆看起来像业务 bug 的 500。
+#   实测撞过一次：前一个 mvn clean verify 还没结束就起了第二个，
+#   得到 34 条 IT（应为 420+）与一片 expected 30006 but was 500，全部是假象。
+#   【规矩】等上一个 mvn 退出再起下一个。后台跑就等它打出退出码，别靠估时间。
+#
 # 【隔离维度是端口，不是库名 —— 换库名走不通】
 #   基线 V202608120000 里有 `CREATE DATABASE IF NOT EXISTS edumatrix;` 与 `USE edumatrix;`，
 #   而基线是【冻结内容】（契约 §7.3：已发布脚本永不修改）。
