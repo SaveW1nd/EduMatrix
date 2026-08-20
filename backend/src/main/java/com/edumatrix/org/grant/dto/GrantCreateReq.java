@@ -1,6 +1,5 @@
 package com.edumatrix.org.grant.dto;
 
-import java.time.LocalDateTime;
 import java.util.List;
 
 import jakarta.validation.constraints.Max;
@@ -30,18 +29,6 @@ public class GrantCreateReq {
     @NotEmpty(message = "目标节点不能为空")
     @Size(max = 500, message = "单次最多 500 个目标节点")
     private List<Long> targetNodeIds;
-
-    /** 生效时间；留空表示<b>立即生效</b>（落库 {@code NULL}）。 */
-    private LocalDateTime validStart;
-
-    /**
-     * 失效时间；留空表示<b>永久有效</b>。
-     *
-     * <p><b>必须精确到秒</b>：DDL 是 {@code DATETIME}、鉴权判定 {@code valid_end >= NOW()}，
-     * 只传日期会落成 {@code 00:00:00}，学员在约定的最后一天<b>全天</b>被拒之门外
-     *（§9.2 参数表逐字）。想表达「到 6 月 30 日为止」须写 {@code 2027-06-30 23:59:59}。
-     */
-    private LocalDateTime validEnd;
 
     /** 授权来源：1 手动选择（默认） 2 按节点批量 3 按标签批量 4 按名下全体 5 按权限模板。 */
     @Min(value = 1, message = "授权来源取值 1~5")
@@ -85,22 +72,6 @@ public class GrantCreateReq {
 
     public void setTargetNodeIds(List<Long> targetNodeIds) {
         this.targetNodeIds = targetNodeIds;
-    }
-
-    public LocalDateTime getValidStart() {
-        return validStart;
-    }
-
-    public void setValidStart(LocalDateTime validStart) {
-        this.validStart = validStart;
-    }
-
-    public LocalDateTime getValidEnd() {
-        return validEnd;
-    }
-
-    public void setValidEnd(LocalDateTime validEnd) {
-        this.validEnd = validEnd;
     }
 
     public Integer getGrantSource() {

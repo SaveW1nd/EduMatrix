@@ -23,6 +23,16 @@ import com.edumatrix.common.entity.TenantEntity;
  * {@code (type, rid, target, 0)}，<b>只会命中未删行，永远碰不到已删行</b>。
  * 故：历史撤销行原样保留（审计链完整），全部查询一律带 {@code deleted_at = 0}。
  * 同样已登记（D3），本轮只登记不改文档。
+ *
+ * <h2>⚠ {@code valid_start} / {@code valid_end} 两列还在表上，但<b>实体里没有</b></h2>
+ * <p>需方 2026-08-21 定案：<b>授权一律永久有效</b>，失效手段只有显式撤销（接口 39，级联）
+ * 与学籍状态。两列<b>保留但永远不写</b> —— 从生产已有的表上删列要做迁移、有风险，
+ * 而收益是零：<b>留列删码</b>。
+ *
+ * <p><b>实体里不留字段是刻意的</b>：留着就还能被 MyBatis-Plus 的 {@code selectList}
+ * 读出来、被某处判定用上，而那正是本轮要根除的东西 ——
+ * 「全系统唯一还在判有效期的地方」不会报错，只会行为不一致。
+ * 字段不存在时，任何想再判一次的写法都<b>编译不过</b>。
  */
 @TableName("org_resource_grant")
 public class OrgResourceGrant extends TenantEntity {
@@ -47,12 +57,6 @@ public class OrgResourceGrant extends TenantEntity {
 
     /** 被授权的目标节点（管理员 / 教师 / 学生任一类型，逐级显式授权、无继承）。 */
     private Long targetNodeId;
-
-    /** {@code null} = 立即生效。 */
-    private LocalDateTime validStart;
-
-    /** {@code null} = 永久有效。 */
-    private LocalDateTime validEnd;
 
     /** 授权来源，<b>仅为审计标记，不是授权依据</b>（03-02 §9.2 逐字）。 */
     private Integer grantSource;
@@ -102,22 +106,6 @@ public class OrgResourceGrant extends TenantEntity {
 
     public void setTargetNodeId(Long targetNodeId) {
         this.targetNodeId = targetNodeId;
-    }
-
-    public LocalDateTime getValidStart() {
-        return validStart;
-    }
-
-    public void setValidStart(LocalDateTime validStart) {
-        this.validStart = validStart;
-    }
-
-    public LocalDateTime getValidEnd() {
-        return validEnd;
-    }
-
-    public void setValidEnd(LocalDateTime validEnd) {
-        this.validEnd = validEnd;
     }
 
     public Integer getGrantSource() {

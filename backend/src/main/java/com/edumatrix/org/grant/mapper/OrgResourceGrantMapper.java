@@ -43,11 +43,11 @@ public interface OrgResourceGrantMapper extends BaseMapper<OrgResourceGrant> {
      */
     @Insert("<script>"
             + "INSERT INTO org_resource_grant (id, resource_type, resource_id, target_node_id, "
-            + "  valid_start, valid_end, grant_source, source_ref_id, grant_by, grant_time, "
+            + "  grant_source, source_ref_id, grant_by, grant_time, "
             + "  create_by, create_time, update_by, update_time, deleted_at) VALUES "
             + "<foreach collection='rows' item='r' separator=','>"
             + "(#{r.id}, #{r.resourceType}, #{r.resourceId}, #{r.targetNodeId}, "
-            + " #{r.validStart}, #{r.validEnd}, #{r.grantSource}, #{r.sourceRefId}, "
+            + " #{r.grantSource}, #{r.sourceRefId}, "
             + " #{operatorId}, NOW(), #{operatorId}, NOW(), #{operatorId}, NOW(), 0)"
             + "</foreach>"
             + "</script>")

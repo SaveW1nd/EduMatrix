@@ -122,7 +122,7 @@ class OperLogCoverageTest {
      * 如果哪天扫描逻辑本身退化（比如注解元数据丢失、包名改了），
      * 上面那条会以"零个未标注"的姿态<b>全绿</b>，而本条会红。
      *
-     * <p>当前 46 = {@code org} 23（member 15 + node 4 + <b>grant 4</b>）+ {@code system} 19
+     * <p>当前 45 = {@code org} 22（member 15 + node 4 + <b>grant 3</b>）+ {@code system} 19
      * （user 5 / role 4 / menu 3 / tenant 5 / tenantConfig 1 / <b>file 1</b>）
      * + {@code auth} 4（login / refresh / logout / changePassword，
      * 其中前三个在 {@link #EXEMPT} 里）。
@@ -135,7 +135,10 @@ class OperLogCoverageTest {
      * 第三次红，改成 43；C5 加了 {@code #revoke}（§9.3 撤销资源授权）第四次红，改成 44；
      * C6 加了 {@code #updateValidity}（§9.4 修改授权有效期）第五次红，改成 45；
      * C10 加了 {@code #transferPrecheck}（§6.12 归属变更影响面预检）第六次红，改成 46
-     * —— 而那一个进了 {@link #EXEMPT}：它是 {@code POST} 但<b>只读</b>
+     * —— 而那一个进了 {@link #EXEMPT}：它是 {@code POST} 但<b>只读</b>；
+     * 需方 2026-08-21 定案取消授权有效期、<b>删掉接口 40</b>（{@code #updateValidity}）
+     * 第七次红，改回 45 —— <b>这是它第一次因为「少了一个写端点」而红</b>，
+     * 而那正是它该红的时刻：删端点时同样要有人确认「这个写操作的留痕也一并没了」
      * —— 而 PRD FR-1 规则 9 逐字要求「所有<b>授权/撤销</b>写 {@code sys_oper_log}」，
      * 这两红正好各落在那条要求的一半上。
      * 这就是它存在的样子。
@@ -152,7 +155,7 @@ class OperLogCoverageTest {
      * 写在这里是因为：本条全绿最容易让人以为「操作日志这块齐了」。
      */
     @Test
-    @DisplayName("写端点总数 = 46（新增写接口时本条会红，提醒去标 @OperLog）")
+    @DisplayName("写端点总数 = 45（写接口增减时本条都会红，提醒去标/去掉 @OperLog）")
     void writeEndpointCountIsPinned() throws Exception {
         int count = 0;
         for (Class<?> controller : scanControllers()) {
@@ -162,7 +165,7 @@ class OperLogCoverageTest {
                 }
             }
         }
-        assertThat(count).isEqualTo(46);
+        assertThat(count).isEqualTo(45);
     }
 
     private static boolean isWriteEndpoint(Method method) {

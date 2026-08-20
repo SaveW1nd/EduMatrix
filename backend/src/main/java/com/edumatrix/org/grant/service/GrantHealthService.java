@@ -47,9 +47,6 @@ import com.edumatrix.org.grant.mapper.GrantHealthMapper;
 @Service
 public class GrantHealthService {
 
-    /** 临期提醒的窗口（PRD FR-3 规则 6、03-02 §9.6 {@code type=expiring}）。 */
-    public static final int EXPIRING_DAYS = 30;
-
     private final GrantHealthMapper healthMapper;
     private final ResourceOwnerChecker ownerChecker;
 
@@ -135,9 +132,19 @@ public class GrantHealthService {
                 .stream().anyMatch(moved::contains);
     }
 
-    /** 30 天内到期的授权。 */
+    /**
+     * 30 天内到期的授权 —— <b>恒为空清单</b>（需方 2026-08-21 定案：授权一律永久有效）。
+     *
+     * <p><b>不是缺陷，是定案的直接后果</b>：没有到期日就没有「临期」。
+     * {@code type=expiring} 这个取值<b>保留</b>（它在 §9.6 的参数表里，删它是接口签名变更），
+     * 调用返回空清单、{@code total=0}，{@code summary} 的两个数照常。
+     *
+     * <p><b>方法保留而不是让调用方少一个分支</b>：将来若恢复有效期（例如「试听一个月」），
+     * 恢复点就在这一处 —— 而 {@code GrantHealthMapper.selectExpiring} 那条 SQL 已删除，
+     * 需要连同 {@code valid_end} 的写入一起重做，不是把注释解开就行。
+     */
     public List<GrantHealthMapper.HealthRow> expiring() {
-        return healthMapper.selectExpiring(EXPIRING_DAYS);
+        return List.of();
     }
 
     /** 每个节点持有的有效授权行数（{@code grant_rows_per_node}）。 */
@@ -151,7 +158,7 @@ public class GrantHealthService {
      * <p>只返回 {@code target_node_id} 落在<b>当前用户子树内</b>的行 ——
      * 不在子树内的<b>不返回</b>，不暴露存在性（§9.6 数据权限栏）。
      *
-     * @param type 三个取值之一；{@code expiring} 走另一条查询，不参与两类计数
+     * @param type 三个取值之一；{@code expiring} 恒回空清单（授权无有效期），不参与两类计数
      */
     public HealthView view(String type, Integer resourceType, Long myNodeId,
                            java.util.function.BiPredicate<Long, String> inMySubtree) {

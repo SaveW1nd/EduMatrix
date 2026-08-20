@@ -50,10 +50,40 @@ class VodVideoIT extends CourseIntegrationTestBase {
     // 接口 25 §7.1 上传凭证
     // =====================================================================
 
+    /**
+     * <b>需方 2026-08-21 定案二的唯一判据。</b>
+     *
+     * <p>「我最初的想法是所有的资产归超级管理员所有，别人无权上传」——
+     * 收窄靠迁移 {@code V202608210000} 撤销 {@code teacher → vod:video:add} 的绑定，
+     * <b>不靠代码里的角色门</b>（与 F-72 逐字同源）。
+     * 把那条迁移删掉、库重建 → 本条立刻红。
+     *
+     * <p><b>两侧都要断言</b>：只写「教师 403」的话，把权限写死拒绝、或者把整个端点删掉，
+     * 都能让它全绿 —— 而那等于把上传功能也一起关了，且看不出来。
+     * 本文件其余的上传凭证用例已从 {@code TA}（教师）改为 {@code ROOT}（管理员），
+     * 那批改动是这次收窄的<b>连带后果</b>，不是判据。
+     */
+    @Test
+    @DisplayName("⚠ §7.1 上传凭证【仅 org_admin】：教师 403、管理员 200（需方定案二）")
+    void uploadTokenIsOrgAdminOnly() throws Exception {
+        String body = """
+                {"videoName":"权限探针","fileName":"a.mp4","fileSize":1048576}""";
+
+        JsonNode teacher = client.postWithToken(VIDEOS + "/upload-token",
+                loginAs(CourseFixtures.TA), body);
+        assertEquals(403, code(teacher),
+                "教师不再能上传视频 —— 判定来自 sys_role_menu 的绑定，不是代码里的角色门");
+
+        JsonNode admin = client.postWithToken(VIDEOS + "/upload-token",
+                loginAs(CourseFixtures.ROOT), body);
+        assertEquals(200, code(admin),
+                "这一侧不写，等于把上传整个关掉也全绿");
+    }
+
     @Test
     @DisplayName("§7.1 新建：先调云再落库，vod_file_id 发凭证时就写入（契约 §2.8 规则 1 的前提）")
     void createWritesVodFileIdAtCredentialTime() throws Exception {
-        String token = loginAs(CourseFixtures.TA);
+        String token = loginAs(CourseFixtures.ROOT);
         JsonNode res = client.postWithToken(VIDEOS + "/upload-token", token, """
                 {"videoName":"新课录像","fileName":"a.mp4","fileSize":1048576}""");
 
@@ -78,7 +108,7 @@ class VodVideoIT extends CourseIntegrationTestBase {
     @Test
     @DisplayName("§7.1 云调失败则一行都不落（不留 vod_file_id 为 NULL 的僵尸行）")
     void cloudFailureLeavesNoRow() throws Exception {
-        String token = loginAs(CourseFixtures.TA);
+        String token = loginAs(CourseFixtures.ROOT);
         long before = countVideos();
         vodClient.failNext = true;
 
@@ -91,7 +121,7 @@ class VodVideoIT extends CourseIntegrationTestBase {
     @Test
     @DisplayName("§7.1 请求体里的 videoId 查不到 → 20015（param-addressed，不是 404）")
     void unknownVideoIdInBodyIs20015() throws Exception {
-        String token = loginAs(CourseFixtures.TA);
+        String token = loginAs(CourseFixtures.ROOT);
         JsonNode res = client.postWithToken(VIDEOS + "/upload-token", token, """
                 {"videoName":"续签","fileName":"a.mp4","fileSize":1024,"videoId":"1968000000000009999"}""");
 

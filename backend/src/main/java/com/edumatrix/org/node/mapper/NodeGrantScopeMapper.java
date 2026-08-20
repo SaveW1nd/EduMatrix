@@ -31,21 +31,19 @@ import org.apache.ibatis.annotations.Select;
 public interface NodeGrantScopeMapper {
 
     /**
-     * §3.2 的 {@code grantedResourceStat}：本节点<b>已获授权且在有效期内</b>的资源数，
+     * §3.2 的 {@code grantedResourceStat}：本节点<b>已获授权</b>的资源数，
      * 按 {@code resource_type} 分组。
      *
      * <p><b>只看授权给本节点的行，不回溯祖先链</b> —— 契约 §2.5 规则 3/4：
      * 「不向下继承，每一层都必须显式授权」「判定不回溯祖先链」。
      * 字段说明也逐字写着「不含其祖先持有但未下发给本节点的资源」。
      *
-     * <p>{@code valid_start} 为 {@code NULL} 表示立即生效，{@code valid_end} 为
-     * {@code NULL} 表示永久有效（DDL 列注释），两端都要放行 {@code NULL}。
+     * <p><b>不判有效期</b>：需方 2026-08-21 定案「授权一律永久有效」，
+     * {@code valid_start} / {@code valid_end} 两列保留但永远不写。
      * 命中 {@code idx_target_resource} 的最左前缀。
      */
     @Select("SELECT resource_type AS resourceType, COUNT(1) AS cnt FROM org_resource_grant "
             + " WHERE target_node_id = #{nodeId} AND deleted_at = 0 "
-            + "   AND (valid_start IS NULL OR valid_start <= NOW()) "
-            + "   AND (valid_end IS NULL OR valid_end >= NOW()) "
             + " GROUP BY resource_type")
     List<ResourceTypeCountRow> selectGrantedResourceStat(@Param("nodeId") Long nodeId);
 

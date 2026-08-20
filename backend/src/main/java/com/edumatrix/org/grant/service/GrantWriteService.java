@@ -98,7 +98,6 @@ public class GrantWriteService {
      *   <li>目标节点都在我的<b>子树</b>内 → 否则 {@code 10302}；
      *   <li>目标节点未停用 → 否则 {@code 10109}；
      *   <li>{@code resourceType ∈ {2,3}} 时目标不得是学生节点 → 否则 {@code 10308}；
-     *   <li>{@code validEnd} 超出我自己的 → <b>截断，不报错</b>；
      *   <li>不存在重复授权 → 否则 {@code 10303}（或按 {@code ignoreDuplicate} 跳过）。
      * </ol>
      */
@@ -111,12 +110,9 @@ public class GrantWriteService {
         List<Long> targetNodeIds = distinct(req.getTargetNodeIds());
 
         assertWithinRowLimit(resourceIds, targetNodeIds);
-        assertValidPeriod(req);
 
         assertAllRegrantable(type, resourceIds, myNodeId);
         assertTargetsAcceptable(type, targetNodeIds, myNodeId);
-
-        Map<Long, LocalDateTime> caps = truncationCaps(type, resourceIds, myNodeId);
 
         Set<String> existing = existingPairs(type, resourceIds, targetNodeIds);
         if (!existing.isEmpty() && !req.ignoreDuplicate()) {
@@ -127,17 +123,8 @@ public class GrantWriteService {
         LocalDateTime now = LocalDateTime.now();
         List<OrgResourceGrant> rows = new ArrayList<>();
         List<String> duplicatedPairs = new ArrayList<>();
-        boolean truncated = false;
-        LocalDateTime strictestEnd = null;
 
         for (Long resourceId : resourceIds) {
-            LocalDateTime effectiveEnd = capOf(req.getValidEnd(), caps.get(resourceId));
-            if (!java.util.Objects.equals(effectiveEnd, req.getValidEnd())) {
-                truncated = true;
-            }
-            if (effectiveEnd != null && (strictestEnd == null || effectiveEnd.isBefore(strictestEnd))) {
-                strictestEnd = effectiveEnd;
-            }
             for (Long targetNodeId : targetNodeIds) {
                 String pair = pairKey(resourceId, targetNodeId);
                 if (existing.contains(pair)) {
@@ -149,8 +136,6 @@ public class GrantWriteService {
                 row.setResourceType(type.code());
                 row.setResourceId(resourceId);
                 row.setTargetNodeId(targetNodeId);
-                row.setValidStart(req.getValidStart());
-                row.setValidEnd(effectiveEnd);
                 row.setGrantSource(req.grantSourceOrDefault());
                 row.setSourceRefId(req.getSourceRefId());
                 rows.add(row);
@@ -170,10 +155,6 @@ public class GrantWriteService {
         vo.setGrantedCount(rows.size());
         vo.setDuplicatedCount(duplicatedPairs.size());
         vo.setDuplicated(describeDuplicates(type, duplicatedPairs));
-        vo.setValidStart(req.getValidStart());
-        vo.setValidEnd(req.getValidEnd());
-        vo.setValidEndTruncated(truncated);
-        vo.setEffectiveValidEnd(strictestEnd);
         vo.setGrantSource(req.grantSourceOrDefault());
         vo.setGrantTime(now);
         return vo;
@@ -205,15 +186,6 @@ public class GrantWriteService {
                     "单次授权行数 " + rows + " 超过上限 " + MAX_ROWS_PER_CALL
                             + "（资源数 " + resourceIds.size() + " × 目标节点数 "
                             + targetNodeIds.size() + "），请分批提交");
-        }
-    }
-
-    /** {@code validStart} 必须早于 {@code validEnd}（§9.2 校验表第 6 条，返回 400）。 */
-    private static void assertValidPeriod(GrantCreateReq req) {
-        LocalDateTime start = req.getValidStart();
-        LocalDateTime end = req.getValidEnd();
-        if (start != null && end != null && !start.isBefore(end)) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "生效时间必须早于失效时间");
         }
     }
 
@@ -281,48 +253,6 @@ public class GrantWriteService {
     }
 
     // =====================================================================
-    // 校验 6：有效期截断（不报错）
-    // =====================================================================
-
-    /**
-     * 每个资源各自的截断上界 = <b>我自己持有该资源的</b> {@code valid_end}。
-     *
-     * <p>契约 §2.5 规则 7：「授权人自身为 {@code owner_node_id} 时<b>不受此限</b>」，
-     * 故 owner 的资源在返回的 Map 里<b>没有键</b>（不是 {@code null} 值 ——
-     * 那会和「持有但永久有效」混成同一个状态）。
-     */
-    private Map<Long, LocalDateTime> truncationCaps(ResourceType type, List<Long> resourceIds,
-                                                    Long myNodeId) {
-        Map<Long, LocalDateTime> caps = new LinkedHashMap<>();
-        List<Long> granted = resourceIds.stream()
-                .filter(id -> !ownerChecker.isOwner(type, id, myNodeId))
-                .toList();
-        if (granted.isEmpty()) {
-            return caps;
-        }
-        for (OrgResourceGrant row : grantMapper.selectList(new LambdaQueryWrapper<OrgResourceGrant>()
-                .eq(OrgResourceGrant::getResourceType, type.code())
-                .eq(OrgResourceGrant::getTargetNodeId, myNodeId)
-                .in(OrgResourceGrant::getResourceId, granted))) {
-            if (row.getValidEnd() != null) {
-                caps.put(row.getResourceId(), row.getValidEnd());
-            }
-        }
-        return caps;
-    }
-
-    /** 取「请求值」与「我的上界」中<b>更早</b>的那个；上界不存在时按请求值原样。 */
-    private static LocalDateTime capOf(LocalDateTime requested, LocalDateTime cap) {
-        if (cap == null) {
-            return requested;
-        }
-        if (requested == null || requested.isAfter(cap)) {
-            return cap;
-        }
-        return requested;
-    }
-
-    // =====================================================================
     // 校验 7：重复授权 → 10303
     // =====================================================================
 
@@ -352,14 +282,8 @@ public class GrantWriteService {
         });
         Map<Long, String> resourceNames = grantableReader.namesOf(type, resourceIds);
         Map<Long, String> nodeNames = nodeNameReader.nodeNames(nodeIds);
-        Map<String, LocalDateTime> ends = new LinkedHashMap<>();
-        grantMapper.selectList(new LambdaQueryWrapper<OrgResourceGrant>()
-                        .eq(OrgResourceGrant::getResourceType, type.code())
-                        .in(OrgResourceGrant::getResourceId, resourceIds)
-                        .in(OrgResourceGrant::getTargetNodeId, nodeIds))
-                .forEach(row -> ends.put(pairKey(row.getResourceId(), row.getTargetNodeId()),
-                        row.getValidEnd()));
-
+        // 【原先这里还有一条查询取 existingValidEnd】——授权取消有效期后那个字段没了，
+        // 这条查询也随之删除：留着就是每次重复授权多打一次库，取回来一列永远为 null 的值
         List<DuplicatedGrantVO> list = new ArrayList<>(sample.size());
         for (String pair : sample) {
             DuplicatedGrantVO vo = new DuplicatedGrantVO();
@@ -367,7 +291,6 @@ public class GrantWriteService {
             vo.setResourceName(resourceNames.get(resourceOf(pair)));
             vo.setTargetNodeId(nodeOf(pair));
             vo.setTargetNodeName(nodeNames.get(nodeOf(pair)));
-            vo.setExistingValidEnd(ends.get(pair));
             list.add(vo);
         }
         return list;

@@ -51,25 +51,25 @@ class GrantQueryIT extends GrantIntegrationTestBase {
     }
 
     @Test
-    @DisplayName("接口 37：source=1/2 各切一半；source 与 validStart/validEnd 的语义按 §9.1")
-    void grantableSourceAndValidity() throws Exception {
-        grantFixtures.grant(1, GrantFixtures.C1, GrantFixtures.A1, GrantFixtures.ROOT,
-                "2026-01-01 00:00:00", "2027-06-30 23:59:59");
+    @DisplayName("接口 37：source=1/2 各切一半；validStart/validEnd 两侧【都恒为 null】")
+    void grantableSourceSplit() throws Exception {
+        grantFixtures.grant(1, GrantFixtures.C1, GrantFixtures.A1, GrantFixtures.ROOT);
 
         String token = loginAs(GrantFixtures.A1);
         JsonNode owned = getWithToken(GRANTABLE + "?resourceType=1&source=1", token);
         assertThat(resourceIds(owned)).containsExactly(String.valueOf(GrantFixtures.C2));
         assertThat(data(owned).path("list").get(0).path("validEnd").isNull())
-                .as("§9.1 字段说明：自有资源 validStart/validEnd 为 null，表示【永久】")
+                .as("自有资源本来就没有有效期")
                 .isTrue();
 
         JsonNode granted = getWithToken(GRANTABLE + "?resourceType=1&source=2", token);
         assertThat(resourceIds(granted)).containsExactly(String.valueOf(GrantFixtures.C1));
         JsonNode row = data(granted).path("list").get(0);
-        assertThat(row.path("validEnd").asText())
-                .as("§9.1 字段说明：受授权资源的 validStart/validEnd 是【我自己持有该资源的有效期】，"
-                        + "不是「这次要授出去的有效期」")
-                .isEqualTo("2027-06-30 23:59:59");
+        assertThat(row.path("validEnd").isNull())
+                .as("需方 2026-08-21 定案：授权一律永久有效 —— 受授权资源这一侧【也】恒为 null。"
+                        + "字段保留是为了不改响应结构，文档已写明它恒空")
+                .isTrue();
+        assertThat(row.path("validStart").isNull()).isTrue();
         assertThat(row.path("ownerNodeName").asText()).isEqualTo("IT11 授权引擎机构");
         assertThat(row.path("extra").path("subject").asText()).isEqualTo("数学");
     }
@@ -151,23 +151,6 @@ class GrantQueryIT extends GrantIntegrationTestBase {
         assertThat(row.path("grantSource").asInt()).isEqualTo(1);
         assertThat(row.path("grantSourceName").asText()).isEqualTo("手动选择");
         assertThat(row.path("expired").asBoolean()).isFalse();
-    }
-
-    @Test
-    @DisplayName("接口 41：includeExpired 默认排除过期行，置 true 时带出并标 expired")
-    void grantedExpiredFiltering() throws Exception {
-        grantFixtures.grant(1, GrantFixtures.C1, GrantFixtures.A1, GrantFixtures.ROOT,
-                "2020-01-01 00:00:00", "2020-12-31 23:59:59");
-
-        String token = loginAs(GrantFixtures.ROOT);
-        assertThat(data(getWithToken(grantedOf(GrantFixtures.A1), token)).path("total").asInt())
-                .as("默认只返回当前在有效期内的授权（§9.5 说明段）")
-                .isZero();
-
-        JsonNode withExpired = getWithToken(
-                grantedOf(GrantFixtures.A1) + "?includeExpired=true", token);
-        assertThat(data(withExpired).path("total").asInt()).isEqualTo(1);
-        assertThat(data(withExpired).path("list").get(0).path("expired").asBoolean()).isTrue();
     }
 
     @Test

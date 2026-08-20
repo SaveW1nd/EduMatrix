@@ -46,6 +46,18 @@ public class VodVideoController {
      * 接口 25 §7.1 获取视频上传凭证（含续签 / 重传）。
      *
      * <p>用 {@code vod:video:add}：新建与重传都是「往媒资库里放东西」。
+     *
+     * <h2>⚠ 需方 2026-08-21 定案二：<b>仅 {@code org_admin}</b>，教师不再能上传</h2>
+     * <p>原话「我最初的想法是所有的资产归超级管理员所有，别人无权上传」。
+     *
+     * <p><b>这里一个字都不改</b> —— 权限的真相在初始化数据里
+     *（{@code sys_role_menu} → {@code sys_menu.perms}），代码里不写第二份。
+     * 收窄靠迁移 {@code V202608210000__revoke_teacher_video_upload_perm.sql}
+     * 撤销 {@code teacher → vod:video:add} 那一行绑定，与 F-72 逐字同源。
+     * <b>加一个角色门会是全库唯一一处不同构的判定</b>，多一个会配错的地方。
+     *
+     * <p>判据是 {@code VodVideoIT#uploadTokenIsOrgAdminOnly} 的<b>两侧</b>：
+     * 教师 403、管理员 200。只断言一侧不行 —— 把权限写死拒绝也能让「教师 403」全绿。
      */
     @PostMapping("/upload-token")
     @SaCheckPermission("vod:video:add")

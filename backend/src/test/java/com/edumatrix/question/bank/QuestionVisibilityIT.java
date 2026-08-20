@@ -85,14 +85,26 @@ class QuestionVisibilityIT extends QuestionIntegrationTestBase {
         });
     }
 
+    /**
+     * <b>方向被需方 2026-08-21 定案反转了</b>：原先叫 {@code expiredGrantIsInvisible}
+     *（「授权已过期等同未授权 → 404」）。授权取消有效期后，{@code valid_end} 在过去的行
+     * 与永久行<b>没有任何区别</b>。
+     *
+     * <p><b>不删掉而是反向断言</b>：这是<b>题目</b>那条可见性链上唯一带过期行的用例 ——
+     * 模块 11 的 {@code GrantNoValidityIT} 钉的是课程与公共层，
+     * 删掉它就等于题目这一侧没人验「谓词真的删干净了」。
+     */
     @Test
-    @DisplayName("授权已过期等同未授权 → 404")
-    void expiredGrantIsInvisible() throws Exception {
+    @DisplayName("⚠ 反转：valid_end 在过去的授权行【照常可见】（需方定案取消有效期）")
+    void expiredGrantIsStillVisible() throws Exception {
         questionFixtures.grantQuestionExpired(QuestionFixtures.Q_SINGLE, QuestionFixtures.TB,
                 QuestionFixtures.TENANT_ID);
-        runAsTestUser(QuestionFixtures.TENANT_ID, QuestionFixtures.TB, () ->
-                assertThrows(BizException.class,
-                        () -> visibilityChecker.assertVisible(QuestionFixtures.Q_SINGLE)));
+        runAsTestUser(QuestionFixtures.TENANT_ID, QuestionFixtures.TB, () -> {
+            VisibleQuestion visible = visibilityChecker.assertVisible(QuestionFixtures.Q_SINGLE);
+            assertEquals(VisibleQuestion.GRANT_TYPE_GRANTED, visible.grantType(),
+                    "失效手段只剩显式撤销与学籍状态 —— 时间不再是其中之一");
+            assertFalse(visible.owned());
+        });
     }
 
     /**
