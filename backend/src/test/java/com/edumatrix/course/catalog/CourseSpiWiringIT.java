@@ -55,6 +55,10 @@ class CourseSpiWiringIT extends CourseIntegrationTestBase {
     @Autowired
     private ResourceGrantReader grantReader;
 
+    /** 同上：canRegrant 的链判定要它，本条不走那条路径，传真的即可。 */
+    @Autowired
+    private com.edumatrix.common.subtree.NodeAncestorCache ancestorCache;
+
     @Test
     @DisplayName("VideoRefReader 恰好一个实现 —— 模块 09 到期删 TempVideoRefReader 的机器守卫")
     void videoRefReaderHasExactlyOneImplementation() {
@@ -123,7 +127,7 @@ class CourseSpiWiringIT extends CourseIntegrationTestBase {
                 .filter(provider -> provider.resourceType() == ResourceType.COURSE)
                 .findFirst().orElseThrow();
         ResourceOwnerChecker narrow =
-                new ResourceOwnerChecker(java.util.List.of(courseOnly), grantReader);
+                new ResourceOwnerChecker(java.util.List.of(courseOnly), grantReader, ancestorCache);
 
         IllegalStateException error = org.junit.jupiter.api.Assertions.assertThrows(
                 IllegalStateException.class,

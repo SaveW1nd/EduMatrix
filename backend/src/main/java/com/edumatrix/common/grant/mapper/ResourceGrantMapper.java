@@ -18,7 +18,7 @@ import org.apache.ibatis.annotations.Select;
  * 即为把模块 11 的写侧偷渡进公共层。这与 {@code system/log/mapper} 的只读约束
  * （约定检查⑥）是同一件事，只是那一处已被脚本守住、这一处靠本注释与代码评审。
  *
- * <p>三条查询全部命中 {@code idx_target_resource
+ * <p>四条查询全部命中 {@code idx_target_resource
  * (target_node_id, resource_type, resource_id, deleted_at, valid_end)}
  * 或 {@code idx_resource_type_id (resource_type, resource_id)}，无一处 {@code FIND_IN_SET}。
  *
@@ -28,7 +28,15 @@ import org.apache.ibatis.annotations.Select;
 public interface ResourceGrantMapper {
 
     /**
-     * 有效期谓词。三条查询共用同一段文本，防止「有的地方判了 valid_start、有的地方没判」。
+     * 有效期谓词。<b>四条查询共用同一段文本</b>，防止「有的地方判了 valid_start、有的地方没判」。
+     *
+     * <p><b>{@code valid_end >= NOW()} 是全库唯一口径</b>（02-数据库设计 §3.3.2 的 SQL
+     * 与 DDL 列注释都是这个）。曾经有第二份写成 {@code valid_end > NOW()}
+     * （{@code org/node/mapper/NodeGrantScopeMapper}，模块 06 交付）——
+     * 两者<b>只在到期那一秒结论相反</b>，表现是节点移动响应说「没有跨管辖授权」
+     * 而实际有一条卡在边界上，而两边都返回 200。模块 11 已把那两条收敛到本常量的口径，
+     * 并由 {@code GrantValidityBoundaryIT} 用一条 {@code valid_end} 恰好等于当前秒的
+     * 授权行钉住「两条路径结论相同」。
      *
      * <p><b>刻意写成 {@code NOW() >= valid_start} 而不是 {@code valid_start <= NOW()}</b>：
      * 本常量会被拼进 {@code <script>} 形式的注解 SQL，那种写法要按 XML 解析，
@@ -69,6 +77,73 @@ public interface ResourceGrantMapper {
             + "</script>")
     List<GrantCountRow> countActiveTargets(@Param("resourceType") int resourceType,
                                            @Param("resourceIds") List<Long> resourceIds);
+
+    /**
+     * 「这些节点里，谁当前有效持有这些资源」—— 契约 §2.5 规则 9 的链判定用它。
+     *
+     * <h2>⚠ 这条<b>会</b>拿一串祖先节点来查，但它不是规则 4 禁的那种回溯</h2>
+     * <p>规则 4 禁的是<b>可用性</b>判定回溯祖先链（「我能不能用资源 X」只看
+     * {@code target_node_id = 我} 一条命中）。而规则 9 的判据<b>本身就是链判定</b>：
+     * 「授权行的 {@code target_node_id} 当前祖先链<b>不再包含</b>该资源
+     * {@code owner_node_id} 或其有效授权链时，该行只读」——
+     * 判「链断没断」不看链是判不出来的。
+     *
+     * <p>两条规则管的是两件事，<b>看起来像冲突而不是冲突</b>：
+     * <table border="1">
+     *   <caption>回溯与否，按问题分</caption>
+     *   <tr><th>问的问题</th><th>回溯祖先链？</th><th>依据</th><th>入口</th></tr>
+     *   <tr><td>我能不能<b>用</b>资源 X</td><td><b>否</b>，单条命中</td><td>契约 §2.5 规则 4</td>
+     *       <td>{@link #countActiveGrant}</td></tr>
+     *   <tr><td>我能不能<b>再下发</b>资源 X</td><td><b>是</b>，一次批量</td><td>契约 §2.5 规则 9</td>
+     *       <td>本方法</td></tr>
+     * </table>
+     * <p><b>删掉本方法「以合规」会让规则 9 整条失去落地</b>，而那不会报错 ——
+     * 表现是调岗的教师照样能把原校区的课授给新校区的学员（契约 §2.5 规则 9
+     * 逐字描述的资产穿透）。
+     *
+     * <h2>为什么是一条批量查询而不是逐个点查</h2>
+     * <p>树深上限 50 级（契约 §2.3 结构约束 5），接口 38 单次 500 个资源 ——
+     * 逐个点查是 500 × 50 次往返。一条 {@code IN × IN} 一次拿完，
+     * 命中 {@code idx_resource_type_id (resource_type, resource_id)}。
+     *
+     * @param nodeIds 候选节点（调用方传的是「我」的祖先链）；<b>不含「我」自己</b>时
+     *                也完全正常 —— 本方法只回答事实，不做任何判定
+     */
+    @Select("<script>"
+            + "SELECT resource_id AS resourceId, target_node_id AS targetNodeId "
+            + "  FROM org_resource_grant "
+            + " WHERE resource_type = #{resourceType} "
+            + "   AND resource_id IN "
+            + "   <foreach collection='resourceIds' item='rid' open='(' separator=',' close=')'>#{rid}</foreach>"
+            + "   AND target_node_id IN "
+            + "   <foreach collection='nodeIds' item='nid' open='(' separator=',' close=')'>#{nid}</foreach>"
+            + VALID_NOW
+            + "</script>")
+    List<GrantHolderRow> selectGrantHolders(@Param("resourceType") int resourceType,
+                                            @Param("resourceIds") List<Long> resourceIds,
+                                            @Param("nodeIds") List<Long> nodeIds);
+
+    /** {@link #selectGrantHolders} 的行。 */
+    class GrantHolderRow {
+        private Long resourceId;
+        private Long targetNodeId;
+
+        public Long getResourceId() {
+            return resourceId;
+        }
+
+        public void setResourceId(Long resourceId) {
+            this.resourceId = resourceId;
+        }
+
+        public Long getTargetNodeId() {
+            return targetNodeId;
+        }
+
+        public void setTargetNodeId(Long targetNodeId) {
+            this.targetNodeId = targetNodeId;
+        }
+    }
 
     /** {@link #countActiveTargets} 的行。 */
     class GrantCountRow {

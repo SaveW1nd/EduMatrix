@@ -57,6 +57,15 @@ public interface NodeGrantScopeMapper {
      * <p>两端都判、两端都放行 {@code NULL}：{@code valid_start IS NULL} 表示立即生效、
      * {@code valid_end IS NULL} 表示永久有效（DDL 列注释）。
      *
+     * <p><b>⚠ 上界是 {@code valid_end >= NOW()}，不是 {@code >}（模块 11 收敛，D7）</b>。
+     * 本模块交付时这两条写的是 {@code >}，而全库唯一口径
+     *（{@code common/grant/mapper/ResourceGrantMapper.VALID_NOW}、02-数据库设计 §3.3.2
+     * 的鉴权 SQL、DDL 列注释）都是 {@code >=}。两者<b>只在到期那一秒结论相反</b>，
+     * 后果是：节点移动算出的「跨管辖集」与授权引擎算出的「有效集」差一行 ——
+     * <b>移动响应说没有跨管辖授权，实际有一条卡在边界上</b>，而两边都返回 200。
+     * 由 {@code GrantValidityBoundaryIT} 用一条 {@code valid_end} 恰好等于当前秒的
+     * 授权行钉住「两条路径结论相同」。
+     *
      * <p><b>漏判 {@code valid_start} 的后果</b>：一条<b>尚未生效</b>的未来授权会被算进
      * {@code outOfScopeGrantCount} 并出现在清单里 —— 操作者看到一条「现在根本还用不了」的授权
      * 被列为待办，而接口返回 200、没有任何报错。同一个 Mapper 里两条查询用两套有效期口径，
@@ -73,7 +82,7 @@ public interface NodeGrantScopeMapper {
             + "  LEFT JOIN sys_user u ON u.id = g.grant_by AND u.deleted_at = 0 "
             + " WHERE g.deleted_at = 0 "
             + "   AND (g.valid_start IS NULL OR g.valid_start <= NOW()) "
-            + "   AND (g.valid_end IS NULL OR g.valid_end > NOW()) "
+            + "   AND (g.valid_end IS NULL OR g.valid_end >= NOW()) "
             + "   AND (n.id = #{movingNodeId} "
             + "        OR n.ancestors = #{prefix} OR n.ancestors LIKE CONCAT(#{prefix}, ',%'))")
     List<GrantScopeRow> selectSubtreeGrants(@Param("movingNodeId") Long movingNodeId,
@@ -94,7 +103,7 @@ public interface NodeGrantScopeMapper {
     @Select("SELECT resource_type AS resourceType, COUNT(1) AS cnt FROM org_resource_grant "
             + " WHERE target_node_id = #{nodeId} AND deleted_at = 0 "
             + "   AND (valid_start IS NULL OR valid_start <= NOW()) "
-            + "   AND (valid_end IS NULL OR valid_end > NOW()) "
+            + "   AND (valid_end IS NULL OR valid_end >= NOW()) "
             + " GROUP BY resource_type")
     List<ResourceTypeCountRow> selectGrantedResourceStat(@Param("nodeId") Long nodeId);
 
