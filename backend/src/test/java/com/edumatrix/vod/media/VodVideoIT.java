@@ -220,6 +220,37 @@ class VodVideoIT extends CourseIntegrationTestBase {
     // 接口 27 §7.4 删除
     // =====================================================================
 
+    /**
+     * <b>需方 2026-08-21 定案（排期 A）的判据之一 —— 媒资侧代表端点。</b>
+     *
+     * <p>收窄靠迁移 {@code V202608210200} 撤销 {@code teacher → vod:video:remove} 的绑定。
+     * 同一批还撤了 {@code retranscode} 与 {@code status}；{@code vod:video:add} 早已由
+     * {@code V202608210000} 撤走（F-105），{@code vod:video:list} <b>保留</b> ——
+     * 教师仍要看得见媒资才能选来授权给学员。
+     *
+     * <p><b>为什么要先把 owner 改成教师本人</b>：删除端点有归属前置判定，
+     * 教师对 ROOT 的媒资本来就「不可见 → 404」，那样断出来的 403 不是权限撤销的功劳。
+     * 把 owner 挪到教师身上，归属这一关就过了，<b>挡住他的只剩权限绑定这一件事</b>。
+     * 两侧用的是<b>同一个媒资、同一个端点</b>，只换演员与随之匹配的归属。
+     */
+    @Test
+    @DisplayName("⚠ §7.4 删除媒资【仅 org_admin】：教师 403、管理员 200（需方定案，排期 A）")
+    void deleteVideoIsOrgAdminOnly() throws Exception {
+        jdbcTemplate.update("UPDATE vod_video SET owner_node_id = ? WHERE id = ?",
+                CourseFixtures.TA, CourseFixtures.VIDEO_OK);
+        JsonNode teacher = deleteWithToken(VIDEOS + "/" + CourseFixtures.VIDEO_OK,
+                loginAs(CourseFixtures.TA));
+        assertEquals(403, code(teacher),
+                "教师不再能删媒资 —— 他是 owner，归属这一关是过的，挡住他的只有 sys_role_menu 的绑定");
+
+        jdbcTemplate.update("UPDATE vod_video SET owner_node_id = ? WHERE id = ?",
+                CourseFixtures.ROOT, CourseFixtures.VIDEO_OK);
+        JsonNode admin = deleteWithToken(VIDEOS + "/" + CourseFixtures.VIDEO_OK,
+                loginAs(CourseFixtures.ROOT));
+        assertEquals(200, code(admin),
+                "这一侧不写，等于把删除整个关掉也全绿");
+    }
+
     @Test
     @DisplayName("§7.4 被未删除课时引用 → 20016")
     void deleteReferencedVideoIs20016() throws Exception {
@@ -296,7 +327,10 @@ class VodVideoIT extends CourseIntegrationTestBase {
     @Test
     @DisplayName("F-49 路径上的媒资：不存在 与 存在但不可见，两次响应完全一致（都是 404）")
     void pathAddressedExistenceIsNotProbeable() throws Exception {
-        String token = loginAs(CourseFixtures.TB);   // TB 与 ROOT 的媒资无授权关系
+        // 演员换成下级管理员 A1（与 ROOT 的媒资无授权关系）：教师已无 vod:video:remove，
+        // 用教师的话两次 DELETE 都会在权限层 403 —— 仍然「逐字相同」，本条会绿着退化成
+        // 「教师碰不到删除端点」，而它要证的是 404 不暴露存在性。
+        String token = loginAs(CourseFixtures.A1);
 
         // 用 DELETE 而不是 POST：两条都走 VodVideoAccessGuard#loadOwnedByPath 这同一个入口，
         // 而 outcome() 只支持 GET/PUT/DELETE（模块 08 建的，本条不为一个探针去改它）
@@ -311,11 +345,15 @@ class VodVideoIT extends CourseIntegrationTestBase {
     @Test
     @DisplayName("F-49 被授权者：可见但非 owner，写操作 403（不再收敛成 404 —— 他已知道它存在）")
     void grantedButNotOwnerGets403() throws Exception {
-        grantVideoTo(CourseFixtures.VIDEO_OK, CourseFixtures.TB);
-        String token = loginAs(CourseFixtures.TB);
+        // 【被授权者换成管理员 A1】教师已无该写权限（V202608210200），
+        // 继续用教师会让这条 403 【绿着退化】：判定从「可见但非 owner」
+        // 变成「压根没这个权限」，而本条要证的正是前者。A1 有权限、只是不是 owner。
+        grantVideoTo(CourseFixtures.VIDEO_OK, CourseFixtures.A1);
+        String token = loginAs(CourseFixtures.A1);
 
         JsonNode res = deleteWithToken(VIDEOS + "/" + CourseFixtures.VIDEO_OK, token);
-        assertEquals(403, code(res), "§7.4/§7.5/§7.6 逐字：仅被授权者只读，写操作返回 403");
+        assertEquals(403, code(res), "§7.4/§7.5/§7.6 逐字：仅被授权者只读，写操作返回 403 —— "
+                + "演员是管理员，他有 vod:video:remove，403 只可能来自归属判定");
     }
 
     // =====================================================================

@@ -92,9 +92,13 @@ class CourseShelfIT extends CourseIntegrationTestBase {
     @Test
     @DisplayName("被授权者不可上下架 → 403（契约 §2.5 规则 8）")
     void grantedNodeCannotShelf() throws Exception {
-        courseFixtures.grantCourse(CourseFixtures.C_ROOT, CourseFixtures.TB, CourseFixtures.TENANT_ID);
-        String token = loginAs(CourseFixtures.TB);
-        assertEquals(403, code(shelf(token, 1)));
+        // 【被授权者换成管理员 A1】教师已无该写权限（V202608210200），
+        // 继续用教师会让这条 403 【绿着退化】：判定从「可见但非 owner」
+        // 变成「压根没这个权限」，而本条要证的正是前者。A1 有权限、只是不是 owner。
+        courseFixtures.grantCourse(CourseFixtures.C_ROOT, CourseFixtures.A1, CourseFixtures.TENANT_ID);
+        String token = loginAs(CourseFixtures.A1);
+        assertEquals(403, code(shelf(token, 1)),
+                "演员是管理员，他有 course:course:status，403 只可能来自归属判定");
     }
 
     // =====================================================================

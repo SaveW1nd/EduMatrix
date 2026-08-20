@@ -75,8 +75,20 @@ class AuthMeIT extends AuthIntegrationTestBase {
      * <p><b>59 → 58</b>：{@code V202608210100} 删掉孤儿权限 {@code org:grant:edit}（F-104）。
      * <b>教师原本也能改授权有效期</b> —— 那条菜单绑了 org_admin 与 teacher 两个角色，
      * 所以两边各少一个，不是只有管理员那边动。
+     *
+     * <p><b>58 → 37</b>：{@code V202608210200} 撤销<b>三类受管资源的全部写权限</b>
+     *（需方 2026-08-21 定案，排期 A：资源由管理员生产，教师只教学与管理）——
+     * 课程 4 + 章节 4 + 课时 3 + 图文 3 + 题目 4 + 媒资 3 = <b>21 条</b>。
+     * 它是 {@code V202608210000} 那一条（只撤上传）的完整版，做法逐字相同。
+     *
+     * <p><b>撤的只有写，读一条没动</b>：{@code course:course:list} /
+     * {@code course:lesson:list} / {@code course:material:list} /
+     * {@code question:question:list} / {@code vod:video:list} 全部保留 ——
+     * 教师仍要看得见课程、题目、媒资，才能选来授权给名下学员、才能组卷布置作业。
+     * {@code homework:*} 六条与 {@code org:grant:grant} / {@code org:grant:revoke}
+     * 同样一条没动（需方明确「作业没关系」；授权是教学动作不是内容生产）。
      */
-    private static final int PERMS_TEACHER = 58;
+    private static final int PERMS_TEACHER = 37;
     /** super_admin：<b>31 → 33</b>，拆出的两个 perms 都绑了它。 */
     private static final int PERMS_SUPER_ADMIN = 33;
     private static final int PERMS_STUDENT = 0;
@@ -92,7 +104,7 @@ class AuthMeIT extends AuthIntegrationTestBase {
     }
 
     @Test
-    @DisplayName("判据 5｜teacher：roles 非空、perms 58（再删孤儿权限 org:grant:edit，F-104）")
+    @DisplayName("判据 5｜teacher：roles 非空、perms 37（再撤三类受管资源的 21 条写权限，排期 A）")
     void teacherPerms() throws Exception {
         JsonNode me = me(AuthFixtures.TEACHER_USERNAME);
 

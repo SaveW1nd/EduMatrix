@@ -206,12 +206,16 @@ class LessonIT extends CourseIntegrationTestBase {
     void nonOwnerCannotAddLesson() throws Exception {
         String ownerToken = loginAs(CourseFixtures.ROOT);
         long chapter = createChapter(ownerToken, "第一章");
-        courseFixtures.grantCourse(CourseFixtures.C_ROOT, CourseFixtures.TB, CourseFixtures.TENANT_ID);
+        // 【被授权者换成管理员 A1】教师已无该写权限（V202608210200），
+        // 继续用教师会让这条 403 【绿着退化】：判定从「可见但非 owner」
+        // 变成「压根没这个权限」，而本条要证的正是前者。A1 有权限、只是不是 owner。
+        courseFixtures.grantCourse(CourseFixtures.C_ROOT, CourseFixtures.A1, CourseFixtures.TENANT_ID);
 
-        String grantedToken = loginAs(CourseFixtures.TB);
+        String grantedToken = loginAs(CourseFixtures.A1);
         JsonNode rejected = client.postWithToken("/api/v1/course/lessons", grantedToken,
                 lessonBody(chapter, 1, CourseFixtures.VIDEO_OK, null, 1));
-        assertEquals(403, code(rejected), "被授权方只能用不能改（PRD F2-1 规则 8）");
+        assertEquals(403, code(rejected), "被授权方只能用不能改（PRD F2-1 规则 8）—— "
+                + "演员是管理员，他有 course:lesson:add，403 只可能来自归属判定");
     }
 
     @Test

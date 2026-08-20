@@ -42,6 +42,37 @@ class CourseCrudIT extends CourseIntegrationTestBase {
         assertEquals("IT08 课程编排机构", data(detail).path("ownerNodeName").asText());
     }
 
+    /**
+     * <b>需方 2026-08-21 定案（排期 A）的判据之一 —— 课程侧代表端点。</b>
+     *
+     * <p>「三类受管资源的写权限，教师一条不留；资源由管理员生产，教师只教学与管理」。
+     * 收窄靠迁移 {@code V202608210200} 撤销 {@code teacher → course:course:add} 的绑定，
+     * <b>不靠代码里的角色门</b>（与 {@code V202608210000} / F-72 逐字同源）。
+     *
+     * <p><b>两侧都要断言</b>：只写「教师 403」的话，把 {@code @SaCheckPermission} 换成
+     * 一个谁都没有的标识、甚至把整个端点删掉，都能让它全绿 —— 而那等于把建课功能
+     * 一起关了，且看不出来。
+     *
+     * <p><b>为什么创建端点最适合做代表</b>：它没有归属前置判定（还没有资源，谈不上 owner），
+     * 所以这里的 403 <b>只可能</b>来自权限绑定 —— 换成修改/删除端点的话，
+     * 「非 owner → 403」会先给出同一个结果，判据就不干净了。
+     */
+    @Test
+    @DisplayName("⚠ §1.3 新建课程【仅 org_admin】：教师 403、管理员 200（需方定案，排期 A）")
+    void createCourseIsOrgAdminOnly() throws Exception {
+        String body = "{\"courseName\":\"权限探针\",\"subject\":\"语文\"}";
+
+        JsonNode teacher = client.postWithToken("/api/v1/course/courses",
+                loginAs(CourseFixtures.TB), body);
+        assertEquals(403, code(teacher),
+                "教师不再能建课程 —— 判定来自 sys_role_menu 的绑定，不是代码里的角色门");
+
+        JsonNode admin = client.postWithToken("/api/v1/course/courses",
+                loginAs(CourseFixtures.ROOT), body);
+        assertEquals(200, code(admin),
+                "这一侧不写，等于把建课整个关掉也全绿");
+    }
+
     @Test
     @DisplayName("§0.2：上级管理员看不到下级教师自建的课程（两条判定取交集的必然结果）")
     void adminCannotSeeSubordinateTeacherOwnedCourse() throws Exception {
@@ -59,20 +90,24 @@ class CourseCrudIT extends CourseIntegrationTestBase {
     @DisplayName("PRD F2-1 验收标准 4：被授权者可读、可预览，但写操作 403")
     void grantedNodeIsReadOnly() throws Exception {
         // 模块 11 之前没有授权接口，手工插一行有效授权
-        courseFixtures.grantCourse(CourseFixtures.C_ROOT, CourseFixtures.TB, CourseFixtures.TENANT_ID);
-        String teacherToken = loginAs(CourseFixtures.TB);
+        // 【被授权者换成管理员 A1】教师已无该写权限（V202608210200），
+        // 继续用教师会让这条 403 【绿着退化】：判定从「可见但非 owner」
+        // 变成「压根没这个权限」，而本条要证的正是前者。A1 有权限、只是不是 owner。
+        courseFixtures.grantCourse(CourseFixtures.C_ROOT, CourseFixtures.A1, CourseFixtures.TENANT_ID);
+        String grantedToken = loginAs(CourseFixtures.A1);
 
-        JsonNode detail = client.getWithToken("/api/v1/course/courses/" + CourseFixtures.C_ROOT, teacherToken);
+        JsonNode detail = client.getWithToken("/api/v1/course/courses/" + CourseFixtures.C_ROOT, grantedToken);
         assertEquals(200, code(detail));
         assertEquals(2, data(detail).path("grantType").asInt(), "被授权行的 grantType 应为 2");
         assertTrue(data(detail).path("grantedNodeCount").isNull() || detail.toString().contains("grantType"),
                 "详情不返回 grantedNodeCount，无需断言");
 
         JsonNode updated = client.putWithToken("/api/v1/course/courses/" + CourseFixtures.C_ROOT,
-                teacherToken, "{\"courseName\":\"被授权者试图改名\"}");
-        assertEquals(403, code(updated), "被授权者不可写（契约 §2.5 规则 8）");
+                grantedToken, "{\"courseName\":\"被授权者试图改名\"}");
+        assertEquals(403, code(updated), "被授权者不可写（契约 §2.5 规则 8）—— "
+                + "演员是管理员，他有 course:course:edit，所以 403 只可能来自归属判定");
 
-        JsonNode deleted = deleteWithToken("/api/v1/course/courses/" + CourseFixtures.C_ROOT, teacherToken);
+        JsonNode deleted = deleteWithToken("/api/v1/course/courses/" + CourseFixtures.C_ROOT, grantedToken);
         assertEquals(403, code(deleted));
     }
 

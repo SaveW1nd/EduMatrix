@@ -95,14 +95,19 @@ class ExistenceProbeIT extends CourseIntegrationTestBase {
     @Test
     @DisplayName("图文资料：不存在与「不在我子树内」，三个端点上两两完全一致")
     void materialExistenceIsNotProbeable() throws Exception {
-        // 教师王建的资料；用同级教师李去探（互不在对方子树内）
-        String ownerToken = loginAs(CourseFixtures.TA);
+        // 【演员双双换成管理员，理由不是「教师建不了」这么简单】
+        // V202608210200 之后教师既没有 course:material:add（建不出探测目标），
+        // 也没有 edit / remove —— 后者更坏：PUT / DELETE 会在 @SaCheckPermission 上
+        // 双双 403，两次响应【依然逐字相同】，本条会【绿着退化】成
+        // 「教师碰不到这两个端点」，而它本来要证的是「404 不暴露存在性」。
+        // 改成：机构根建的资料，用下级管理员 A1 去探（ROOT 不在 A1 的子树内）。
+        String ownerToken = loginAs(CourseFixtures.ROOT);
         JsonNode created = client.postWithToken("/api/v1/course/materials", ownerToken,
-                "{\"title\":\"教师王的讲义\",\"content\":\"<p>x</p>\"}");
+                "{\"title\":\"机构根的讲义\",\"content\":\"<p>x</p>\"}");
         assertEquals(200, code(created), created.toString());
         long invisible = data(created).path("id").asLong();
 
-        String token = loginAs(CourseFixtures.TB);
+        String token = loginAs(CourseFixtures.A1);
         String body = "{\"title\":\"改名\",\"content\":\"<p>y</p>\"}";
 
         assertIndistinguishable("GET", "/api/v1/course/materials/%d", null, token, GHOST, invisible);

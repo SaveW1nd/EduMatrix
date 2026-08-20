@@ -134,18 +134,21 @@ class MaterialIT extends CourseIntegrationTestBase {
                 "{\"title\":\"ROOT 的讲义\",\"content\":\"<p>x</p>\",\"attachmentFileIds\":[\""
                         + CourseFixtures.ATTACH_FILE + "\"]}");
 
-        String teacherToken = loginAs(CourseFixtures.TA);
-        client.postWithToken("/api/v1/course/materials", teacherToken,
-                "{\"title\":\"教师王的讲义\",\"content\":\"<p>x</p>\"}");
+        // 演员从教师王（TA）换成下级管理员 A1：V202608210200 之后教师没有 course:material:add，
+        // 建资料这一步会 403。本条验的是【子树过滤】，不是「谁能建资料」——
+        // 换成同样在 ROOT 子树里的下级管理员，验的还是同一件事。
+        String subAdminToken = loginAs(CourseFixtures.A1);
+        client.postWithToken("/api/v1/course/materials", subAdminToken,
+                "{\"title\":\"华东大区的讲义\",\"content\":\"<p>x</p>\"}");
 
         JsonNode rootList = client.getWithToken("/api/v1/course/materials?pageSize=100", rootToken);
         assertEquals(2, data(rootList).path("total").asInt(),
-                "管理员按 owner_node_id 子树过滤，能看到下级教师建的资料 ——"
+                "上级管理员按 owner_node_id 子树过滤，能看到下级建的资料 ——"
                         + "资料不是受管资源，走的是契约 §2.4 子树规则而不是 §2.5 资源可见性");
 
-        JsonNode teacherList = client.getWithToken("/api/v1/course/materials?pageSize=100", teacherToken);
-        assertEquals(1, data(teacherList).path("total").asInt(), "教师只看得到自己节点的");
-        assertEquals(0, data(teacherList).path("list").get(0).path("attachmentCount").asInt());
+        JsonNode subList = client.getWithToken("/api/v1/course/materials?pageSize=100", subAdminToken);
+        assertEquals(1, data(subList).path("total").asInt(), "下级只看得到自己子树里的");
+        assertEquals(0, data(subList).path("list").get(0).path("attachmentCount").asInt());
 
         JsonNode rootRow = firstRowWithTitle(rootList, "ROOT 的讲义");
         assertEquals(1, rootRow.path("attachmentCount").asInt());
@@ -156,14 +159,18 @@ class MaterialIT extends CourseIntegrationTestBase {
     @Test
     @DisplayName("子树外的资料：详情 404（存在性不暴露）；跨租户 20009（被插件过滤）")
     void outOfScopeMaterialIsHidden() throws Exception {
-        String teacherToken = loginAs(CourseFixtures.TA);
-        JsonNode created = client.postWithToken("/api/v1/course/materials", teacherToken,
-                "{\"title\":\"教师王的讲义\",\"content\":\"<p>x</p>\"}");
+        // 建资料的演员换成下级管理员 A1（教师已无 course:material:add）；
+        // 探测方仍是教师李（TB）—— 他不在 A1 子树内，且 course:material:list 一直保留，
+        // 所以这条读侧断言验的仍然是子树过滤本身。
+        String ownerToken = loginAs(CourseFixtures.A1);
+        JsonNode created = client.postWithToken("/api/v1/course/materials", ownerToken,
+                "{\"title\":\"华东大区的讲义\",\"content\":\"<p>x</p>\"}");
+        assertEquals(200, code(created), created.toString());
         long id = data(created).path("id").asLong();
 
         String siblingToken = loginAs(CourseFixtures.TB);
         assertEquals(404, code(client.getWithToken("/api/v1/course/materials/" + id, siblingToken)),
-                "同级教师不在对方子树内 → 404");
+                "教师李不在 A1 子树内 → 404");
         assertEquals(404, code(client.getWithToken(
                 "/api/v1/course/materials/1968000000000099999", siblingToken)),
                 "F-42：路径上的资料不存在 → 404，与「不在我子树内」同一个结果。"

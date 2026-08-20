@@ -37,7 +37,10 @@ class QuestionWriteIT extends QuestionIntegrationTestBase {
     @Test
     @DisplayName("接口 6 创建单选题：owner_node_id 由服务端写入创建者所在节点，请求体不接受")
     void createSingleChoiceWritesOwnerFromSession() throws Exception {
-        JsonNode created = postWithToken(QUESTIONS, loginAs(QuestionFixtures.TA),
+        // 演员从教师王（TA）换成下级管理员 A1：V202608210200 之后教师没有
+        // question:question:add。本条验的是「owner 由服务端按会话写入、请求体说了不算」，
+        // 换成一个【不是 ROOT】的下级管理员，这个判据一字不变。
+        JsonNode created = postWithToken(QUESTIONS, loginAs(QuestionFixtures.A1),
                 single("{\"answer\":\"A\"}"));
         assertEquals(200, code(created));
         long id = data(created).path("id").asLong();
@@ -47,7 +50,27 @@ class QuestionWriteIT extends QuestionIntegrationTestBase {
 
         Long owner = jdbcTemplate.queryForObject(
                 "SELECT owner_node_id FROM qb_question WHERE id = ?", Long.class, id);
-        assertEquals(QuestionFixtures.TA, owner, "owner 必须是创建者所在节点，不是请求体给的");
+        assertEquals(QuestionFixtures.A1, owner, "owner 必须是创建者所在节点，不是请求体给的");
+    }
+
+    /**
+     * <b>需方 2026-08-21 定案（排期 A）的判据之一 —— 题目侧代表端点。</b>
+     *
+     * <p>收窄靠迁移 {@code V202608210200} 撤销 {@code teacher → question:question:add}
+     * 的绑定，<b>不靠代码里的角色门</b>。两侧都断言的理由与
+     * {@code CourseCrudIT#createCourseIsOrgAdminOnly} 逐字相同：只断教师那一侧的话，
+     * 把端点整个删掉也全绿。
+     */
+    @Test
+    @DisplayName("⚠ 接口 6 新建题目【仅 org_admin】：教师 403、管理员 200（需方定案，排期 A）")
+    void createQuestionIsOrgAdminOnly() throws Exception {
+        String body = single("{\"answer\":\"A\"}");
+
+        assertEquals(403, code(postWithToken(QUESTIONS, loginAs(QuestionFixtures.TA), body)),
+                "教师不再能建题目 —— 判定来自 sys_role_menu 的绑定，不是代码里的角色门");
+
+        assertEquals(200, code(postWithToken(QUESTIONS, loginAs(QuestionFixtures.ROOT), body)),
+                "这一侧不写，等于把建题整个关掉也全绿");
     }
 
     /** <b>三处静默故障之一</b>：判断题必须是 JSON 布尔字面量。 */
@@ -210,10 +233,14 @@ class QuestionWriteIT extends QuestionIntegrationTestBase {
     @Test
     @DisplayName("接口 7 被授权者【只读可用】：可见但改 → 403（不是 404，也不是 200）")
     void grantedUserCannotEdit() throws Exception {
-        questionFixtures.grantQuestion(QuestionFixtures.Q_SINGLE, QuestionFixtures.TB,
+        // 【被授权者换成管理员 A1，不是「教师建不了所以换」】
+        // 教师现在没有 question:question:edit，这条断言会【绿着退化】：
+        // 403 从「可见但非 owner」变成「压根没这个权限」，而它要证的正是前者。
+        // A1 是管理员、有 edit 权限，403 只可能来自归属判定。
+        questionFixtures.grantQuestion(QuestionFixtures.Q_SINGLE, QuestionFixtures.A1,
                 QuestionFixtures.TENANT_ID);
         assertEquals(ErrorCode.FORBIDDEN.getCode(), code(putWithToken(
-                QUESTIONS + "/" + QuestionFixtures.Q_SINGLE, loginAs(QuestionFixtures.TB),
+                QUESTIONS + "/" + QuestionFixtures.Q_SINGLE, loginAs(QuestionFixtures.A1),
                 "{\"difficulty\":5}")));
     }
 

@@ -89,6 +89,9 @@ class FlywayBaselineIT {
         // 202608160000 模块 07：拆 org:staff:list → org:admin:list / org:teacher:list（F-30）
         // 202608160100 模块 07：订正 org_student.anonymized_at 列注释 400 → 10209（F-28）
         // 202608200000 模块 10：撤销 teacher 的 question:category:* 三行绑定（F-72）
+        // 202608210000 需方定案二：撤销 teacher 的 vod:video:add 一行绑定（F-105）
+        // 202608210100 需方定案：删掉孤儿权限 org:grant:edit（菜单 1 行 + 绑定 2 行，F-104）
+        // 202608210200 需方定案（排期 A）：撤销 teacher 的 21 行受管资源【写】权限绑定
         //
         // 【本断言用 containsExactly 而不是 contains】新增迁移必须显式登记在这里 ——
         // 一个「多跑了一个没人知道的脚本」的环境与「少跑了一个」同样危险，
@@ -96,11 +99,11 @@ class FlywayBaselineIT {
         assertThat(versions).containsExactly(
                 "202608120000", "202608140000", "202608140100",
                 "202608150000", "202608160000", "202608160100", "202608200000",
-                "202608210000", "202608210100");
+                "202608210000", "202608210100", "202608210200");
     }
 
     @Test
-    @DisplayName("菜单与角色绑定初始化数据已就位（125 菜单 / 118 唯一 perms / 200 绑定）")
+    @DisplayName("菜单与角色绑定初始化数据已就位（125 菜单 / 118 唯一 perms / 179 绑定）")
     void menuAndRoleMenuInitialized() {
         Integer menus = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM sys_menu", Integer.class);
         Integer bindings = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM sys_role_menu", Integer.class);
@@ -125,8 +128,13 @@ class FlywayBaselineIT {
                         + "V202608210100 删掉孤儿权限 org:grant:edit 的【两条】绑定"
                         + "（org_admin 与 teacher 各一条，F-104），共 200 —— "
                         + "【是减 2 不是减 1】：只减 1 说明另一半没删干净，"
-                        + "而留下的那条会是指向不存在菜单的孤儿绑定行")
-                .isEqualTo(200);
+                        + "而留下的那条会是指向不存在菜单的孤儿绑定行；"
+                        + "V202608210200 撤销了 teacher 的【21 条】受管资源写权限绑定"
+                        + "（需方 2026-08-21 定案，排期 A：课程 4 + 章节 4 + 课时 3 + 图文 3 "
+                        + "+ 题目 4 + 媒资 3），共 179 —— "
+                        + "【这个数钉的是「21 条一条不落」】：少删任意一条都是 180，"
+                        + "而少删一条的表现是那一个按钮教师照样能点，没有别的症状")
+                .isEqualTo(179);
         assertThat(perms)
                 .as("117 + org:admin:list + org:teacher:list = 119；"
                         + "V202608210100 删掉 org:grant:edit 后 118 —— "
