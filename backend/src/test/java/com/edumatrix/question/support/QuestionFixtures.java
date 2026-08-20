@@ -203,7 +203,13 @@ public final class QuestionFixtures {
                 questionId + targetNodeId, questionId, targetNodeId, userIdOf(ROOT), tenantId);
     }
 
-    /** 已过期的授权行 —— 验「授权过期等同未授权」。 */
+    /**
+     * {@code valid_end} 在过去的授权行。
+     *
+     * <p><b>方法名保留、含义反转</b>：需方 2026-08-21 定案取消授权有效期后，
+     * 这一行与永久行没有任何区别 —— 它现在是<b>探针</b>（验「有效期谓词真的删干净了」），
+     * 不再是「过期」这个业务状态。见 {@code QuestionVisibilityIT#expiredGrantIsStillVisible}。
+     */
     public void grantQuestionExpired(long questionId, long targetNodeId, long tenantId) {
         jdbc.update("INSERT INTO org_resource_grant (id, resource_type, resource_id, target_node_id, "
                         + "valid_start, valid_end, grant_source, grant_by, grant_time, tenant_id, "

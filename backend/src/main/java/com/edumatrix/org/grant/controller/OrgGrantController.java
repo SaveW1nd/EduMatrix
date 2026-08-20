@@ -4,7 +4,6 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -15,20 +14,17 @@ import com.edumatrix.common.operlog.OperLog;
 import com.edumatrix.org.grant.dto.GrantCreateReq;
 import com.edumatrix.org.grant.dto.GrantHealthQueryReq;
 import com.edumatrix.org.grant.dto.GrantRevokeReq;
-import com.edumatrix.org.grant.dto.GrantValidityUpdateReq;
 import com.edumatrix.org.grant.dto.TransferPrecheckReq;
 import com.edumatrix.org.grant.dto.GrantableResourceQueryReq;
 import com.edumatrix.org.grant.dto.NodeGrantedResourceQueryReq;
 import com.edumatrix.org.grant.service.GrantQueryService;
 import com.edumatrix.org.grant.service.GrantOperLogWriter;
 import com.edumatrix.org.grant.service.GrantRevokeService;
-import com.edumatrix.org.grant.service.GrantValidityService;
 import com.edumatrix.org.grant.service.TransferPrecheckService;
 import com.edumatrix.org.grant.service.GrantWriteService;
 import com.edumatrix.org.grant.vo.GrantCreatedVO;
 import com.edumatrix.org.grant.vo.GrantHealthRowVO;
 import com.edumatrix.org.grant.vo.GrantRevokedVO;
-import com.edumatrix.org.grant.vo.GrantValidityUpdatedVO;
 import com.edumatrix.org.grant.vo.GrantableResourceVO;
 import com.edumatrix.org.grant.vo.TransferPrecheckVO;
 import com.edumatrix.org.grant.vo.NodeGrantedResourceVO;
@@ -55,18 +51,15 @@ public class OrgGrantController {
     private final GrantQueryService grantQueryService;
     private final GrantWriteService grantWriteService;
     private final GrantRevokeService grantRevokeService;
-    private final GrantValidityService grantValidityService;
     private final TransferPrecheckService transferPrecheckService;
 
     public OrgGrantController(GrantQueryService grantQueryService,
                               GrantWriteService grantWriteService,
                               GrantRevokeService grantRevokeService,
-                              GrantValidityService grantValidityService,
                               TransferPrecheckService transferPrecheckService) {
         this.grantQueryService = grantQueryService;
         this.grantWriteService = grantWriteService;
         this.grantRevokeService = grantRevokeService;
-        this.grantValidityService = grantValidityService;
         this.transferPrecheckService = transferPrecheckService;
     }
 
@@ -127,24 +120,6 @@ public class OrgGrantController {
             action = GrantOperLogWriter.ACTION_REVOKE)
     public R<GrantRevokedVO> revoke(@Valid @RequestBody GrantRevokeReq req) {
         return R.ok(grantRevokeService.revokeCascade(req));
-    }
-
-    /**
-     * 接口 40 §9.4 修改授权有效期。{@code org_admin} / {@code teacher}。
-     *
-     * <p><b>原地更新，一行都不删。</b> 它存在的唯一理由是：没有它，续期只能
-     * 「撤销 + 重新授权」，而撤销强制级联整棵子树 —— 给一个教师改一下到期日，
-     * 会连带清空他名下全部学员的授权。<b>续期反而制造了一次事故。</b>
-     *
-     * <p>缩短时子树内晚于新值的行一并截断（防时间维度悬挂），<b>延长则不级联</b>——
-     * 收紧自动传导、放松需要显式操作。
-     */
-    @PutMapping("/grants/validity")
-    @SaCheckPermission("org:grant:edit")
-    @OperLog(module = GrantOperLogWriter.MODULE_GRANT,
-            action = GrantOperLogWriter.ACTION_EDIT_VALIDITY)
-    public R<GrantValidityUpdatedVO> updateValidity(@Valid @RequestBody GrantValidityUpdateReq req) {
-        return R.ok(grantValidityService.updateValidity(req));
     }
 
     /**

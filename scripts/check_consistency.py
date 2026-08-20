@@ -1233,6 +1233,44 @@ def check_c10_type_semantics(tables):
 _TOC_ROW = re.compile(r'^\| (\d+) \| ([^|]+?) \| (GET|POST|PUT|DELETE|PATCH) \| `([^`]+)`', re.M)
 
 
+# 已退役的接口编号：登记在册的号【可以在目录里缺席，也可以在正文里被继续引用】。
+#
+# 【这不是把连续性判据放宽】——目录表缺号仍然是 ERROR，只是登记过的那几个号例外。
+# C11 当初抓到的那类事故（插入一个接口后 §2.3 整段编号错位一位，字面读出来是
+# 「教师可调转交管理员」）里【每个号都移动了、一个都不在清单里】，本判据照样响。
+#
+# 【每一条必须写明为什么退役】——没有解释的豁免会稀释信号，
+# 与 F-87 登记为「已撤回」而不是留白是同一条纪律。
+#
+# 【为什么退役而不是重编号】：backend 的 Java 注释里有近 600 处「接口 N」，
+# 而一致性脚本只扫 Markdown、约定脚本一处不管 ——【没有任何检查在核对它们】。
+# 「改漏了会报错」对文档那几十处成立，对代码那几十处不成立；而漏改的后果是
+# 注释写着「接口 42」、42 号仍然存在仍是真接口、只是变成了另一个 ——
+# 不报错、不断链，只是安静地把人指错地方（本项目命名过的失效模式⑦）。
+#
+# 【它会不会红 —— 已做变异验证，下面是实测输出】
+#   M31 手工从 02 分册目录里再删一个【未登记】的号（45 新建权限模板）：
+#     ❌ 3 错误 —— "目录表编号不连续：… 共 50 项（已登记退役：[40]）"
+#                + 04-实施计划.md 两处跨册引用「接口 45」失效
+#     也就是说豁免【只对登记在册的那一个号生效】，别的缺口照常报。
+#   M32 把 40 从本清单里拿掉：
+#     ❌ 11 错误 —— 连续性 + 本册 3 处「接口 40」引用 + 跨册 4 处
+#     也就是说这个清单是【真的在被读】，不是写了个没人用的常量。
+#   两者恢复后：✅ 0 错 0 警。
+_RETIRED_INTERFACES = {
+    # 02-组织机构
+    '02-组织机构': {
+        40: '修改授权有效期 —— 需方 2026-08-21 定案「授权一律永久有效」，'
+            '接口随之删除、§9.4 保留为墓碑小节（04-实施计划.md F-103）',
+    },
+}
+
+
+def _retired_of(vol):
+    """该分册已登记退役的接口号集合。"""
+    return set(_RETIRED_INTERFACES.get(vol, {}))
+
+
 def check_c11_interface_refs():
     """C11 正文里的「接口 N」必须指向本分册目录表中真实存在的编号
 
@@ -1295,6 +1333,8 @@ def check_c11_interface_refs():
                 if os.path.basename(path).startswith(vol):
                     continue         # 本册内引用交给下面的逐册校验
                 tgt = volume_tocs[vol]
+                if n in _retired_of(vol):
+                    continue         # 指向已登记退役的号：墓碑引用，放行
                 if n not in tgt:
                     report('ERROR', 'C11', path,
                            f'第 {i} 行跨册引用「{vol} 接口 {n}」，该分册目录只有 1~{len(tgt)}')
@@ -1329,9 +1369,15 @@ def check_c11_interface_refs():
         toc = {int(m.group(1)): m.group(2).strip() for m in _TOC_ROW.finditer(text)}
         if not toc:
             continue                       # 00-通用约定 无接口目录
-        if sorted(toc) != list(range(1, len(toc) + 1)):
+        vol_name = re.match(r'(0\d-[^.]+)\.md', os.path.basename(path))
+        retired = _retired_of(vol_name.group(1)) if vol_name else set()
+        # 期望编号 = 1..(在册数 + 已登记退役数)，扣掉登记在册的那几个号。
+        # 【未登记的缺口照常 ERROR】—— 豁免只对人工登记且写明理由的单个号生效
+        expected = [i for i in range(1, len(toc) + len(retired) + 1) if i not in retired]
+        if sorted(toc) != expected:
             report('ERROR', 'C11', path,
-                   f'目录表编号不连续：{sorted(toc)[:12]}… 共 {len(toc)} 项')
+                   f'目录表编号不连续：{sorted(toc)[:12]}… 共 {len(toc)} 项'
+                   + (f'（已登记退役：{sorted(retired)}）' if retired else ''))
         in_trigger_table = False
         for i, line in enumerate(text.split('\n'), 1):
             for m in re.finditer(r'接口\s*(\d+)', line):
@@ -1339,6 +1385,8 @@ def check_c11_interface_refs():
                 # 跨分册引用形如「03-课程与视频接口 26」，不按本册目录校验
                 if re.search(r'0\d-[^\s]{0,10}接口\s*$', line[:m.start() + 2]):
                     continue
+                if n in retired:
+                    continue         # 墓碑小节与变更注记要能写出自己的号
                 if n not in toc:
                     report('ERROR', 'C11', path,
                            f'第 {i} 行引用「接口 {n}」，本分册目录只有 1~{len(toc)}')
@@ -1358,7 +1406,7 @@ def check_c11_interface_refs():
                 bare = line                      # §2.3 权限总览行
             for bm in re.finditer(r'(?<![\d.])(\d{1,2})(?![\d.%s])' % '', bare):
                 n = int(bm.group(1))
-                if n and n not in toc:
+                if n and n not in toc and n not in retired:
                     report('ERROR', 'C11', path,
                            f'第 {i} 行的裸编号 {n} 超出本分册目录范围 1~{len(toc)}')
 

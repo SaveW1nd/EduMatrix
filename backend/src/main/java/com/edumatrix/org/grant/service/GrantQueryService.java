@@ -135,8 +135,6 @@ public class GrantQueryService {
         Map<Long, String> nodeNames = nodeNameReader.nodeNames(
                 rows.stream().map(GrantableResourceItem::getOwnerNodeId).filter(java.util.Objects::nonNull)
                         .distinct().toList());
-        Map<Long, OrgResourceGrant> myHoldings = myHoldingsOf(type, myNodeId, rows);
-
         List<GrantableResourceVO> list = new ArrayList<>(rows.size());
         for (GrantableResourceItem item : rows) {
             GrantableResourceVO vo = new GrantableResourceVO();
@@ -147,42 +145,12 @@ public class GrantQueryService {
             vo.setOwnerNodeName(nodeNames.get(item.getOwnerNodeId()));
             vo.setSource(item.getSource());
             vo.setExtra(item.getExtra());
-            // §9.1 字段说明：validStart/validEnd 是【我自己持有该资源的有效期】。
-            // 自有资源两端为 null，表示永久 —— 不是「没查到」
-            OrgResourceGrant holding = myHoldings.get(item.getResourceId());
-            if (holding != null) {
-                vo.setValidStart(holding.getValidStart());
-                vo.setValidEnd(holding.getValidEnd());
-            }
+            // §9.1 的 validStart/validEnd 【恒为 null】：需方 2026-08-21 定案
+            // 「授权一律永久有效」—— 字段保留（响应结构不变），但没有任何一条路径给它赋值。
+            // 这不是缺陷，文档已写明
             list.add(vo);
         }
         return PageResult.of(page.getTotal(), list);
-    }
-
-    /**
-     * 本页里「我受授权持有」的那些行的有效期。
-     *
-     * <p><b>只按已给定的资源 ID 取值，不在这里重新推导「我持有哪些」</b> ——
-     * 那个集合的唯一来源是 {@code ResourceGrantReader}。若这里再写一遍谓词，
-     * 就有了两份「我持有什么」的实现，而两份都返回 200。
-     */
-    private Map<Long, OrgResourceGrant> myHoldingsOf(ResourceType type, Long myNodeId,
-                                                     List<GrantableResourceItem> rows) {
-        List<Long> grantedInPage = rows.stream()
-                .filter(item -> item.getSource() == GrantableResourceItem.SOURCE_GRANTED)
-                .map(GrantableResourceItem::getResourceId)
-                .toList();
-        if (grantedInPage.isEmpty()) {
-            return Map.of();
-        }
-        Map<Long, OrgResourceGrant> byResource = new LinkedHashMap<>();
-        for (OrgResourceGrant row : grantMapper.selectList(new LambdaQueryWrapper<OrgResourceGrant>()
-                .eq(OrgResourceGrant::getResourceType, type.code())
-                .eq(OrgResourceGrant::getTargetNodeId, myNodeId)
-                .in(OrgResourceGrant::getResourceId, grantedInPage))) {
-            byResource.put(row.getResourceId(), row);
-        }
-        return byResource;
     }
 
     // =====================================================================
@@ -202,7 +170,7 @@ public class GrantQueryService {
      * 必须先把行取出来、批量解析名称，才谈得上按名字筛。
      *
      * <p>于是只有两条路可选：<b>(a)</b> 无 keyword 时走 SQL 分页、有 keyword 时走内存；
-     * <b>(b)</b> 一律走内存。取 (b)。(a) 的代价是<b>两条路径的排序与过期过滤必须逐字一致</b>，
+     * <b>(b)</b> 一律走内存。取 (b)。(a) 的代价是<b>两条路径的排序必须逐字一致</b>，
      * 而一旦分叉，表现是「加了关键词之后翻页结果对不上」—— 接口 200、字段齐全、结果错。
      * 低频管理页不值得为此冒险。
      *
@@ -233,10 +201,10 @@ public class GrantQueryService {
                     nodeId, rows.size());
         }
 
-        LocalDateTime now = LocalDateTime.now();
-        List<OrgResourceGrant> visible = rows.stream()
-                .filter(row -> req.includeExpired() || active(row, now))
-                .toList();
+        // 【授权没有有效期，于是这里不再过滤】——需方 2026-08-21 定案。
+        // req.includeExpired() 保留但【恒无差别】：没有任何一行会「过期」。
+        // 参数不删是因为它在接口 41 的参数表里，删它是接口签名变更；行为恒定已写进文档
+        List<OrgResourceGrant> visible = rows;
 
         Map<String, String> resourceNames = resourceNamesOf(visible);
         Map<Long, String> nodeNames = nodeNameReader.nodeNames(List.of(nodeId));
@@ -259,9 +227,9 @@ public class GrantQueryService {
             vo.setResourceName(resourceName);
             vo.setTargetNodeId(row.getTargetNodeId());
             vo.setTargetNodeName(nodeNames.get(row.getTargetNodeId()));
-            vo.setValidStart(row.getValidStart());
-            vo.setValidEnd(row.getValidEnd());
-            vo.setExpired(row.getValidEnd() != null && row.getValidEnd().isBefore(now));
+            // validStart / validEnd 【恒为 null】、expired 【恒为 false】——
+            // 授权一律永久有效（需方 2026-08-21 定案），字段保留、无人赋值
+            vo.setExpired(false);
             vo.setGrantSource(row.getGrantSource());
             vo.setGrantSourceName(OrgResourceGrant.sourceName(row.getGrantSource()));
             vo.setSourceRefId(row.getSourceRefId());
@@ -281,19 +249,6 @@ public class GrantQueryService {
         int from = Math.min((pageNum - 1) * pageSize, all.size());
         int to = Math.min(from + pageSize, all.size());
         return PageResult.of(all.size(), List.copyOf(all.subList(from, to)));
-    }
-
-    /**
-     * 有效期内 = {@code valid_start} 已到 <b>且</b> {@code valid_end} 未过。
-     *
-     * <p>上界用 {@code !isBefore(now)}（即 {@code >= now}），与
-     * {@code ResourceGrantMapper.VALID_NOW} 逐字同口径 —— D7 那个分叉就是从
-     * 「有的地方 {@code >}、有的地方 {@code >=}」长出来的。
-     */
-    private static boolean active(OrgResourceGrant row, LocalDateTime now) {
-        boolean started = row.getValidStart() == null || !row.getValidStart().isAfter(now);
-        boolean notEnded = row.getValidEnd() == null || !row.getValidEnd().isBefore(now);
-        return started && notEnded;
     }
 
     /** 按资源类型分组批量解析资源名 —— 三类各一次查询，不逐行点查。 */
@@ -380,7 +335,6 @@ public class GrantQueryService {
                 .filter(java.util.Objects::nonNull).distinct().toList());
         LocalDateTime detectedTime = lastRunOf();
 
-        boolean expiring = "expiring".equals(req.getType());
         List<GrantHealthRowVO> list = new ArrayList<>(page.size());
         for (var row : page) {
             GrantHealthRowVO vo = new GrantHealthRowVO();
@@ -389,10 +343,12 @@ public class GrantQueryService {
             vo.setResourceName(resourceNames.get(nameKey(row.getResourceType(), row.getResourceId())));
             vo.setTargetNodeId(row.getTargetNodeId());
             vo.setTargetNodeName(row.getTargetNodeName());
-            // §9.6 字段说明：expiring 时 missingNodeId 为 null
-            vo.setMissingNodeId(expiring ? null : row.getParentNodeId());
-            vo.setMissingNodeName(expiring ? null : nodeNames.get(row.getParentNodeId()));
-            vo.setValidEnd(row.getValidEnd());
+            // 【原先这里按 type 分叉：expiring 时 missingNodeId 置 null（§9.6 字段说明）】
+            // 授权取消有效期后 expiring 恒为空清单，本循环在 type=expiring 时【一次都不进】——
+            // 那个三元表达式的两个分支【区分不出来】，留着就是一段无人能证伪的代码。删掉
+            vo.setMissingNodeId(row.getParentNodeId());
+            vo.setMissingNodeName(nodeNames.get(row.getParentNodeId()));
+            // validEnd 恒为 null（授权无有效期），字段保留
             vo.setDetectedTime(detectedTime);
             list.add(vo);
         }

@@ -39,14 +39,12 @@ public interface TransferPrecheckMapper {
     /**
      * 这些<b>学生节点</b>当前持有的全部有效授权。
      *
-     * <p><b>有效期谓词直接复用 {@link ResourceGrantMapper#VALID_NOW}</b>，不抄一份。
+     * <p><b>行有效性谓词直接复用 {@link ResourceGrantMapper#NOT_DELETED}</b>，不抄一份。
      *
-     * <p>抄一份还会撞上那个常量注释里写明的坑：它<b>刻意写成 {@code NOW() >= valid_start}
-     * 而不是 {@code valid_start <= NOW()}</b>，因为拼进 {@code <script>} 的 SQL 要按 XML 解析，
-     * <b>裸的 {@code <} 会让 MyBatis 在启动时抛
-     * {@code SAXParseException: 元素内容必须由格式正确的字符数据或标记组成}</b>。
-     * 我第一版就是自己写了一遍 {@code valid_start <= NOW()}，
-     * 表现是<b>整个 Spring 上下文起不来</b> —— 响亮失败，但完全可以不发生。
+     * <p>抄一份还会撞上那个常量注释里写明的坑：拼进 {@code <script>} 的 SQL 要按 XML 解析，
+     * 裸的 {@code <} 会让 MyBatis 在<b>启动时</b>抛 SAXParseException。
+     * 那个坑现在只对「将来把有效期谓词加回来的人」有意义，说明留在
+     * {@link ResourceGrantMapper#NOT_DELETED} 的注释里 —— 本处不复述。
      */
     @Select("<script>"
             + "SELECT resource_type AS resourceType, resource_id AS resourceId, "
@@ -54,7 +52,7 @@ public interface TransferPrecheckMapper {
             + "  FROM org_resource_grant "
             + " WHERE target_node_id IN "
             + "<foreach collection='nodeIds' item='id' open='(' separator=',' close=')'>#{id}</foreach>"
-            + ResourceGrantMapper.VALID_NOW
+            + ResourceGrantMapper.NOT_DELETED
             + "</script>")
     List<HeldGrantRow> selectHeldGrants(@Param("nodeIds") List<Long> nodeIds);
 

@@ -78,44 +78,22 @@ public interface GrantHealthMapper {
     @Select("SELECT g.id, g.resource_type AS resourceType, g.resource_id AS resourceId, "
             + "       g.target_node_id AS targetNodeId, n.node_name AS targetNodeName, "
             + "       n.parent_id AS parentNodeId, p.node_name AS parentNodeName, "
-            + "       n.ancestors AS targetAncestors, g.valid_end AS validEnd, "
+            + "       n.ancestors AS targetAncestors, "
             + "       g.grant_time AS grantTime "
             + "  FROM org_resource_grant g "
             + "  JOIN org_node n ON n.id = g.target_node_id AND n.deleted_at = 0 "
             + "  JOIN org_node p ON p.id = n.parent_id AND p.deleted_at = 0 "
             + " WHERE g.deleted_at = 0 AND n.parent_id > 0 "
-            + "   AND (g.valid_start IS NULL OR g.valid_start <= NOW()) "
-            + "   AND (g.valid_end IS NULL OR g.valid_end >= NOW()) "
             + "   AND NOT EXISTS (SELECT 1 FROM org_resource_grant pg "
             + "                    WHERE pg.resource_type = g.resource_type "
             + "                      AND pg.resource_id = g.resource_id "
             + "                      AND pg.target_node_id = n.parent_id "
-            + "                      AND pg.deleted_at = 0 "
-            + "                      AND (pg.valid_start IS NULL OR pg.valid_start <= NOW()) "
-            + "                      AND (pg.valid_end IS NULL OR pg.valid_end >= NOW())) "
+            + "                      AND pg.deleted_at = 0) "
             + " ORDER BY g.id")
     List<HealthRow> selectSuspects();
 
     /**
-     * 30 天内到期的授权（{@code type=expiring}，PRD FR-3 规则 6 的临期提醒）。
-     *
-     * <p>永久有效（{@code valid_end IS NULL}）的不算临期 —— 它没有「期」。
-     */
-    @Select("SELECT g.id, g.resource_type AS resourceType, g.resource_id AS resourceId, "
-            + "       g.target_node_id AS targetNodeId, n.node_name AS targetNodeName, "
-            + "       n.parent_id AS parentNodeId, NULL AS parentNodeName, "
-            + "       n.ancestors AS targetAncestors, g.valid_end AS validEnd, "
-            + "       g.grant_time AS grantTime "
-            + "  FROM org_resource_grant g "
-            + "  JOIN org_node n ON n.id = g.target_node_id AND n.deleted_at = 0 "
-            + " WHERE g.deleted_at = 0 AND g.valid_end IS NOT NULL "
-            + "   AND g.valid_end >= NOW() "
-            + "   AND g.valid_end <= DATE_ADD(NOW(), INTERVAL #{days} DAY) "
-            + " ORDER BY g.valid_end")
-    List<HealthRow> selectExpiring(@Param("days") int days);
-
-    /**
-     * 每个节点当前持有的<b>有效</b>授权行数 —— 契约 §7.1 的
+     * 每个节点当前持有的<b>未撤销</b>授权行数 —— 契约 §7.1 的
      * {@code grant_rows_per_node}（Histogram，P99 &gt; 2000 告警）。
      *
      * <p><b>盯单节点持有量而不是表总量</b>：点查的扫描行数只由单节点持有量决定，
@@ -123,8 +101,6 @@ public interface GrantHealthMapper {
      */
     @Select("SELECT target_node_id AS nodeId, COUNT(1) AS rows_ FROM org_resource_grant "
             + " WHERE deleted_at = 0 "
-            + "   AND (valid_start IS NULL OR valid_start <= NOW()) "
-            + "   AND (valid_end IS NULL OR valid_end >= NOW()) "
             + " GROUP BY target_node_id")
     List<NodeRowCount> selectRowsPerNode();
 
@@ -157,7 +133,6 @@ public interface GrantHealthMapper {
         private Long parentNodeId;
         private String parentNodeName;
         private String targetAncestors;
-        private java.time.LocalDateTime validEnd;
         private java.time.LocalDateTime grantTime;
 
         public Long getId() {
@@ -222,14 +197,6 @@ public interface GrantHealthMapper {
 
         public void setTargetAncestors(String targetAncestors) {
             this.targetAncestors = targetAncestors;
-        }
-
-        public java.time.LocalDateTime getValidEnd() {
-            return validEnd;
-        }
-
-        public void setValidEnd(java.time.LocalDateTime validEnd) {
-            this.validEnd = validEnd;
         }
 
         public java.time.LocalDateTime getGrantTime() {

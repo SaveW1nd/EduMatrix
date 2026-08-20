@@ -28,7 +28,8 @@ import org.apache.ibatis.annotations.Select;
  * <p><b>祖先链判定绝不进 SQL</b>：判「A 是不是 B 的祖先」只有 {@code FIND_IN_SET} 一种写法，
  * 而契约 §7.1 写死它出现在慢查询日志中即视为缺陷（约定检查② 会 grep）。
  *
- * <p><b>有效期上界是 {@code >= NOW()}</b>，与 {@code ResourceGrantMapper.VALID_NOW} 同口径
+ * <p><b>不判有效期</b>（需方 2026-08-21 定案：授权一律永久有效），
+ * 与 {@code ResourceGrantMapper.NOT_DELETED} 同口径
  *（D7 已收敛，见那里的注释）。
  */
 @Mapper
@@ -50,8 +51,6 @@ public interface OutOfScopeGrantMapper {
             + "  FROM org_resource_grant g "
             + "  JOIN org_node n ON n.id = g.target_node_id AND n.deleted_at = 0 "
             + " WHERE g.deleted_at = 0 "
-            + "   AND (g.valid_start IS NULL OR g.valid_start <= NOW()) "
-            + "   AND (g.valid_end IS NULL OR g.valid_end >= NOW()) "
             + "   AND (n.id = #{movingNodeId} "
             + "        OR n.ancestors = #{prefix} OR n.ancestors LIKE CONCAT(#{prefix}, ',%'))")
     List<SubtreeGrantRow> selectSubtreeGrants(@Param("movingNodeId") Long movingNodeId,

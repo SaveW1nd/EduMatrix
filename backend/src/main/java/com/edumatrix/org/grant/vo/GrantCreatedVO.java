@@ -7,15 +7,18 @@ import java.util.List;
 /**
  * 接口 38 授权资源给节点的响应（03-02 §9.2 响应示例逐字段）。
  *
- * <h2>{@code effectiveValidEnd} 为什么可能与某些行的实际值不同</h2>
- * <p>契约 §2.5 规则 7 的截断上界是「<b>授权人自身对该资源的</b> {@code valid_end}」——
- * <b>逐个资源各有各的上界</b>。一次授 3 门课、我对它们的到期日各不相同时，
- * 落库的 3 行 {@code valid_end} 就可能是 3 个值，而响应只有一个字段。
+ * <h2>四个有效期字段<b>已删除</b>，不是恒空</h2>
+ * <p>需方 2026-08-21 定案「授权一律永久有效」之后，{@code validStart} /
+ * {@code validEnd} / {@code validEndTruncated} / {@code effectiveValidEnd}
+ * 全部失去了对象：契约 §2.5 规则 7 的截断上界（「不晚于授权人自身对该资源的
+ * {@code valid_end}」）已无适用对象，截断逻辑随之删除。
  *
- * <p>处置：<b>逐行按各自的上界截断</b>（那才是规则 7 要的，统一取最小会把本来
- * 不必收紧的行也收紧 —— 那是另一种错），{@code effectiveValidEnd} 回<b>最严的那个</b>，
- * {@code validEndTruncated} 只要有任意一行被截断即为 {@code true}。
- * 逐行的真实值经接口 41 可查。已登记（需方可推翻）。
+ * <p><b>为什么这四个是删而不是留成恒空</b>：接口 41 的 {@code validEnd} 需方点名
+ * 「恒为 null」保留（它是一条<b>事实</b>字段，恒空只是说「没有到期日」）；
+ * 而这四个是<b>截断动作的产物</b>，动作没了字段就是纯噪音 ——
+ * 一个永远为 {@code false} 的 {@code validEndTruncated} 只会让下一个人去找那段不存在的逻辑。
+ * F-92（「一个响应字段装不下逐行不同的日期」）已标注<b>已随取消有效期而消失</b>，
+ * 正文原样保留：两年后有人做「试听一个月」时需要知道上次是怎么翻车的。
  */
 public class GrantCreatedVO {
 
@@ -31,17 +34,6 @@ public class GrantCreatedVO {
 
     /** 跳过明细，最多前 100 条。 */
     private List<DuplicatedGrantVO> duplicated = new ArrayList<>();
-
-    private LocalDateTime validStart;
-
-    /** 请求里的失效时间（原值，未截断）。 */
-    private LocalDateTime validEnd;
-
-    /** 是否有任意一行因超出授权人自身有效期而被截断。 */
-    private Boolean validEndTruncated;
-
-    /** 实际落库的失效时间中<b>最严</b>的那个；全部永久时为 {@code null}。 */
-    private LocalDateTime effectiveValidEnd;
 
     private Integer grantSource;
     private LocalDateTime grantTime;
@@ -92,38 +84,6 @@ public class GrantCreatedVO {
 
     public void setDuplicated(List<DuplicatedGrantVO> duplicated) {
         this.duplicated = duplicated == null ? new ArrayList<>() : duplicated;
-    }
-
-    public LocalDateTime getValidStart() {
-        return validStart;
-    }
-
-    public void setValidStart(LocalDateTime validStart) {
-        this.validStart = validStart;
-    }
-
-    public LocalDateTime getValidEnd() {
-        return validEnd;
-    }
-
-    public void setValidEnd(LocalDateTime validEnd) {
-        this.validEnd = validEnd;
-    }
-
-    public Boolean getValidEndTruncated() {
-        return validEndTruncated;
-    }
-
-    public void setValidEndTruncated(Boolean validEndTruncated) {
-        this.validEndTruncated = validEndTruncated;
-    }
-
-    public LocalDateTime getEffectiveValidEnd() {
-        return effectiveValidEnd;
-    }
-
-    public void setEffectiveValidEnd(LocalDateTime effectiveValidEnd) {
-        this.effectiveValidEnd = effectiveValidEnd;
     }
 
     public Integer getGrantSource() {

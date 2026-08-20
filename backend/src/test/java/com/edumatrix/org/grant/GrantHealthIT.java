@@ -114,9 +114,10 @@ class GrantHealthIT extends GrantIntegrationTestBase {
     // =====================================================================
 
     @Test
-    @DisplayName("missingNodeId = 该补授给谁；expiring 时为 null（§9.6 字段说明）")
+    @DisplayName("missingNodeId = 该补授给谁；type=expiring 【恒为空清单】（需方定案取消有效期）")
     void missingNodeAndExpiring() throws Exception {
         seedOneDangling();
+        // 造一条【将来到期】的行 —— 取消有效期之前它会出现在 expiring 里
         grantFixtures.grant(1, GrantFixtures.C3, GrantFixtures.A1, GrantFixtures.ROOT,
                 null, java.time.LocalDateTime.now().plusDays(10)
                         .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
@@ -129,8 +130,15 @@ class GrantHealthIT extends GrantIntegrationTestBase {
         assertThat(dangling.path("resourceName").asText()).isEqualTo("高三数学·函数与导数");
 
         JsonNode expiring = data(getWithToken(HEALTH + "?type=expiring", token));
-        assertThat(expiring.path("total").asInt()).isEqualTo(1);
-        assertThat(expiring.path("list").get(0).path("missingNodeId").isNull()).isTrue();
+        assertThat(expiring.path("total").asInt())
+                .as("没有到期日就没有「临期」。type 这个取值【保留】（删它是接口签名变更），"
+                        + "调用返回 200 + 空清单 —— 上面那条明明写着 10 天后到期的行也不出现。"
+                        + "这不是缺陷，文档已写明")
+                .isZero();
+        assertThat(data(getWithToken(HEALTH + "?type=expiring", token))
+                .path("summary").path("danglingCount").asInt())
+                .as("summary 的两个数与 type 无关，照常算")
+                .isEqualTo(1);
     }
 
     @Test

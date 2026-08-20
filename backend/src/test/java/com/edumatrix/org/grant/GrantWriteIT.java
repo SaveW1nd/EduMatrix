@@ -253,53 +253,6 @@ class GrantWriteIT extends GrantIntegrationTestBase {
     }
 
     // =====================================================================
-    // 有效期：截断不报错
-    // =====================================================================
-
-    @Test
-    @DisplayName("有效期：超出授权人自身的部分【自动截断，不报错】（契约 §2.5 规则 7）")
-    void validEndIsTruncatedSilently() throws Exception {
-        grantFixtures.grant(1, GrantFixtures.C1, GrantFixtures.A1, GrantFixtures.ROOT,
-                null, "2026-12-31 23:59:59");
-
-        JsonNode resp = postWithToken(GRANTS, loginAs(GrantFixtures.A1), body("""
-                {"resourceType":1,"resourceIds":["%d"],"targetNodeIds":["%d"],
-                 "validEnd":"2027-06-30 23:59:59"}
-                """.formatted(GrantFixtures.C1, GrantFixtures.T1)));
-
-        assertThat(code(resp)).as("截断【不报错】").isEqualTo(200);
-        assertThat(data(resp).path("validEndTruncated").asBoolean()).isTrue();
-        assertThat(data(resp).path("effectiveValidEnd").asText()).isEqualTo("2026-12-31 23:59:59");
-        assertThat(jdbcTemplate.queryForObject(
-                "SELECT DATE_FORMAT(valid_end, '%Y-%m-%d %H:%i:%s') FROM org_resource_grant "
-                        + "WHERE resource_id = ? AND target_node_id = ? AND deleted_at = 0",
-                String.class, GrantFixtures.C1, GrantFixtures.T1))
-                .as("PRD FR-3 验收标准：实际写入 12-31，不是请求里的次年 06-30")
-                .isEqualTo("2026-12-31 23:59:59");
-    }
-
-    @Test
-    @DisplayName("有效期：owner 授出自有资源不受截断（契约 §2.5 规则 7 末句）")
-    void ownerIsNotCapped() throws Exception {
-        JsonNode resp = postWithToken(GRANTS, loginAs(GrantFixtures.ROOT), body("""
-                {"resourceType":1,"resourceIds":["%d"],"targetNodeIds":["%d"],
-                 "validEnd":"2099-12-31 23:59:59"}
-                """.formatted(GrantFixtures.C1, GrantFixtures.A1)));
-        assertThat(code(resp)).isEqualTo(200);
-        assertThat(data(resp).path("validEndTruncated").asBoolean()).isFalse();
-    }
-
-    @Test
-    @DisplayName("有效期：validStart >= validEnd → 400（参数校验类，不占业务码）")
-    void invalidPeriodIs400() throws Exception {
-        assertThat(code(postWithToken(GRANTS, loginAs(GrantFixtures.ROOT), body("""
-                {"resourceType":1,"resourceIds":["%d"],"targetNodeIds":["%d"],
-                 "validStart":"2027-01-01 00:00:00","validEnd":"2026-01-01 00:00:00"}
-                """.formatted(GrantFixtures.C1, GrantFixtures.A1)))))
-                .isEqualTo(ErrorCode.BAD_REQUEST.getCode());
-    }
-
-    // =====================================================================
     // 5000 上限
     // =====================================================================
 
