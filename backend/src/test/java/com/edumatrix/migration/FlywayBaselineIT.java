@@ -95,11 +95,12 @@ class FlywayBaselineIT {
         // 而 Flyway 自己只保证顺序与幂等，不保证【清单是谁批准的】
         assertThat(versions).containsExactly(
                 "202608120000", "202608140000", "202608140100",
-                "202608150000", "202608160000", "202608160100", "202608200000");
+                "202608150000", "202608160000", "202608160100", "202608200000",
+                "202608210000");
     }
 
     @Test
-    @DisplayName("菜单与角色绑定初始化数据已就位（126 菜单 / 119 唯一 perms / 203 绑定）")
+    @DisplayName("菜单与角色绑定初始化数据已就位（126 菜单 / 119 唯一 perms / 202 绑定）")
     void menuAndRoleMenuInitialized() {
         Integer menus = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM sys_menu", Integer.class);
         Integer bindings = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM sys_role_menu", Integer.class);
@@ -113,8 +114,9 @@ class FlywayBaselineIT {
                 .as("F-1 ② 定案 student 不绑任何菜单行，故基线是 200；"
                         + "模块 06 的 V202608150000 补了 teacher → org:node:list（201）；"
                         + "模块 07 的 V202608160000 为拆出的两个 perms 补了 5 条（2 + 3），共 206；"
-                        + "模块 10 的 V202608200000 撤销了 teacher 的 question:category:* 三行（F-72），共 203")
-                .isEqualTo(203);
+                        + "模块 10 的 V202608200000 撤销了 teacher 的 question:category:* 三行（F-72），共 203；"
+                        + "V202608210000 撤销了 teacher 的 vod:video:add 一行（需方 2026-08-21 定案二），共 202")
+                .isEqualTo(202);
         assertThat(perms).as("117 + org:admin:list + org:teacher:list").isEqualTo(119);
     }
 

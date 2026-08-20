@@ -126,9 +126,10 @@ class PlatformRowVisibilityIT {
                         + "放行断在任何一环，结果都是 perms=[]")
                 // 200 → 201（模块 06 的 V202608150000 补 teacher → org:node:list）
                 //     → 206（模块 07 的 V202608160000 拆 org:staff:list，补 5 条）
-                //     → 203（模块 10 的 V202608200000 撤销 teacher 的 question:category:* 三条，F-72）。
+                //     → 203（模块 10 的 V202608200000 撤销 teacher 的 question:category:* 三条，F-72）
+                //     → 202（V202608210000 撤销 teacher 的 vod:video:add 一条，需方 2026-08-21 定案二）。
                 // 这里断言的是【放行是否生效】，行数只是它的载体，随初始化数据增减都是正常的
-                .isEqualTo(203);
+                .isEqualTo(202);
     }
 
     @Test

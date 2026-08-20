@@ -938,7 +938,7 @@ Resp: {"code":200,"data":{"watchedDuration":130,"watchStatus":1,"maxPosition":13
 | `1949000000000200210` | `1949000000000200200` | 修改图文资料 | F | — | `course:material:edit` | A10 | org_admin、teacher |
 | `1949000000000200211` | `1949000000000200200` | 删除图文资料 | F | — | `course:material:remove` | A10 | org_admin、teacher |
 | `1949000000000200300` | `1949000000000200000` | 媒资库 | C | /course/videos | `vod:video:list` | A11 | org_admin、teacher |
-| `1949000000000200301` | `1949000000000200300` | 上传视频 | F | — | `vod:video:add` | A11 | org_admin、teacher |
+| `1949000000000200301` | `1949000000000200300` | 上传视频 | F | — | `vod:video:add` | A11 | **org_admin**（需方 2026-08-21 定案二：「所有的资产归超级管理员所有，别人无权上传」；`teacher` 的绑定已由 `V202608210000` 撤销。其余四个 `vod:video:*` 不动 —— 定案只说了上传） |
 | `1949000000000200302` | `1949000000000200300` | 删除媒资 | F | — | `vod:video:remove` | A11 | org_admin、teacher |
 | `1949000000000200303` | `1949000000000200300` | 重新发起转码 | F | — | `vod:video:retranscode` | A11 | org_admin、teacher |
 | `1949000000000200304` | `1949000000000200300` | 媒资禁用/启用 | F | — | `vod:video:status` | A11 | org_admin、teacher |

@@ -14,7 +14,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <h2>四角色 perms 计数：以<b>迁移脚本落库后的实测值</b>为准</h2>
  * <pre>
- * org_admin 94 ｜ teacher 61 ｜ super_admin 31 ｜ student 0
+ * org_admin 94 ｜ teacher 61 ｜ super_admin 31 ｜ student 0（基线值；逐轮迁移后的现值见下面的常量注释）
  * </pre>
  * <p>04-实施计划.md §B 模块 02 规则 11 原先写的是 {@code 93 / 61 / 31 / 2}，
  * 那是<b>同一份文档内部的陈旧复述</b>，两处差异都能在 §E 里找到解释：
@@ -61,8 +61,13 @@ class AuthMeIT extends AuthIntegrationTestBase {
      * 而契约 §10 附表 A 与初始化脚本此前<b>一致地</b>把它们绑给了 teacher，
      * 于是那道门从来没关上过。教师<b>仍能读</b>分类树（随
      * {@code question:question:list} 放行），少的只是三个写按钮。
+     *
+     * <p><b>60 → 59</b>：{@code V202608210000} 撤销了 {@code vod:video:add}
+     *（需方 2026-08-21 定案二「所有的资产归超级管理员所有，别人无权上传」）。
+     * 教师<b>仍能</b>看媒资列表、删媒资、重转、禁用启用 —— 定案只说了上传，
+     * 其余四个 {@code vod:video:*} 一个都没动。
      */
-    private static final int PERMS_TEACHER = 60;
+    private static final int PERMS_TEACHER = 59;
     /** super_admin：<b>31 → 33</b>，拆出的两个 perms 都绑了它。 */
     private static final int PERMS_SUPER_ADMIN = 33;
     private static final int PERMS_STUDENT = 0;
@@ -78,7 +83,7 @@ class AuthMeIT extends AuthIntegrationTestBase {
     }
 
     @Test
-    @DisplayName("判据 5｜teacher：roles 非空、perms 60（模块 10 撤销了三个分类写权限，F-72）")
+    @DisplayName("判据 5｜teacher：roles 非空、perms 59（再撤 vod:video:add，需方定案二）")
     void teacherPerms() throws Exception {
         JsonNode me = me(AuthFixtures.TEACHER_USERNAME);
 
