@@ -1,10 +1,12 @@
 package com.edumatrix.org.grant.job;
 
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -80,6 +82,16 @@ public class GrantConsistencyJob {
     private final ConcurrentHashMap<Long, AtomicInteger> danglingByTenant = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long, AtomicInteger> crossScopeByTenant = new ConcurrentHashMap<>();
 
+    /**
+     * 最近一次 {@code run()} <b>跑完</b>的 epoch 秒 —— job 级存活信号。
+     *
+     * <p><b>初值 0 = 「从未跑过」</b>，于是 {@code time() - 0} 巨大、告警立刻触发。
+     * <b>绝不初始化为当下时刻</b>（模块 09 那个 10 秒一轮的消费者那样做是对的，
+     * 日任务照抄会让「从不触发」在每次重启后被掩盖一天，而部署比一天频繁时被永久掩盖）。
+     * 完整论证见 {@code MetricsRegistry#GRANT_CONSISTENCY_LAST_RUN_EPOCH_SECONDS}。
+     */
+    private final AtomicLong lastRunEpochSeconds = new AtomicLong(0L);
+
     public GrantConsistencyJob(GrantHealthService healthService,
                                GrantTenantMapper tenantMapper,
                                StringRedisTemplate redisTemplate,
@@ -88,6 +100,12 @@ public class GrantConsistencyJob {
         this.tenantMapper = tenantMapper;
         this.redisTemplate = redisTemplate;
         this.meterRegistry = meterRegistry;
+        // 【构造器注册，不带 tenant 标签】——它必须【永远存在】：
+        // per-tenant 那两个 Gauge 在「0 租户」与「调度器没触发」两种情况下一条序列都没有，
+        // 而那与「一切健康」在告警上长得一模一样
+        Gauge.builder(MetricsRegistry.GRANT_CONSISTENCY_LAST_RUN_EPOCH_SECONDS,
+                        lastRunEpochSeconds, AtomicLong::get)
+                .register(meterRegistry);
     }
 
     @XxlJob("grantConsistency")
@@ -112,6 +130,13 @@ public class GrantConsistencyJob {
                         + "连续失败意味着该租户的指标停在上一轮的值）", tenantId, e);
             }
         }
+        // 【无条件 set，就在这句日志旁边】——那句 log.info 本来就无条件执行，
+        // 只是【没人能监控一行日志】。0 个租户时这里照样更新：
+        // 「跑完了、只是没有租户可扫」与「压根没跑」必须区分得开。
+        //
+        // 若 selectActiveTenantIds 自己抛异常导致 run() 中断、本句不执行 ——
+        // 那正是【期望行为】：信号变陈旧、26h 后告警触发。
+        lastRunEpochSeconds.set(Instant.now().getEpochSecond());
         log.info("授权健康度巡检完成：{} 个租户", tenantIds.size());
         return tenantIds.size();
     }
