@@ -53,6 +53,10 @@ import com.edumatrix.common.subtree.NodePath;
  * 于是同一个「owner」在库里指了两件事 —— 调错不会报错。E 定案：收敛成本类的两个方法，
  * 模块 11 的 {@code GrantChecker.owns} 收敛到 {@link #canUse}（已改 04 §B 模块 11 对外产出）。
  *
+ * <p><b>模块 11 落地后确认：{@code GrantChecker} 这个类<b>从未存在过</b></b> ——
+ * 收敛在设计阶段就完成了，模块 11 直接用的本类。留着上面那段是因为它解释的是
+ * <b>为什么会有两个谓词</b>，那条推理仍然成立；但别再去找那个类了。
+ *
  * <h2>未注册的类型抛异常，不返回 false</h2>
  * <p>三类受管资源（契约 §2.5 穷举）现已全部注册：{@link ResourceType#COURSE} 由模块 08、
  * {@link ResourceType#QUESTION} 由模块 10、{@link ResourceType#VIDEO} 由模块 09。

@@ -227,7 +227,7 @@ class SysFileIT {
     }
 
     @Test
-    @DisplayName("fail-closed 清单恰好是待模块 11/15/17 注册的那 6 个（含 B-3 的 material_attach）")
+    @DisplayName("fail-closed 清单恰好是待模块 15/17 注册的那 5 个（material_attach 已由模块 11 摘掉）")
     void pendingCheckerListIsExactlyAsDesigned() {
         assertThat(ownershipRegistry.pendingBizTypes())
                 .containsExactlyInAnyOrder(
@@ -235,22 +235,26 @@ class SysFileIT {
                         FileBizType.FAIL_REPORT,
                         FileBizType.CREDENTIAL_SHEET,
                         FileBizType.EXPORT_REPORT,
-                        FileBizType.ANSWER,
-                        // B-3 定案：与 03-01 §7.3 原文「其余 bizType 本租户已登录用户可下载」
-                        // 有意分叉（F-38）。模块 11 注册 GrantChecker 后本条要改。
-                        FileBizType.MATERIAL_ATTACH);
+                        FileBizType.ANSWER);
+        // MATERIAL_ATTACH 已在模块 11 的 C9 注册（B-3 / F-38 的 fail-closed 就此解除）：
+        // course/catalog/MaterialAttachOwnershipChecker，两支判定取自 crs_material 的
+        // owner_node_id 列注释（管理端按子树、学生端走所属课时→课程→课程授权）。
+        // 解除的【行为判据】在 org/grant/MaterialAttachDownloadIT：
+        // 未授权学生 404、已授权学生拿得到文件 —— 两侧都断言，只断言一侧等于闸开了没人知道
     }
 
     @Test
-    @DisplayName("B-3：material_attach 现在下不了 —— 「暂时下不了」优于「能下且不该下」")
-    void materialAttachIsFailClosedUntilModule11() throws IOException {
+    @DisplayName("孤儿附件仍然下不了 —— 查不到归属就拒（fail closed 的残留那一半）")
+    void orphanMaterialAttachIsStillRejected() throws IOException {
+        // 传一个【不属于任何 crs_material】的 material_attach 文件：
+        // 模块 11 解除的是「有归属可查时按授权判」，而【查不到归属】这一侧仍然拒 ——
+        // 返回 true 才是危险的那一侧（等于「查不到归属就放行」）
         SysFile saved = fileService.upload(
                 file("讲义.pdf", "application/pdf", pdfBytes()), FileBizType.MATERIAL_ATTACH.code());
 
         assertThatThrownBy(() -> fileService.resolveForDownload(saved.getId()))
-                .as("03-03 §6.3 要求学生看图文课时必须被授权该课程（否则 20013），"
-                        + "而 §7.3 把 material_attach 归在「其余 bizType 本租户已登录用户可下载」——"
-                        + "同一份讲义走两条路结论不同，且 fileId 可近邻枚举")
+                .as("本条【不能】用来证明 fail-closed 还在：checker 写死 false 它也绿。"
+                        + "真正的判据是 org/grant/MaterialAttachDownloadIT 那两条")
                 .isInstanceOf(BizException.class);
     }
 

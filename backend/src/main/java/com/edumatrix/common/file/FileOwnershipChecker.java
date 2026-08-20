@@ -17,10 +17,10 @@ import java.util.Set;
  *       <td>{@code org_import_task}</td><td>{@code org}</td><td>17</td></tr>
  *   <tr><td>{@code export_report}</td><td>{@code stat_export_task}</td><td>{@code stat}</td><td>17</td></tr>
  *   <tr><td>{@code answer}</td><td>{@code hw_answer_sheet} 等</td><td>{@code homework}</td><td>15</td></tr>
- *   <tr><td>{@code material_attach}</td><td>{@code org_resource_grant}（{@code GrantChecker}）</td>
- *       <td>{@code org}</td><td><b>11</b></td></tr>
+ *   <tr><td>{@code material_attach}</td><td>{@code crs_material} → {@code crs_lesson} → {@code org_resource_grant}</td>
+ *       <td><b>{@code course}</b>（F-91：判定要读 crs_ 两张表，而检查③ 禁止 org 域 import course 域）</td><td><b>11 · 已注册</b></td></tr>
  * </table>
- * <p>四张表现在<b>都还没有对应的代码</b>。所以模块 05 只能交付 SPI + 注册表，
+ * <p>模块 05 交付时四张表<b>都还没有对应的代码</b>（{@code material_attach} 那一行已由模块 11 补上）。所以模块 05 只能交付 SPI + 注册表，
  * 而注册表在没有实现时的行为<b>必须是拒绝</b>（见 {@link FileOwnershipRegistry}）。
  *
  * <h2>⚠ {@code material_attach} 为什么在这张表里（B-3 定案）</h2>

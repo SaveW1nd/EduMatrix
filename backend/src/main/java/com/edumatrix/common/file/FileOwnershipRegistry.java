@@ -38,7 +38,7 @@ import org.springframework.stereotype.Component;
  *       注意 03-05 §4.8 的 {@code downloadUrl} 是那个接口自己签发的、
  *       走它自己的 {@code 40003} 校验，不受本注册表影响；</li>
  *   <li>{@code answer} —— 待<b>模块 15</b> 注册（学生本人 / 作业创建人叠加子树 / org_admin）；</li>
- *   <li>{@code material_attach} —— 待<b>模块 11</b> 注册（走 {@code GrantChecker} 判
+ *   <li><s>{@code material_attach}</s> —— <b>模块 11 已注册</b>（走 {@code ResourceOwnerChecker.canUse} 判
  *       「该学生节点被显式授权该课程」）。<b>这一条是 B-3 定案新加的</b>，
  *       与 03-01 §7.3 原文「其余 bizType 本租户已登录用户可下载」有意分叉，见 F-38。
  *       解除条件写在 {@code 04-实施计划.md} 模块 11 的「做完什么算做完」里。</li>

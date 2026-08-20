@@ -81,6 +81,15 @@ public final class GrantFixtures {
     /** 视频：ROOT 自有（{@code resource_type = 3}）。 */
     public static final long V1 = 1971000000000003001L;
 
+    /** 图文资料附件（{@code sys_file.biz_type = material_attach}）。 */
+    public static final long ATTACH_FILE = 1971000000000004001L;
+    /** 图文资料 —— 归属 ROOT，附件是 {@link #ATTACH_FILE}。 */
+    public static final long MATERIAL = 1971000000000004101L;
+    /** 图文课时 —— 挂在 {@link #C1} 下，{@code content_id = MATERIAL}。 */
+    public static final long LESSON = 1971000000000004201L;
+    /** 章 / 节 —— 课时的容器（{@code crs_lesson.chapter_id} 非空）。 */
+    public static final long CHAPTER = 1971000000000004301L;
+
     public static final long USER_OFFSET = 100000L;
     public static final String USERNAME_PREFIX = "it11_";
     public static final String PASSWORD = "Test@123456";
@@ -133,6 +142,38 @@ public final class GrantFixtures {
         question(Q1, ROOT, CAT, TENANT_ID);
 
         video(V1, "函数与导数·第一讲", ROOT, TENANT_ID);
+
+        materialLesson();
+    }
+
+    /**
+     * 一条完整的「图文课时」链：{@code sys_file}(附件) ← {@code crs_material} ←
+     * {@code crs_lesson}(lesson_type=2) → {@code crs_course}({@link #C1})。
+     *
+     * <p>{@code material_attach} 的归属校验就是沿这条链反查的
+     * （{@code crs_material.owner_node_id} 的 DDL 列注释：
+     * 「管理端按本列子树过滤，学生端走所属课时→课程→课程授权」）。
+     */
+    private void materialLesson() {
+        jdbc.update("INSERT INTO sys_file (id, file_name, file_url, file_size, file_type, storage, "
+                        + "biz_type, tenant_id, create_by, create_time, update_time) "
+                        + "VALUES (?, '讲义.pdf', ?, 1024, 'pdf', 1, 'material_attach', ?, ?, "
+                        + "NOW(), NOW())",
+                ATTACH_FILE, "material_attach/2026/08/20/it11-attach.pdf", TENANT_ID, userIdOf(ROOT));
+        jdbc.update("INSERT INTO crs_material (id, owner_node_id, title, content, "
+                        + "attachment_file_ids, tenant_id, create_by, create_time, update_time, "
+                        + "deleted_at) VALUES (?, ?, '第一讲讲义', '<p>正文</p>', ?, ?, ?, "
+                        + "NOW(), NOW(), 0)",
+                MATERIAL, ROOT, "[\"" + ATTACH_FILE + "\"]", TENANT_ID, userIdOf(ROOT));
+        jdbc.update("INSERT INTO crs_chapter (id, course_id, parent_id, chapter_name, sort, "
+                        + "tenant_id, create_by, create_time, update_time, deleted_at) "
+                        + "VALUES (?, ?, 0, '第一章', 1, ?, ?, NOW(), NOW(), 0)",
+                CHAPTER, C1, TENANT_ID, userIdOf(ROOT));
+        jdbc.update("INSERT INTO crs_lesson (id, course_id, chapter_id, lesson_name, lesson_type, "
+                        + "video_id, content_id, duration, sort, is_free_preview, status, "
+                        + "tenant_id, create_by, create_time, update_time, deleted_at) "
+                        + "VALUES (?, ?, ?, '第一讲', 2, NULL, ?, 0, 1, 0, 1, ?, ?, NOW(), NOW(), 0)",
+                LESSON, C1, CHAPTER, MATERIAL, TENANT_ID, userIdOf(ROOT));
     }
 
     public void clean() {
@@ -145,6 +186,10 @@ public final class GrantFixtures {
             jdbc.update("DELETE FROM qb_question WHERE tenant_id = ?", tenant);
             jdbc.update("DELETE FROM qb_category WHERE tenant_id = ?", tenant);
             jdbc.update("DELETE FROM vod_video WHERE tenant_id = ?", tenant);
+            jdbc.update("DELETE FROM crs_lesson WHERE tenant_id = ?", tenant);
+            jdbc.update("DELETE FROM crs_chapter WHERE tenant_id = ?", tenant);
+            jdbc.update("DELETE FROM crs_material WHERE tenant_id = ?", tenant);
+            jdbc.update("DELETE FROM sys_file WHERE tenant_id = ?", tenant);
             jdbc.update("DELETE FROM org_perm_template WHERE tenant_id = ?", tenant);
             jdbc.update("DELETE FROM org_tag WHERE tenant_id = ?", tenant);
         }

@@ -36,7 +36,7 @@ import java.util.Set;
  *
  * <p>它现在没爆，只因为模块 08 还没建、库里没有 {@code material_attach} 行。
  * <b>模块 05 一上线这条路径就是通的，只等模块 08 往里放内容。</b>
- * 故按需方定案：在模块 11 的 {@code GrantChecker} 注册 checker 之前<b>一律 404</b>。
+ * 故按需方定案：在模块 11 注册 checker 之前<b>一律 404</b>（已于模块 11 C9 注册，实现是 {@code course/catalog/MaterialAttachOwnershipChecker}）。
  * 代价是模块 08 期间讲义附件下不了 —— 「暂时下不了」优于「能下且不该下」。
  * 解除条件写在 {@code 04-实施计划.md} 模块 11 的「做完什么算做完」里。
  *
