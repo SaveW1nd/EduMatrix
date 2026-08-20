@@ -128,9 +128,11 @@ class PlatformRowVisibilityIT {
                 //     → 206（模块 07 的 V202608160000 拆 org:staff:list，补 5 条）
                 //     → 203（模块 10 的 V202608200000 撤销 teacher 的 question:category:* 三条，F-72）
                 //     → 202（V202608210000 撤销 teacher 的 vod:video:add 一条，需方 2026-08-21 定案二）
-                //     → 200（V202608210100 删掉孤儿权限 org:grant:edit 的两条绑定，F-104）。
+                //     → 200（V202608210100 删掉孤儿权限 org:grant:edit 的两条绑定，F-104）
+                //     → 179（V202608210200 撤销 teacher 的 21 条受管资源写权限绑定，
+                //            需方 2026-08-21 定案，排期 A）。
                 // 这里断言的是【放行是否生效】，行数只是它的载体，随初始化数据增减都是正常的
-                .isEqualTo(200);
+                .isEqualTo(179);
     }
 
     @Test
