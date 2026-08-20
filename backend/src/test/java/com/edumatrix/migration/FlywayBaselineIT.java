@@ -96,11 +96,11 @@ class FlywayBaselineIT {
         assertThat(versions).containsExactly(
                 "202608120000", "202608140000", "202608140100",
                 "202608150000", "202608160000", "202608160100", "202608200000",
-                "202608210000");
+                "202608210000", "202608210100");
     }
 
     @Test
-    @DisplayName("菜单与角色绑定初始化数据已就位（126 菜单 / 119 唯一 perms / 202 绑定）")
+    @DisplayName("菜单与角色绑定初始化数据已就位（125 菜单 / 118 唯一 perms / 200 绑定）")
     void menuAndRoleMenuInitialized() {
         Integer menus = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM sys_menu", Integer.class);
         Integer bindings = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM sys_role_menu", Integer.class);
@@ -109,15 +109,29 @@ class FlywayBaselineIT {
 
         // 124 → 126：模块 07 的 V202608160000 把 org:staff:list 拆成三个（F-30 定案），
         // 新增「管理员列表」org:admin:list 与「教师列表」org:teacher:list 两行
-        assertThat(menus).as("契约 §10 附表 A 与迁移脚本由同一份数据源生成").isEqualTo(126);
+        //     → 125：V202608210100 删掉孤儿菜单 org:grant:edit「修改授权有效期」
+        //       （需方 2026-08-21 定案「没人用的权限 直接删掉」，F-104；
+        //        它的端点接口 40 已随取消授权有效期删除）
+        assertThat(menus)
+                .as("契约 §10 附表 A 与迁移脚本由同一份数据源生成。"
+                        + "125 = 126 − org:grant:edit（V202608210100，F-104）")
+                .isEqualTo(125);
         assertThat(bindings)
                 .as("F-1 ② 定案 student 不绑任何菜单行，故基线是 200；"
                         + "模块 06 的 V202608150000 补了 teacher → org:node:list（201）；"
                         + "模块 07 的 V202608160000 为拆出的两个 perms 补了 5 条（2 + 3），共 206；"
                         + "模块 10 的 V202608200000 撤销了 teacher 的 question:category:* 三行（F-72），共 203；"
-                        + "V202608210000 撤销了 teacher 的 vod:video:add 一行（需方 2026-08-21 定案二），共 202")
-                .isEqualTo(202);
-        assertThat(perms).as("117 + org:admin:list + org:teacher:list").isEqualTo(119);
+                        + "V202608210000 撤销了 teacher 的 vod:video:add 一行（需方 2026-08-21 定案二），共 202；"
+                        + "V202608210100 删掉孤儿权限 org:grant:edit 的【两条】绑定"
+                        + "（org_admin 与 teacher 各一条，F-104），共 200 —— "
+                        + "【是减 2 不是减 1】：只减 1 说明另一半没删干净，"
+                        + "而留下的那条会是指向不存在菜单的孤儿绑定行")
+                .isEqualTo(200);
+        assertThat(perms)
+                .as("117 + org:admin:list + org:teacher:list = 119；"
+                        + "V202608210100 删掉 org:grant:edit 后 118 —— "
+                        + "该标识全库只出现在那一行菜单上，删了就没了")
+                .isEqualTo(118);
     }
 
     @Test

@@ -40,8 +40,13 @@ class AuthMeIT extends AuthIntegrationTestBase {
      * org_admin 的 perms：<b>94 → 96</b>（模块 07 的迁移
      * {@code V202608160000__split_staff_list_perms.sql} 把 {@code org:staff:list}
      * 拆出 {@code org:admin:list} 与 {@code org:teacher:list}，两者都绑 org_admin）。
+     *
+     * <p><b>96 → 95</b>：{@code V202608210100} 删掉孤儿权限 {@code org:grant:edit}
+     *（需方 2026-08-21 定案「没人用的权限 直接删掉」，F-104 —— 它的端点接口 40
+     * 已随取消授权有效期删除）。<b>org_admin 与 teacher 两边同时少一个</b>，
+     * 那条菜单绑给了两个角色。
      */
-    private static final int PERMS_ORG_ADMIN = 96;
+    private static final int PERMS_ORG_ADMIN = 95;
     /**
      * teacher 的 perms：<b>61 → 62</b>（模块 06 的迁移
      * {@code V202608150000__bind_teacher_org_node_list.sql} 补了 {@code org:node:list}）。
@@ -66,14 +71,18 @@ class AuthMeIT extends AuthIntegrationTestBase {
      *（需方 2026-08-21 定案二「所有的资产归超级管理员所有，别人无权上传」）。
      * 教师<b>仍能</b>看媒资列表、删媒资、重转、禁用启用 —— 定案只说了上传，
      * 其余四个 {@code vod:video:*} 一个都没动。
+     *
+     * <p><b>59 → 58</b>：{@code V202608210100} 删掉孤儿权限 {@code org:grant:edit}（F-104）。
+     * <b>教师原本也能改授权有效期</b> —— 那条菜单绑了 org_admin 与 teacher 两个角色，
+     * 所以两边各少一个，不是只有管理员那边动。
      */
-    private static final int PERMS_TEACHER = 59;
+    private static final int PERMS_TEACHER = 58;
     /** super_admin：<b>31 → 33</b>，拆出的两个 perms 都绑了它。 */
     private static final int PERMS_SUPER_ADMIN = 33;
     private static final int PERMS_STUDENT = 0;
 
     @Test
-    @DisplayName("判据 5｜org_admin：roles 非空、perms 94")
+    @DisplayName("判据 5｜org_admin：roles 非空、perms 95")
     void orgAdminPerms() throws Exception {
         JsonNode me = me(AuthFixtures.ADMIN_USERNAME);
 
@@ -83,7 +92,7 @@ class AuthMeIT extends AuthIntegrationTestBase {
     }
 
     @Test
-    @DisplayName("判据 5｜teacher：roles 非空、perms 59（再撤 vod:video:add，需方定案二）")
+    @DisplayName("判据 5｜teacher：roles 非空、perms 58（再删孤儿权限 org:grant:edit，F-104）")
     void teacherPerms() throws Exception {
         JsonNode me = me(AuthFixtures.TEACHER_USERNAME);
 
