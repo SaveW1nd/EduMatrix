@@ -57,7 +57,16 @@ public class VodClient implements VodMediaClient {
     private static final Logger log = LoggerFactory.getLogger(VodClient.class);
 
     private static final int CONNECT_TIMEOUT_MS = 3000;
-    private static final int READ_TIMEOUT_MS = 5000;
+
+    /**
+     * 点播 API 的读超时。<b>与 {@code SmqClient} 拉消息的那个是两个值，不共用。</b>
+     *
+     * <p>两者性质相反：这里是<b>请求-响应</b>（{@code GetPlayInfo} 之类），5 秒不回就是真的慢；
+     * 那边是<b>长轮询</b>，30 秒不回是<b>正常的</b>。共用一个值必然有一边是错的 ——
+     * 生产上已经踩过一次：拉消息沿用了请求-响应的 5 秒，结果队列空时每轮都超时。
+     * {@code SmqClientTimeoutTest#queuePollingAndVodApiTimeoutsAreSeparate} 钉住这件事。
+     */
+    static final int READ_TIMEOUT_MS = 5000;
 
     /**
      * 私有加密下 {@code GetPlayInfo} <b>不带它会直接返回 {@code Forbidden.AliyunVoDEncryption}</b>
