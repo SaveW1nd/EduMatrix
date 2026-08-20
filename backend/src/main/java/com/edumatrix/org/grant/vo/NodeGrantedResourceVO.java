@@ -8,6 +8,14 @@ import java.time.LocalDateTime;
  * <p><b>只含该节点被显式授权的资源</b> —— 不回溯祖先链（契约 §2.5 规则 4）。
  * 机构管理员有 100 门课、查其下级管理员的本列表可能只有 30 门，
  * 查某个学生可能只有 3 门：<b>那是正确结果，不是漏了</b>。
+ *
+ * <h2>{@code expired} 已删除（需方 2026-08-21 定案，F-107）</h2>
+ * <p>授权取消有效期后它恒为 {@code false}，而字段注释还写着「仅
+ * {@code includeExpired = true} 时可能为 {@code true}」 ——
+ * <b>注释描述了一个不存在的行为</b>，本项目命名过的失效模式⑦。
+ * {@code validStart} / {@code validEnd} 两个字段是<b>事实</b>（「没有到期日」），
+ * 恒为 {@code null} 是它们的真实取值，需方点名保留；
+ * 而 {@code expired} 是<b>对那个事实的判断</b>，判断的对象没了，字段就不该在。
  */
 public class NodeGrantedResourceVO {
 
@@ -21,9 +29,6 @@ public class NodeGrantedResourceVO {
     private String targetNodeName;
     private LocalDateTime validStart;
     private LocalDateTime validEnd;
-
-    /** 当前是否已过有效期（仅 {@code includeExpired = true} 时可能为 {@code true}）。 */
-    private Boolean expired;
 
     private Integer grantSource;
     private String grantSourceName;
@@ -95,14 +100,6 @@ public class NodeGrantedResourceVO {
 
     public void setValidEnd(LocalDateTime validEnd) {
         this.validEnd = validEnd;
-    }
-
-    public Boolean getExpired() {
-        return expired;
-    }
-
-    public void setExpired(Boolean expired) {
-        this.expired = expired;
     }
 
     public Integer getGrantSource() {
