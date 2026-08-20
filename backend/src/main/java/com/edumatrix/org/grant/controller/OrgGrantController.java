@@ -2,14 +2,20 @@ package com.edumatrix.org.grant.controller;
 
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.edumatrix.common.response.PageResult;
 import com.edumatrix.common.response.R;
+import com.edumatrix.common.operlog.OperLog;
+import com.edumatrix.org.grant.dto.GrantCreateReq;
 import com.edumatrix.org.grant.dto.GrantableResourceQueryReq;
 import com.edumatrix.org.grant.dto.NodeGrantedResourceQueryReq;
 import com.edumatrix.org.grant.service.GrantQueryService;
+import com.edumatrix.org.grant.service.GrantWriteService;
+import com.edumatrix.org.grant.vo.GrantCreatedVO;
 import com.edumatrix.org.grant.vo.GrantableResourceVO;
 import com.edumatrix.org.grant.vo.NodeGrantedResourceVO;
 
@@ -33,9 +39,12 @@ import jakarta.validation.Valid;
 public class OrgGrantController {
 
     private final GrantQueryService grantQueryService;
+    private final GrantWriteService grantWriteService;
 
-    public OrgGrantController(GrantQueryService grantQueryService) {
+    public OrgGrantController(GrantQueryService grantQueryService,
+                              GrantWriteService grantWriteService) {
         this.grantQueryService = grantQueryService;
+        this.grantWriteService = grantWriteService;
     }
 
     /**
@@ -50,6 +59,22 @@ public class OrgGrantController {
     public R<PageResult<GrantableResourceVO>> grantableResources(
             @Valid GrantableResourceQueryReq req) {
         return R.ok(grantQueryService.grantableResources(req));
+    }
+
+    /**
+     * 接口 38 §9.2 授权资源给节点。{@code org_admin}；{@code teacher}（目标限名下学员）。
+     *
+     * <p><b>注解只放行了「下发」这个动作</b>，不说明能下发哪些资源 ——
+     * 拥有性在 {@code GrantWriteService} 里走 {@code canRegrant}，不满足 {@code 10301}，
+     * 且响应<b>不区分「资源不存在」与「你无权」</b>（契约 §2.5 规则 1 防探测）。
+     *
+     * <p>全部授权写 {@code sys_oper_log}（PRD FR-1 规则 9）。
+     */
+    @PostMapping("/grants")
+    @SaCheckPermission("org:grant:grant")
+    @OperLog(module = "资源授权", action = "授权资源给节点")
+    public R<GrantCreatedVO> grant(@Valid @RequestBody GrantCreateReq req) {
+        return R.ok(grantWriteService.grant(req));
     }
 
     /**

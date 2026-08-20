@@ -110,19 +110,22 @@ class OperLogCoverageTest {
      * 如果哪天扫描逻辑本身退化（比如注解元数据丢失、包名改了），
      * 上面那条会以"零个未标注"的姿态<b>全绿</b>，而本条会红。
      *
-     * <p>当前 42 = {@code org} 19（member 15 + node 4）+ {@code system} 19
+     * <p>当前 43 = {@code org} 20（member 15 + node 4 + <b>grant 1</b>）+ {@code system} 19
      * （user 5 / role 4 / menu 3 / tenant 5 / tenantConfig 1 / <b>file 1</b>）
      * + {@code auth} 4（login / refresh / logout / changePassword，
      * 其中前三个在 {@link #EXEMPT} 里）。
      * 新增写接口时本条会红 —— <b>那正是提醒去标注解的时刻</b>，请连同数字一起改。
      *
-     * <p><b>它已经真的红过两次</b>：模块 05 的 C3 把数字钉在 37，C4 加了
+     * <p><b>它已经真的红过三次</b>：模块 05 的 C3 把数字钉在 37，C4 加了
      * {@code SysFileController#upload}（03-01 §7.1 上传文件）之后立刻红，改成 38；
-     * 随后 {@code auth} 域纳入扫描（§1.6 补标）又红一次，改成 42。
+     * 随后 {@code auth} 域纳入扫描（§1.6 补标）又红一次，改成 42；
+     * 模块 11 的 C4 加了 {@code OrgGrantController#grant}（03-02 §9.2 授权资源给节点）
+     * 第三次红，改成 43 —— 而 PRD FR-1 规则 9 逐字要求「所有授权/撤销写
+     * {@code sys_oper_log}」，这一红正好落在那条要求上。
      * 这就是它存在的样子。
      */
     @Test
-    @DisplayName("写端点总数 = 42（新增写接口时本条会红，提醒去标 @OperLog）")
+    @DisplayName("写端点总数 = 43（新增写接口时本条会红，提醒去标 @OperLog）")
     void writeEndpointCountIsPinned() throws Exception {
         int count = 0;
         for (Class<?> controller : scanControllers()) {
@@ -132,7 +135,7 @@ class OperLogCoverageTest {
                 }
             }
         }
-        assertThat(count).isEqualTo(42);
+        assertThat(count).isEqualTo(43);
     }
 
     private static boolean isWriteEndpoint(Method method) {
