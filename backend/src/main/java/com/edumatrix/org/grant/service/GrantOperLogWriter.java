@@ -68,6 +68,9 @@ public class GrantOperLogWriter {
     /** 接口 39（切面写）。 */
     public static final String ACTION_REVOKE = "撤销资源授权（级联子树）";
 
+    /** 接口 40（切面写）。 */
+    public static final String ACTION_EDIT_VALIDITY = "修改授权有效期";
+
     /** 接口 39 的影响面（<b>本类写</b>）—— 规则 17 要的那两个数字在这一行。 */
     public static final String ACTION_REVOKE_IMPACT = "撤销影响面留痕";
 

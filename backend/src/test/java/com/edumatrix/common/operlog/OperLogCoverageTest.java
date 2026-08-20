@@ -110,7 +110,7 @@ class OperLogCoverageTest {
      * 如果哪天扫描逻辑本身退化（比如注解元数据丢失、包名改了），
      * 上面那条会以"零个未标注"的姿态<b>全绿</b>，而本条会红。
      *
-     * <p>当前 44 = {@code org} 21（member 15 + node 4 + <b>grant 2</b>）+ {@code system} 19
+     * <p>当前 45 = {@code org} 22（member 15 + node 4 + <b>grant 3</b>）+ {@code system} 19
      * （user 5 / role 4 / menu 3 / tenant 5 / tenantConfig 1 / <b>file 1</b>）
      * + {@code auth} 4（login / refresh / logout / changePassword，
      * 其中前三个在 {@link #EXEMPT} 里）。
@@ -120,7 +120,8 @@ class OperLogCoverageTest {
      * {@code SysFileController#upload}（03-01 §7.1 上传文件）之后立刻红，改成 38；
      * 随后 {@code auth} 域纳入扫描（§1.6 补标）又红一次，改成 42；
      * 模块 11 的 C4 加了 {@code OrgGrantController#grant}（03-02 §9.2 授权资源给节点）
-     * 第三次红，改成 43；C5 加了 {@code #revoke}（§9.3 撤销资源授权）第四次红，改成 44
+     * 第三次红，改成 43；C5 加了 {@code #revoke}（§9.3 撤销资源授权）第四次红，改成 44；
+     * C6 加了 {@code #updateValidity}（§9.4 修改授权有效期）第五次红，改成 45
      * —— 而 PRD FR-1 规则 9 逐字要求「所有<b>授权/撤销</b>写 {@code sys_oper_log}」，
      * 这两红正好各落在那条要求的一半上。
      * 这就是它存在的样子。
@@ -137,7 +138,7 @@ class OperLogCoverageTest {
      * 写在这里是因为：本条全绿最容易让人以为「操作日志这块齐了」。
      */
     @Test
-    @DisplayName("写端点总数 = 44（新增写接口时本条会红，提醒去标 @OperLog）")
+    @DisplayName("写端点总数 = 45（新增写接口时本条会红，提醒去标 @OperLog）")
     void writeEndpointCountIsPinned() throws Exception {
         int count = 0;
         for (Class<?> controller : scanControllers()) {
@@ -147,7 +148,7 @@ class OperLogCoverageTest {
                 }
             }
         }
-        assertThat(count).isEqualTo(44);
+        assertThat(count).isEqualTo(45);
     }
 
     private static boolean isWriteEndpoint(Method method) {
