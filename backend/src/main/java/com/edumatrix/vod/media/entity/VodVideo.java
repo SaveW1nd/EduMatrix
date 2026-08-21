@@ -81,6 +81,7 @@ public class VodVideo extends TenantEntity {
     private String decryptKeyUri;
 
     /** 云端媒资唯一 ID（阿里 {@code VideoId}）。事件消费按它反查租户。 */
+    private String templateGroupId;
     private String vodFileId;
 
     private String videoName;
@@ -193,5 +194,20 @@ public class VodVideo extends TenantEntity {
 
     public void setUploadUserId(Long uploadUserId) {
         this.uploadUserId = uploadUserId;
+    }
+
+    /**
+     * 上传时<b>请求</b>的转码模板组（意图，非观测）。重新发起转码必须复用它。
+     *
+     * <p>与 {@link #getEncryptType()} 分工不同：那一列是转码完成后填的<b>观测值</b>，
+     * 而转码失败的视频（{@code status=3}）那时还只是占位 —— 正是要重转的那些行，
+     * {@code encrypt_type} 给不出可信依据。
+     */
+    public String getTemplateGroupId() {
+        return templateGroupId;
+    }
+
+    public void setTemplateGroupId(String templateGroupId) {
+        this.templateGroupId = templateGroupId;
     }
 }

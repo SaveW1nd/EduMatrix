@@ -196,7 +196,12 @@ edumatrix:
   # ==========================================================================
   vod:
     region: ${ALIYUN_VOD_REGION:}
+    # 不加密模板组（默认）。上传时 encrypted=false 或不传 → 用它
     template-group-id: ${ALIYUN_VOD_TEMPLATE_GROUP_ID:}
+    # 加密模板组（阿里云私有加密）。上传时 encrypted=true → 用它
+    # 【留空 = 本机构不提供加密选项】：此时 encrypted=true 的上传请求会被拒绝，
+    # 而不是悄悄降级成不加密 —— 悄悄降级的表现是「以为加密了其实没有」，比报错坏得多
+    template-group-id-encrypted: ${ALIYUN_VOD_TEMPLATE_GROUP_ID_ENCRYPTED:}
     smq:
       endpoint: ${ALIYUN_SMQ_ENDPOINT:}
       queue-name: ${ALIYUN_SMQ_QUEUE_NAME:}

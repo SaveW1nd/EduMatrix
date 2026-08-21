@@ -7,6 +7,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -56,6 +58,8 @@ import com.edumatrix.vod.media.vo.VideoStatusVO;
  */
 @Service
 public class VodVideoService {
+
+    private static final Logger log = LoggerFactory.getLogger(VodVideoService.class);
 
     private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
@@ -116,6 +120,7 @@ public class VodVideoService {
      */
     @Transactional(rollbackFor = Exception.class)
     public UploadTokenVO issueUploadToken(UploadTokenReq req) {
+        guard.assertOrgRoot();          // F-114 收窄：媒资写操作仅机构根
         if (req.getVideoId() == null) {
             return createNew(req);
         }
@@ -124,9 +129,10 @@ public class VodVideoService {
 
     private UploadTokenVO createNew(UploadTokenReq req) {
         Long ownerNodeId = guard.myNodeId();
+        String templateGroup = resolveTemplateGroup(req.getEncrypted());
         VodUploadCredential credential =
                 vodClient.createUploadVideo(req.getVideoName().trim(), req.getFileName().trim(),
-                        req.getFileSize());
+                        req.getFileSize(), templateGroup);
 
         VodVideo video = new VodVideo();
         video.setOwnerNodeId(ownerNodeId);
@@ -142,6 +148,10 @@ public class VodVideoService {
         // 仍然显式写而不靠 DDL 默认值：默认值是 1（HLS 标准加密），而 status=0/1 期间
         // 这一列还没有真值，落一个「标准加密」比落一个中性的 0 更容易被误读成事实。
         video.setEncryptType(VodVideo.ENCRYPT_NONE);
+        // 【意图，不是观测】记下我们【请求】的模板组：重新发起转码必须复用它。
+        // 与 encrypt_type（转码完成后填的观测值）分工不同，不要合并 ——
+        // 转码失败的视频 encrypt_type 还只是占位，那时它给不出可信的重转依据。
+        video.setTemplateGroupId(templateGroup);
         video.setVodFileId(credential.cloudVideoId());
         video.setVideoName(req.getVideoName().trim());
         video.setStatus(VodVideo.STATUS_UPLOADING);
@@ -151,6 +161,27 @@ public class VodVideoService {
         videoMapper.insert(video);
 
         return toTokenVO(video.getId(), credential);
+    }
+
+    /**
+     * 按上传方选的「要不要加密」挑模板组（F-114，需方 2026-08-21 定案：<b>上传时可选</b>）。
+     *
+     * <p><b>加密组没配时【拒绝】而不是降级</b>：悄悄降级成不加密的表现是
+     * 「以为加密了其实没有」——**它不报错、页面一切正常**，比直接失败坏得多。
+     * 这与挑流那条「挑不到必须置 3、绝不可置 2」是同一条纪律。
+     */
+    private String resolveTemplateGroup(Boolean encrypted) {
+        if (!Boolean.TRUE.equals(encrypted)) {
+            return vodClient.defaultTemplateGroupId();
+        }
+        String group = vodClient.encryptedTemplateGroupId();
+        if (group == null || group.isBlank()) {
+            throw new BizException(ErrorCode.VIDEO_NOT_FOUND_OR_STATUS_INVALID,
+                    "本部署未配置加密转码模板组（ALIYUN_VOD_TEMPLATE_GROUP_ID_ENCRYPTED），"
+                            + "无法按加密方式上传。请联系管理员配置后重试 —— "
+                            + "此处不会降级为不加密上传");
+        }
+        return group;
     }
 
     private UploadTokenVO refreshExisting(UploadTokenReq req) {
@@ -275,6 +306,7 @@ public class VodVideoService {
      */
     @Transactional(rollbackFor = Exception.class)
     public void delete(Long videoId) {
+        guard.assertOrgRoot();          // F-114 收窄：媒资写操作仅机构根
         VodVideo video = guard.loadOwnedByPath(videoId);
         if (lessonRefCounter.countByVideo(video.getId()) > 0) {
             throw new BizException(ErrorCode.VIDEO_IN_USE);
@@ -300,6 +332,7 @@ public class VodVideoService {
      */
     @Transactional(rollbackFor = Exception.class)
     public VideoStatusVO retranscode(Long videoId) {
+        guard.assertOrgRoot();          // F-114 收窄：媒资写操作仅机构根
         VodVideo video = guard.loadOwnedByPath(videoId);
         if (video.getStatus() == null || video.getStatus() != VodVideo.STATUS_FAILED) {
             throw new BizException(ErrorCode.VIDEO_NOT_FOUND_OR_STATUS_INVALID);
@@ -312,7 +345,18 @@ public class VodVideoService {
         if (changed == 0) {
             throw new BizException(ErrorCode.VIDEO_NOT_FOUND_OR_STATUS_INVALID);
         }
-        vodClient.submitTranscodeJobs(video.getVodFileId());
+        // 【必须复用这个视频当初用的那一个模板组】用当前配置的那个，会在同一视频上叠出
+        // 第二套流 → GetPlayInfo 返回两路 → 「恰好一路」守卫失败，
+        // 而它报的原因（「模板组配了多档」）与真实原因（两次转码用了不同组）对不上。
+        // 历史行（本列上线前建的）为 NULL，回落到默认组并记一行 WARN —— 那种情况下
+        // 我们确实不知道当初用的是哪个，回落是唯一能做的，但要留痕。
+        String reuse = video.getTemplateGroupId();
+        if (reuse == null || reuse.isBlank()) {
+            reuse = vodClient.defaultTemplateGroupId();
+            log.warn("重新发起转码：该媒资没有记录当初的模板组（本列上线前建的行），"
+                    + "回落到默认组 videoId={} fallback={}", video.getId(), reuse);
+        }
+        vodClient.submitTranscodeJobs(video.getVodFileId(), reuse);
         return VideoStatusVO.of(video.getId(), VodVideo.STATUS_TRANSCODING);
     }
 
@@ -330,6 +374,7 @@ public class VodVideoService {
      */
     @Transactional(rollbackFor = Exception.class)
     public VideoStatusVO changeStatus(Long videoId, VideoStatusReq req) {
+        guard.assertOrgRoot();          // F-114 收窄：媒资写操作仅机构根
         VodVideo video = guard.loadOwnedByPath(videoId);
         int target = req.getTargetStatus();
         int expected = target == VodVideo.STATUS_DISABLED

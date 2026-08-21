@@ -61,6 +61,20 @@ public class TestSupportConfiguration {
         /** 置 true 时 {@code getPlayInfo} 抛「云端未就绪」——与「挑不到流」是两条路。 */
         public boolean notReady;
 
+        /** 两个模板组：IT 里断言「上传时选加密走了哪一个」。 */
+        public String defaultGroup = "TPL-PLAIN";
+        public String encryptedGroup = "TPL-ENCRYPTED";
+
+        @Override
+        public String defaultTemplateGroupId() {
+            return defaultGroup;
+        }
+
+        @Override
+        public String encryptedTemplateGroupId() {
+            return encryptedGroup;
+        }
+
         public void reset() {
             calls.clear();
             failNext = false;
@@ -68,6 +82,8 @@ public class TestSupportConfiguration {
             streams = java.util.List.of();
             playAuth = "FAKE-PLAY-AUTH-0123456789";
             playAuthFails = false;
+            defaultGroup = "TPL-PLAIN";
+            encryptedGroup = "TPL-ENCRYPTED";
         }
 
         /** 一路正常的加密 HLS（GetPlayInfo 形态：Encrypt 是 Long=1、Duration 是 String）。 */
@@ -120,8 +136,9 @@ public class TestSupportConfiguration {
 
         @Override
         public com.edumatrix.common.media.VodUploadCredential createUploadVideo(
-                String title, String fileName, long fileSize) {
-            record("createUploadVideo:" + title);
+                String title, String fileName, long fileSize, String templateGroupId) {
+            // 把模板组记进调用轨迹 —— IT 靠它断言「选了加密就真的走了加密那个组」
+            record("createUploadVideo:" + title + ":tpl=" + templateGroupId);
             return new com.edumatrix.common.media.VodUploadCredential(
                     "cloud-" + Math.abs((title + fileName).hashCode()), "auth-token", "upload-address");
         }
@@ -147,8 +164,8 @@ public class TestSupportConfiguration {
         }
 
         @Override
-        public void submitTranscodeJobs(String cloudVideoId) {
-            record("submitTranscodeJobs:" + cloudVideoId);
+        public void submitTranscodeJobs(String cloudVideoId, String templateGroupId) {
+            record("submitTranscodeJobs:" + cloudVideoId + ":tpl=" + templateGroupId);
         }
     }
 

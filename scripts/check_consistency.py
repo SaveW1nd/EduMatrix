@@ -109,7 +109,40 @@ def parse_ddl():
             continue
         if cur:
             buf.append((i, line))
+
+    _apply_incremental_alters(tables)
     return tables
+
+
+# 【为什么要这一段】DDL_PATH 只是【基线】。基线是冻结内容（契约 §7.3），
+# 后续的表结构变更一律走增量迁移 —— 于是「DDL = 基线」这个前提在第一个
+# ALTER TABLE ADD COLUMN 出现的那天就不再成立，而 C14（DDL 列集合 = 文档字段表）
+# 会开始报一条【假红】：文档写了新列、基线里没有。
+#
+# V202608210300（F-114 给 vod_video 加 template_group_id）是全库第一个改表结构的
+# 增量迁移。不补这一段的话，唯一的出路是「不把新列写进文档」——那等于让文档
+# 与真实库结构分叉，而 C14 存在的理由恰恰是防这件事。
+#
+# 【只认 ADD COLUMN，不认 DROP / MODIFY】：那两种在本项目里应当极少发生，
+# 真发生时宁可让这里报错、逼人来看一眼，也不要悄悄跟着改 —— 静默跟随会让
+# 「删了一列」这种事在检查里查无实据。
+_ALTER_ADD = re.compile(
+    r'ALTER\s+TABLE\s+`(\w+)`\s+ADD\s+COLUMN\s+`(\w+)`', re.I | re.S)
+
+
+def _apply_incremental_alters(tables):
+    mig_dir = os.path.dirname(DDL_PATH)
+    for name in sorted(os.listdir(mig_dir)):
+        if not name.endswith('.sql') or name == os.path.basename(DDL_PATH):
+            continue
+        for tname, col in _ALTER_ADD.findall(read(os.path.join(mig_dir, name))):
+            t = tables.get(tname)
+            if t is None:
+                report('ERROR', 'C14', os.path.join(mig_dir, name),
+                       f'{name} 给不存在于基线的表 `{tname}` 加列 `{col}`')
+                continue
+            if col not in t['cols']:
+                t['cols'].append(col)
 
 
 # ============================================================ C1 DDL 结构
