@@ -68,6 +68,14 @@ public final class OrgFixtures {
     public static final long S7 = 1962000000000000056L;
     public static final long S8 = 1962000000000000057L;
 
+    /**
+     * <b>改形前形状</b>的深子树，只由 {@link #seedLegacyDeepSubtree()} 按需种
+     * （{@link #seed()} 不种它）。挂在非机构根的 {@code A1} 下，今天已经建不出来。
+     */
+    public static final long LEGACY_ADMIN = 1962000000000000060L;
+    public static final long LEGACY_TEACHER = 1962000000000000061L;
+    public static final long LEGACY_STUDENT = 1962000000000000062L;
+
     /** 全部节点，按建树顺序（父在子之前）。清理时倒序删。 */
     public static final long[] ALL_NODES = {
             ROOT, A1, A2, T1, T2, T3, TX, S1, S2, S3, S4, S5, S6, S7, S8};
@@ -79,7 +87,8 @@ public final class OrgFixtures {
      * 不删的话 {@code auditTreeConsistency()} 会把它们当成掉在树外的节点报出来。
      * <b>不要往树里加回去</b> —— 它们是两层嵌套管理员，F-114 之后建不出来。
      */
-    public static final long[] LEGACY_NODES = {1962000000000000020L, 1962000000000000030L};
+    public static final long[] LEGACY_NODES = {1962000000000000020L, 1962000000000000030L,
+            LEGACY_ADMIN, LEGACY_TEACHER, LEGACY_STUDENT};
 
     /** {@code sys_user.id} 由节点 id 偏移得到，与任何节点 id 都不相等。 */
     public static final long USER_OFFSET = 100000L;
@@ -152,6 +161,8 @@ public final class OrgFixtures {
         for (long nodeId : LEGACY_NODES) {
             jdbc.update("DELETE FROM sys_user_role WHERE user_id = ?", userIdOf(nodeId));
             jdbc.update("DELETE FROM sys_user WHERE id = ?", userIdOf(nodeId));
+            jdbc.update("DELETE FROM org_student WHERE node_id = ?", nodeId);
+            jdbc.update("DELETE FROM org_teacher WHERE node_id = ?", nodeId);
             jdbc.update("DELETE FROM org_node_change_log WHERE node_id = ?", nodeId);
             jdbc.update("DELETE FROM org_resource_grant WHERE target_node_id = ?", nodeId);
             jdbc.update("DELETE FROM org_node WHERE id = ?", nodeId);
@@ -244,6 +255,26 @@ public final class OrgFixtures {
     public String realNameOf(long nodeId) {
         return jdbc.queryForObject("SELECT real_name FROM sys_user WHERE id = ?",
                 String.class, userIdOf(nodeId));
+    }
+
+    /**
+     * 种一棵<b>改形前留下的深子树</b>：{@code A1 → LEGACY_ADMIN(1) → LEGACY_TEACHER(2) → LEGACY_STUDENT(3)}。
+     *
+     * <h2>为什么必须直接 JDBC 插，而不能走接口建</h2>
+     * <p>这正是它要模拟的东西：<b>F-114 之前建出来、今天已经建不出来的形状</b>。
+     * {@code LEGACY_ADMIN} 挂在非机构根的 {@code A1} 下 —— 走接口会被 {@code 10104} 拒。
+     * 而生产上如果有这种存量，它就是这么躺着的。
+     *
+     * <p><b>它只被 {@code movingLegacyDeepSubtreeExceedsDepthLimit} 用</b>，
+     * 别的用例不要碰：它会让 {@code auditTreeConsistency()} 之外的形状断言（节点总数等）多出 3 个。
+     */
+    public void seedLegacyDeepSubtree() {
+        String underA1 = "0," + ROOT + "," + A1;
+        String underLegacyAdmin = underA1 + "," + LEGACY_ADMIN;
+        node(LEGACY_ADMIN, A1, underA1, "存量·苏州中心", 1, 1, 1);          // depth 3
+        node(LEGACY_TEACHER, LEGACY_ADMIN, underLegacyAdmin, "存量·老王", 2, 1, 1);   // depth 4
+        student(LEGACY_STUDENT, LEGACY_TEACHER, underLegacyAdmin + "," + LEGACY_TEACHER,
+                "存量·学生"); // depth 5
     }
 
     /** 学籍状态改写（校验 10 的前置条件）。 */

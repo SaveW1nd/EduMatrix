@@ -64,6 +64,18 @@ public final class OrgTreeShape {
      * <p><b>存量影响</b>：比 4 更深的树会变得既不能再往下建、也不能整棵搬走。
      * 上线前已查过生产：嵌套管理员 0 个，最深就是 L1 机构根，不受影响。
      * 模块 06 的验收夹具原先是 6 层（ROOT→A1→P→A3→T1→S1），已随本轮改形。
+     *
+     * <h2>⚠ 它在<b>合法树</b>里够不着，别据此以为它没用</h2>
+     * <p>{@link #assertOnlyOneAdminLayer} 一旦生效，承载规则自己就把深度封在 4 了：
+     * 管理员的父只能是机构根（永远 depth 2）→ 教师的父只能是管理员（永远 3）→
+     * 学生是叶子（永远 4）。<b>合法树里根本造不出第 5 层</b>，所以「建人超深」这条路
+     * 走不到本常量，会先被 {@code 10105}/{@code 10106}/{@code 10104} 拦下。
+     *
+     * <p><b>它唯一真正生效的场合是：把一棵【存量的、改形前留下的】深子树整个搬走。</b>
+     * 那时 {@code NodeMoveService#assertDepthWithinLimit} 会算出新深度并拒。
+     * 用例 {@code NodeMoveValidationIT#movingLegacyDeepSubtreeExceedsDepthLimit} 就守着这一条 ——
+     * <b>在它之前，把本常量从 4 改回 50，整套测试是全绿的</b>（M59 实测），
+     * 也就是说定案二的「树高」那一半当时没有任何东西守着。
      */
     public static final int MAX_DEPTH = 4;
 

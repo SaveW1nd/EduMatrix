@@ -68,16 +68,12 @@ public final class NodeTypeRule {
      * @param childType  被挂/被移动节点的 {@code node_type}
      */
     /**
-     * @deprecated 用 {@link #assertCanBeChildOf(Integer, Integer, boolean)} —— F-114 之后
-     *             「管理员下能挂什么」<b>取决于这个管理员是不是机构根</b>，只看类型判不出来。
-     *             保留本重载只为不动那些确实与机构根无关的调用点；新代码不要用。
-     */
-    @Deprecated
-    public static void assertCanBeChildOf(Integer parentType, Integer childType) {
-        assertCanBeChildOf(parentType, childType, true);
-    }
-
-    /**
+     * <p><b>没有「不带 {@code parentIsOrgRoot}」的重载，这是有意的。</b>
+     * F-114 之前有过一个 {@code @Deprecated} 的两参版本（内部按 {@code true} 调用），
+     * 本意是「不动那些确实与机构根无关的调用点」—— 但<b>一个这样的调用点都没有</b>，
+     * 而它留在那里的真实作用是：谁不小心调了它，就<b>静默绕过 F-114</b>、且不报错。
+     * 已删除。要判就必须把父节点是不是机构根一起交出来。
+     *
      * @param parentIsOrgRoot 父节点是不是<b>机构根</b>（{@code id == tenant_id}）。
      *
      * <p><b>F-114（需方 2026-08-22 定案）：机构下只允许一层管理员，树高最多 5 层。</b>
