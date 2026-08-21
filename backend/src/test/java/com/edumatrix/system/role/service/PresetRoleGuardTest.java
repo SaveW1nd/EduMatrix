@@ -212,5 +212,10 @@ class PresetRoleGuardTest {
         public Long getNodeId() {
             return 1960000000000000010L;
         }
+
+    @Override
+    public Integer getUserType() {
+        return null;
+    }
     }
 }

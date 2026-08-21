@@ -36,4 +36,9 @@ public class NoSessionCurrentContextProvider implements CurrentContextProvider {
     public Long getNodeId() {
         return null;
     }
+
+    @Override
+    public Integer getUserType() {
+        return null;
+    }
 }

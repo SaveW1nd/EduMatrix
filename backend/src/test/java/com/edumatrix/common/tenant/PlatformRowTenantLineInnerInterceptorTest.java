@@ -156,6 +156,11 @@ class PlatformRowTenantLineInnerInterceptorTest {
             public Long getNodeId() {
                 return 0L;
             }
+
+    @Override
+    public Integer getUserType() {
+        return null;
+    }
         });
         assertThat(interceptor.buildTableExpression(new Table("sys_oper_log"), null, ""))
                 .as("超管靠租户插件整体放行，这是与 tenant_id = 0 放行不同的第二条通道")
