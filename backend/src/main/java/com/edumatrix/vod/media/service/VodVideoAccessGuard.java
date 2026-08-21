@@ -5,7 +5,9 @@ import org.springframework.stereotype.Component;
 import com.edumatrix.common.grant.ResourceGrantReader;
 import com.edumatrix.common.resource.ResourceType;
 import com.edumatrix.common.response.BizException;
+import com.edumatrix.common.errorcode.ErrorCode;
 import com.edumatrix.common.subtree.CurrentNodeProvider;
+import com.edumatrix.common.tenant.TenantHelper;
 import com.edumatrix.vod.media.entity.VodVideo;
 import com.edumatrix.vod.media.mapper.VodVideoMapper;
 
@@ -56,6 +58,39 @@ public class VodVideoAccessGuard {
     /** 当前登录人所在节点；取不到抛 400（绝不退化为「不加过滤」，契约 §7.1）。 */
     public Long myNodeId() {
         return currentNodeProvider.requireCurrentNodeId();
+    }
+
+    /**
+     * 媒资的四个写操作（上传 / 删除 / 重转 / 禁用启用）<b>只有机构根节点可以做</b>
+     * —— 需方 2026-08-21 定案（F-114 收窄）。
+     *
+     * <h2>为什么是代码里的判定，而不是 {@code sys_role_menu}</h2>
+     * F-110 / F-72 的纪律是「权限的真相在 {@code sys_role_menu}，代码里不写第二份」。
+     * <b>这一条不适用于本判定</b>：机构根管理员与下级管理员<b>共用同一个 {@code org_admin} 角色</b>，
+     * 从角色上撤就是把两者一起撤掉。要用角色表达就得新建一个 {@code org_root_admin} 角色
+     * 并改建人员的绑定逻辑 —— 那是给一条<b>结构性约束</b>造一个身份，成本与耦合都更大。
+     *
+     * <p><b>它的性质是结构约束而不是权限等级</b>：说的是「媒资这类资源只存在于机构根这一层」，
+     * 与建树规则（平台根下只能建管理员、教师下只能建学生，02-数据库设计 §444）同类，
+     * 而那一类判定本来就在代码里。
+     *
+     * <h2>怎么判「是不是机构根」</h2>
+     * <b>机构根节点的 {@code id} 等于它的 {@code tenant_id}</b> —— 契约 §2.1、
+     * 02-数据库设计 §28 逐字写死的两个 ID 例外之一（另一个是平台根固定 {@code id=0}）。
+     * 所以这是<b>一次比较，不查库、不遍历树、不看 ancestors 前缀</b>。
+     * <b>不要改成按 {@code parent_id == 0} 判</b>：那依赖树形状，而 id==tenant_id 是契约事实。
+     *
+     * @throws BizException 非机构根节点一律 403（{@link ErrorCode#FORBIDDEN}）
+     */
+    public void assertOrgRoot() {
+        Long nodeId = myNodeId();
+        Long tenantId = TenantHelper.getTenantIdOrNull();
+        if (tenantId == null || !tenantId.equals(nodeId)) {
+            throw new BizException(ErrorCode.FORBIDDEN,
+                    "媒资的上传、删除、重新转码与禁用启用【仅机构根节点可操作】（F-114 需方定案）。"
+                            + "下级管理员即使拥有 vod:video:* 权限位也不行 —— "
+                            + "这是资源归属层级的约束，不是权限等级");
+        }
     }
 
     /** 我是不是 owner（<b>严格相等</b>，契约 §2.5 规则 8）。 */

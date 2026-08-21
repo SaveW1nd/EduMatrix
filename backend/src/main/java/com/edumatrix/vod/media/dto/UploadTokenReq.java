@@ -73,4 +73,24 @@ public class UploadTokenReq {
     public void setVideoId(Long videoId) {
         this.videoId = videoId;
     }
+
+    /**
+     * 是否加密上传（F-114，需方 2026-08-21 定案：<b>上传时可选</b>）。
+     *
+     * <p>{@code true} 走加密模板组（阿里云私有加密），{@code false} 或不传走不加密组。
+     * <b>加密属性跟着视频走、不跟着课程走</b> —— 同一棵课程树下可以混着加密与不加密的视频，
+     * 同一个视频也可以被挂到多个课时。
+     *
+     * <p><b>只在新建时有效</b>：续传（带 {@code videoId}）不改模板组，
+     * 那会让同一个视频前后两次用不同的组。
+     */
+    private Boolean encrypted;
+
+    public Boolean getEncrypted() {
+        return encrypted;
+    }
+
+    public void setEncrypted(Boolean encrypted) {
+        this.encrypted = encrypted;
+    }
 }

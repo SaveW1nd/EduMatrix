@@ -331,10 +331,18 @@ class VodVideoIT extends CourseIntegrationTestBase {
     @Test
     @DisplayName("F-49 路径上的媒资：不存在 与 存在但不可见，两次响应完全一致（都是 404）")
     void pathAddressedExistenceIsNotProbeable() throws Exception {
-        // 演员换成下级管理员 A1（与 ROOT 的媒资无授权关系）：教师已无 vod:video:remove，
-        // 用教师的话两次 DELETE 都会在权限层 403 —— 仍然「逐字相同」，本条会绿着退化成
-        // 「教师碰不到删除端点」，而它要证的是 404 不暴露存在性。
-        String token = loginAs(CourseFixtures.A1);
+        // 【F-114 收窄后演员必须再换一次，理由与当初从教师换到 A1 完全同源】
+        // 媒资写操作现在【仅机构根】可做，下级管理员 A1 会在 assertOrgRoot() 处 403 ——
+        // 两次 DELETE 仍然「逐字相同」，但本条会【绿着退化】成「A1 碰不到删除端点」，
+        // 而它要证的是「404 不暴露存在性」。这正是原注释警告过的那个形状，只是闸换了一道。
+        //
+        // 换成【另一个租户的机构根】ROOT2：他过得了 assertOrgRoot()（自己就是机构根），
+        // 于是判定真的落到可见性/租户隔离那一层，本条才在证它该证的东西。
+        //
+        // ⚠ 顺带记一个【收窄带来的真实后果】：同租户内「有写权限但看不见某个媒资」
+        //    这个组合【从此不存在】—— 唯一能走到写端点的人是机构根，而他看得见本租户全部媒资。
+        //    F-49 在写端点上的同租户探测面因此消失了，剩下的只有跨租户这一层。
+        String token = loginAs(CourseFixtures.ROOT2);
 
         // 用 DELETE 而不是 POST：两条都走 VodVideoAccessGuard#loadOwnedByPath 这同一个入口，
         // 而 outcome() 只支持 GET/PUT/DELETE（模块 08 建的，本条不为一个探针去改它）
@@ -344,6 +352,107 @@ class VodVideoIT extends CourseIntegrationTestBase {
         assertEquals(missing, invisible,
                 "两次响应必须逐字相同 —— 不同则可拿来探测存在性（契约 §2.4 三分法第 1 行、F-42 同形状）");
         assertEquals(404, missing.httpStatus());
+    }
+
+    // =====================================================================
+    // 【F-114】上传时可选加密：选了就要真的走加密那个模板组
+    //
+    // 三条一组：不选 / 选了 / 加密组没配。
+    // 前两条成对才证明「真的按参数选」——单独任何一条都可能是「恒用某一个组」。
+    // 第三条守的是【不许悄悄降级】：降级的表现是「以为加密了其实没有」，不报错。
+    // =====================================================================
+
+    @Test
+    @DisplayName("⚠ F-114 不选加密 → 走默认（不加密）模板组，并记进 template_group_id")
+    void uploadWithoutEncryptionUsesDefaultGroup() throws Exception {
+        JsonNode res = client.postWithToken(VIDEOS + "/upload-token", loginAs(CourseFixtures.ROOT),
+                """
+                {"videoName":"明文视频","fileName":"a.mp4","fileSize":1048576}""");
+        assertEquals(200, code(res));
+        assertTrue(vodClient.calls.stream().anyMatch(c -> c.contains("tpl=TPL-PLAIN")),
+                "未选加密必须走默认组，实际调用轨迹：" + vodClient.calls);
+        assertEquals("TPL-PLAIN", templateGroupOf(data(res).path("videoId").asLong()));
+    }
+
+    @Test
+    @DisplayName("⚠ F-114 选了加密 → 走加密模板组（与上一条成对，缺一条抓不住「恒用某个组」）")
+    void uploadWithEncryptionUsesEncryptedGroup() throws Exception {
+        JsonNode res = client.postWithToken(VIDEOS + "/upload-token", loginAs(CourseFixtures.ROOT),
+                """
+                {"videoName":"加密视频","fileName":"b.mp4","fileSize":1048576,"encrypted":true}""");
+        assertEquals(200, code(res));
+        assertTrue(vodClient.calls.stream().anyMatch(c -> c.contains("tpl=TPL-ENCRYPTED")),
+                "选了加密必须走加密组，实际调用轨迹：" + vodClient.calls);
+        assertEquals("TPL-ENCRYPTED", templateGroupOf(data(res).path("videoId").asLong()));
+    }
+
+    @Test
+    @DisplayName("⚠ F-114 加密组没配 → 【拒绝】，不许悄悄降级成不加密")
+    void uploadWithEncryptionRejectedWhenNoEncryptedGroupConfigured() throws Exception {
+        vodClient.encryptedGroup = "";      // 模拟本部署没配加密模板组
+        JsonNode res = client.postWithToken(VIDEOS + "/upload-token", loginAs(CourseFixtures.ROOT),
+                """
+                {"videoName":"要加密","fileName":"c.mp4","fileSize":1048576,"encrypted":true}""");
+        assertTrue(code(res) != 200,
+                "没配加密组时必须报错。悄悄降级成不加密的表现是【以为加密了其实没有】，"
+                        + "页面一切正常、没人会发现 —— 与挑流那条「挑不到必须置 3、绝不可置 2」同一条纪律");
+        assertTrue(vodClient.calls.stream().noneMatch(c -> c.startsWith("createUploadVideo")),
+                "被拒绝时不应产生任何云调用");
+    }
+
+    /**
+     * <b>重转必须复用这个视频当初用的模板组</b>，不能用当前配置的那个。
+     *
+     * <p>用当前配置的会在<b>同一个视频上叠出第二套流</b> → {@code GetPlayInfo} 返回两路
+     * → 「恰好一路」守卫失败，而它报的原因（「模板组配了多档」）与真实原因
+     * （两次转码用了不同组）<b>对不上</b>，排查会被带偏。
+     */
+    @Test
+    @DisplayName("⚠ F-114 重新发起转码：复用【当初那个】模板组，不用当前配置的")
+    void retranscodeReusesOriginalTemplateGroup() throws Exception {
+        // 这条媒资当初是按【加密】传的
+        jdbcTemplate.update("UPDATE vod_video SET status = 3, template_group_id = ? WHERE id = ?",
+                "TPL-ENCRYPTED", CourseFixtures.VIDEO_OK);
+        // 与此同时当前默认配置是【不加密】—— 两者不同，才分得出用了哪一个
+        vodClient.reset();
+
+        JsonNode res = client.postWithToken(VIDEOS + "/" + CourseFixtures.VIDEO_OK + "/retranscode",
+                loginAs(CourseFixtures.ROOT), "");
+        assertEquals(200, code(res));
+
+        assertTrue(vodClient.calls.stream().anyMatch(c -> c.contains("submitTranscodeJobs")
+                        && c.contains("tpl=TPL-ENCRYPTED")),
+                "必须复用当初的 TPL-ENCRYPTED；用了当前默认的 TPL-PLAIN 就会叠出第二套流。"
+                        + "实际调用轨迹：" + vodClient.calls);
+        assertTrue(vodClient.calls.stream().noneMatch(c -> c.contains("tpl=TPL-PLAIN")),
+                "不该出现默认组");
+    }
+
+    private String templateGroupOf(long videoId) {
+        return jdbcTemplate.queryForObject(
+                "SELECT template_group_id FROM vod_video WHERE id = ?", String.class, videoId);
+    }
+
+    /**
+     * <b>收窄本身要有用例守着</b>，否则把 {@code assertOrgRoot()} 删掉全库无人发觉。
+     *
+     * <p>两侧都断言：只写「A1 被拒」的话，把整个删除端点关掉也能全绿。
+     */
+    @Test
+    @DisplayName("⚠ F-114 收窄：媒资写操作【仅机构根】—— 下级管理员 403、机构根 200（两侧都断）")
+    void mediaWriteIsOrgRootOnly() throws Exception {
+        // A1 是下级管理员：有 vod:video:remove 权限位，但不是机构根
+        HttpOutcome sub = outcome("DELETE", VIDEOS + "/" + CourseFixtures.VIDEO_DELETED,
+                loginAs(CourseFixtures.A1), null);
+        assertEquals(403, sub.httpStatus(),
+                "下级管理员即使有权限位也不行 —— 这是资源归属层级的约束，不是权限等级");
+
+        // 机构根 ROOT：同一个端点、同一条媒资，必须过得去
+        // （VIDEO_DELETED 已逻辑删除 → 404；关键是【不是 403】，说明他过了 assertOrgRoot）
+        HttpOutcome root = outcome("DELETE", VIDEOS + "/" + CourseFixtures.VIDEO_DELETED,
+                loginAs(CourseFixtures.ROOT), null);
+        assertEquals(404, root.httpStatus(),
+                "机构根必须过得了结构闸（这条媒资已删故 404）—— 若这里也 403，说明收窄把机构根一起挡了");
     }
 
     @Test

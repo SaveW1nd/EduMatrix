@@ -79,12 +79,15 @@ public class VodClient implements VodMediaClient {
 
     private final IAcsClient acsClient;
     private final String templateGroupId;
+    private final String encryptedTemplateGroupId;
 
     public VodClient(@Value("${edumatrix.vod.region}") String region,
                      @Value("${edumatrix.vod.template-group-id}") String templateGroupId,
+                     @Value("${edumatrix.vod.template-group-id-encrypted:}") String encryptedTemplateGroupId,
                      @Value("${edumatrix.file.oss.access-key-id}") String accessKeyId,
                      @Value("${edumatrix.file.oss.access-key-secret}") String accessKeySecret) {
         this.templateGroupId = templateGroupId.trim();
+        this.encryptedTemplateGroupId = encryptedTemplateGroupId == null ? "" : encryptedTemplateGroupId.trim();
         this.acsClient = new DefaultAcsClient(
                 DefaultProfile.getProfile(region.trim(), accessKeyId, accessKeySecret));
         // 与 OssClient 那行「对象存储 = …」同型的可 grep 事实。【不打印任何凭据】
@@ -92,8 +95,21 @@ public class VodClient implements VodMediaClient {
                 region.trim(), this.templateGroupId);
     }
 
+    /** 不加密模板组（默认）。 */
     @Override
-    public VodUploadCredential createUploadVideo(String title, String fileName, long fileSize) {
+    public String defaultTemplateGroupId() {
+        return templateGroupId;
+    }
+
+    /** 加密模板组；<b>留空表示本部署不提供加密选项</b>。 */
+    @Override
+    public String encryptedTemplateGroupId() {
+        return encryptedTemplateGroupId;
+    }
+
+    @Override
+    public VodUploadCredential createUploadVideo(String title, String fileName, long fileSize,
+                                                 String templateGroupId) {
         CreateUploadVideoRequest request = new CreateUploadVideoRequest();
         request.setTitle(title);
         request.setFileName(fileName);
@@ -178,7 +194,7 @@ public class VodClient implements VodMediaClient {
     }
 
     @Override
-    public void submitTranscodeJobs(String cloudVideoId) {
+    public void submitTranscodeJobs(String cloudVideoId, String templateGroupId) {
         SubmitTranscodeJobsRequest request = new SubmitTranscodeJobsRequest();
         request.setVideoId(cloudVideoId);
         request.setTemplateGroupId(templateGroupId);

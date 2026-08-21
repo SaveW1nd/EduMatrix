@@ -43,7 +43,8 @@ public class DisabledVodMediaClient implements VodMediaClient {
     }
 
     @Override
-    public VodUploadCredential createUploadVideo(String title, String fileName, long fileSize) {
+    public VodUploadCredential createUploadVideo(String title, String fileName, long fileSize,
+                                                 String templateGroupId) {
         throw new IllegalStateException(NOT_CONFIGURED);
     }
 
@@ -60,7 +61,7 @@ public class DisabledVodMediaClient implements VodMediaClient {
     }
 
     @Override
-    public void submitTranscodeJobs(String cloudVideoId) {
+    public void submitTranscodeJobs(String cloudVideoId, String templateGroupId) {
         throw new IllegalStateException(NOT_CONFIGURED);
     }
 
@@ -72,6 +73,16 @@ public class DisabledVodMediaClient implements VodMediaClient {
     /** 空实现下没有任何流可挑 —— 保留这个常量位以免调用方对 {@code null} 与空集分叉处理。 */
     static VodPlayInfo empty() {
         return new VodPlayInfo(List.of(), null);
+    }
+
+    @Override
+    public String defaultTemplateGroupId() {
+        return "";
+    }
+
+    @Override
+    public String encryptedTemplateGroupId() {
+        return "";
     }
 
     @Override
