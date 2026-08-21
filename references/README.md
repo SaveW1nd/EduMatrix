@@ -43,7 +43,7 @@
 
 ### 5. 云端 VOD（无仓库，文档参考）
 - 阿里云 VOD：https://help.aliyun.com/product/29932.html （PlayAuth 播放凭证模式）
-- 对应契约表：`vod_video`；接口 `POST /api/v1/vod/videos/upload-token`、`POST /api/v1/vod/play-auth`、`GET /api/v1/vod/decrypt-key`；转码事件经 XXL-Job 拉取 SMQ 消费（03-课程与视频 §7.2），**无 HTTP 回调端点**
+- 对应契约表：`vod_video`；接口 `POST /api/v1/vod/videos/upload-token`、`POST /api/v1/vod/play-auth`（原「获取解密密钥」已随加密路线改为阿里云私有加密而**删除**，见 03-课程与视频 §8.2 墓碑小节）；转码事件经 XXL-Job 拉取 SMQ 消费（03-课程与视频 §7.2），**无 HTTP 回调端点**
 
 ## 克隆维护
 
