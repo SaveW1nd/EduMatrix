@@ -107,7 +107,19 @@ class ExistenceProbeIT extends CourseIntegrationTestBase {
         assertEquals(200, code(created), created.toString());
         long invisible = data(created).path("id").asLong();
 
-        String token = loginAs(CourseFixtures.A1);
+        // ⚠【F-114 换演员，与 vod 那条 pathAddressedExistenceIsNotProbeable 同一处置】
+        //   图文资料的写操作收窄到机构根之后，A1 会在【机构根闸】处 403 ——
+        //   两次仍然「逐字相同」，但都变成了 403，本条要证的「404 不暴露存在性」验不到了，
+        //   而且会绿着退化成「A1 碰不到写端点」。
+        //
+        //   换成【另一个租户的机构根】ROOT2：他过得了机构根闸，判定才真的落到
+        //   可见性/租户隔离那一层，两次都回 404。
+        //
+        //   ⚠ 连带记一笔：收窄之后，同租户内「有写权限但看不见某条资料」这个组合
+        //   【不再存在】—— 唯一能走到写端点的人是机构根，而他看得见本租户全部资料。
+        //   写端点上的同租户探测面因此消失，只剩跨租户这一层。与 F-114 在 vod 侧的
+        //   那条注记同源。
+        String token = loginAs(CourseFixtures.ROOT2);
         String body = "{\"title\":\"改名\",\"content\":\"<p>y</p>\"}";
 
         assertIndistinguishable("GET", "/api/v1/course/materials/%d", null, token, GHOST, invisible);

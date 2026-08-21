@@ -24,6 +24,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class MaterialIT extends CourseIntegrationTestBase {
 
+    /** 夹具直接种的、owner=A1 的资料 —— F-114 之后 A1 已不能自己建（见用例内注释）。 */
+    private static final long MAT_OWNED_BY_A1 = 1968000000000002901L;
+
     @Test
     @DisplayName("PRD F2-2 验收标准 2：<script> 被过滤【后落库】—— 断言的是库里的值")
     void scriptIsStrippedBeforePersist() throws Exception {
@@ -137,15 +140,20 @@ class MaterialIT extends CourseIntegrationTestBase {
         // 演员从教师王（TA）换成下级管理员 A1：V202608210200 之后教师没有 course:material:add，
         // 建资料这一步会 403。本条验的是【子树过滤】，不是「谁能建资料」——
         // 换成同样在 ROOT 子树里的下级管理员，验的还是同一件事。
-        String subAdminToken = loginAs(CourseFixtures.A1);
-        client.postWithToken("/api/v1/course/materials", subAdminToken,
-                "{\"title\":\"华东大区的讲义\",\"content\":\"<p>x</p>\"}");
+        // ⚠【F-114】图文资料的写操作收窄到机构根之后，「下级管理员建资料」这个场景【不再存在】。
+        //   但【可见性逻辑还在】，仍该被测 —— 所以改成用夹具直接种一条 owner=A1 的资料，
+        //   把「谁能建」（已收窄）与「谁能看见」（没变）两件事分开。
+        //   继续走 API 建的话本条只会红在建那一步，可见性一个字都验不到。
+        courseFixtures.material(MAT_OWNED_BY_A1, "华东大区的讲义", "<p>x</p>",
+                CourseFixtures.A1, CourseFixtures.TENANT_ID);
 
         JsonNode rootList = client.getWithToken("/api/v1/course/materials?pageSize=100", rootToken);
         assertEquals(2, data(rootList).path("total").asInt(),
                 "上级管理员按 owner_node_id 子树过滤，能看到下级建的资料 ——"
                         + "资料不是受管资源，走的是契约 §2.4 子树规则而不是 §2.5 资源可见性");
 
+        // 下级管理员【仍然读得到】—— 收窄的只有写，读接口一个都没动
+        String subAdminToken = loginAs(CourseFixtures.A1);
         JsonNode subList = client.getWithToken("/api/v1/course/materials?pageSize=100", subAdminToken);
         assertEquals(1, data(subList).path("total").asInt(), "下级只看得到自己子树里的");
         assertEquals(0, data(subList).path("list").get(0).path("attachmentCount").asInt());
@@ -162,11 +170,13 @@ class MaterialIT extends CourseIntegrationTestBase {
         // 建资料的演员换成下级管理员 A1（教师已无 course:material:add）；
         // 探测方仍是教师李（TB）—— 他不在 A1 子树内，且 course:material:list 一直保留，
         // 所以这条读侧断言验的仍然是子树过滤本身。
-        String ownerToken = loginAs(CourseFixtures.A1);
-        JsonNode created = client.postWithToken("/api/v1/course/materials", ownerToken,
-                "{\"title\":\"华东大区的讲义\",\"content\":\"<p>x</p>\"}");
-        assertEquals(200, code(created), created.toString());
-        long id = data(created).path("id").asLong();
+        // ⚠【F-114】图文资料的写操作收窄到机构根之后，「下级管理员建资料」这个场景【不再存在】。
+        //   但【可见性逻辑还在】，仍该被测 —— 所以改成用夹具直接种一条 owner=A1 的资料，
+        //   把「谁能建」（已收窄）与「谁能看见」（没变）两件事分开。
+        //   继续走 API 建的话本条只会红在建那一步，可见性一个字都验不到。
+        courseFixtures.material(MAT_OWNED_BY_A1, "华东大区的讲义", "<p>x</p>",
+                CourseFixtures.A1, CourseFixtures.TENANT_ID);
+        long id = MAT_OWNED_BY_A1;
 
         String siblingToken = loginAs(CourseFixtures.TB);
         assertEquals(404, code(client.getWithToken("/api/v1/course/materials/" + id, siblingToken)),

@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
+import com.edumatrix.common.subtree.OrgRootGuard;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -61,6 +62,7 @@ public class QuestionService {
     private static final int STEM_PREVIEW_MAX = 200;
 
     private final QbQuestionMapper questionMapper;
+    private final OrgRootGuard orgRootGuard;
     private final QbCategoryMapper categoryMapper;
     private final QuestionReferenceMapper referenceMapper;
     private final QuestionVersionProvider versionProvider;
@@ -72,7 +74,9 @@ public class QuestionService {
                            QuestionReferenceMapper referenceMapper,
                            QuestionVersionProvider versionProvider,
                            QuestionAccessGuard guard,
-                           CurrentNodeProvider currentNodeProvider) {
+                           CurrentNodeProvider currentNodeProvider,
+                           OrgRootGuard orgRootGuard) {
+        this.orgRootGuard = orgRootGuard;
         this.questionMapper = questionMapper;
         this.categoryMapper = categoryMapper;
         this.referenceMapper = referenceMapper;
@@ -87,6 +91,7 @@ public class QuestionService {
 
     @Transactional(rollbackFor = Exception.class)
     public QuestionCreatedVO create(QuestionCreateReq req) {
+        orgRootGuard.assertOrgRoot("题目");   // F-114 收窄：三类受管资源写操作仅机构根
         QuestionType type = requireType(req.getQuestionType());
         requireCategory(req.getCategoryId());
         Long ownerNodeId = currentNodeProvider.requireCurrentNodeId();
@@ -166,6 +171,7 @@ public class QuestionService {
 
     @Transactional(rollbackFor = Exception.class)
     public QuestionUpdatedVO update(Long id, QuestionUpdateReq req) {
+        orgRootGuard.assertOrgRoot("题目");   // F-114 收窄：三类受管资源写操作仅机构根
         QbQuestion question = guard.loadOwnedForUpdate(id);
         QuestionType type = requireType(question.getQuestionType());
         QbQuestionVersion current = versionProvider.currentRow(question);
@@ -229,6 +235,7 @@ public class QuestionService {
      */
     @Transactional(rollbackFor = Exception.class)
     public QuestionStatusVO changeStatus(Long id, QuestionStatusReq req) {
+        orgRootGuard.assertOrgRoot("题目");   // F-114 收窄：三类受管资源写操作仅机构根
         QbQuestion question = guard.loadOwnedForUpdate(id);
         rejectChildId(question, "启用/停用请传材料题的父题 ID（03-04 §2.7）");
 
@@ -259,6 +266,7 @@ public class QuestionService {
      */
     @Transactional(rollbackFor = Exception.class)
     public void delete(Long id) {
+        orgRootGuard.assertOrgRoot("题目");   // F-114 收窄：三类受管资源写操作仅机构根
         QbQuestion question = guard.loadOwnedForUpdate(id);
         rejectChildId(question, "删除请传材料题的父题 ID（03-04 §2.8）");
 

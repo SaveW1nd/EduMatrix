@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+import com.edumatrix.common.subtree.OrgRootGuard;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -58,6 +59,7 @@ import com.edumatrix.course.catalog.vo.CreatedIdVO;
 public class CourseService {
 
     private final CrsCourseMapper courseMapper;
+    private final OrgRootGuard orgRootGuard;
     private final CrsChapterMapper chapterMapper;
     private final CrsLessonMapper lessonMapper;
     private final CourseAccessGuard guard;
@@ -77,7 +79,9 @@ public class CourseService {
                          InlineFileUrlProvider inlineFileUrlProvider,
                          NodeNameReader nodeNameReader,
                          UserNameReader userNameReader,
-                         VideoLessonInspector videoLessonInspector) {
+                         VideoLessonInspector videoLessonInspector,
+                         OrgRootGuard orgRootGuard) {
+        this.orgRootGuard = orgRootGuard;
         this.courseMapper = courseMapper;
         this.chapterMapper = chapterMapper;
         this.lessonMapper = lessonMapper;
@@ -210,6 +214,7 @@ public class CourseService {
      */
     @Transactional(rollbackFor = Exception.class)
     public CreatedIdVO create(CourseCreateReq req) {
+        orgRootGuard.assertOrgRoot("课程");   // F-114 收窄：三类受管资源写操作仅机构根
         Long myNodeId = guard.myNodeId();
         CrsCourse course = new CrsCourse();
         course.setCourseName(req.getCourseName().trim());
@@ -234,6 +239,7 @@ public class CourseService {
 
     @Transactional(rollbackFor = Exception.class)
     public void update(Long courseId, CourseUpdateReq req) {
+        orgRootGuard.assertOrgRoot("课程");   // F-114 收窄：三类受管资源写操作仅机构根
         CrsCourse course = guard.loadOwned(CourseRef.PATH, courseId);
         CrsCourse patch = new CrsCourse();
         patch.setId(course.getId());
@@ -267,6 +273,7 @@ public class CourseService {
      */
     @Transactional(rollbackFor = Exception.class)
     public void delete(Long courseId) {
+        orgRootGuard.assertOrgRoot("课程");   // F-114 收窄：三类受管资源写操作仅机构根
         CrsCourse course = guard.loadOwnedForUpdate(CourseRef.PATH, courseId);
         if (course.getStatus() != null && course.getStatus() == CrsCourse.STATUS_ON_SHELF) {
             throw new BizException(ErrorCode.COURSE_STATUS_NOT_ALLOWED,
@@ -311,6 +318,7 @@ public class CourseService {
      */
     @Transactional(rollbackFor = Exception.class)
     public CourseShelfVO shelf(Long courseId, CourseShelfReq req) {
+        orgRootGuard.assertOrgRoot("课程");   // F-114 收窄：三类受管资源写操作仅机构根
         CrsCourse course = guard.loadOwnedForUpdate(CourseRef.PATH, courseId);
         int target = req.getTargetStatus();
         int current = course.getStatus() == null ? CrsCourse.STATUS_DRAFT : course.getStatus();

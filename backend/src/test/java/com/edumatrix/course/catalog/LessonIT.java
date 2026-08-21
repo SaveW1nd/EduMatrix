@@ -29,6 +29,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class LessonIT extends CourseIntegrationTestBase {
 
+    /** 建在 TA 的课程下的章节 —— 「非 owner 不可加课时」那条要用它。 */
+    private static final long CH_UNDER_TA = 1968000000000004901L;
+
     @Test
     @DisplayName("PRD F2-1 验收标准 2：视频 status=1 转码中时置课时可见 → 20008（不是 20003）")
     void visibleLessonRequiresTranscodedVideo() throws Exception {
@@ -204,18 +207,20 @@ class LessonIT extends CourseIntegrationTestBase {
     @Test
     @DisplayName("PRD F2-1 验收标准 4：非 owner 新增课时被拒（403）")
     void nonOwnerCannotAddLesson() throws Exception {
-        String ownerToken = loginAs(CourseFixtures.ROOT);
-        long chapter = createChapter(ownerToken, "第一章");
-        // 【被授权者换成管理员 A1】教师已无该写权限（V202608210200），
-        // 继续用教师会让这条 403 【绿着退化】：判定从「可见但非 owner」
-        // 变成「压根没这个权限」，而本条要证的正是前者。A1 有权限、只是不是 owner。
-        courseFixtures.grantCourse(CourseFixtures.C_ROOT, CourseFixtures.A1, CourseFixtures.TENANT_ID);
+        // ⚠【F-114 再换一次演员】收窄之后 A1 会在【机构根闸】处 403，本条会绿着退化成
+        //   「A1 碰不到这个端点」。章节改建在 TA 的课程下（owner=TA），演员换成机构根 ROOT：
+        //   ROOT 过得了机构根闸、也有 course:lesson:add，403 才真的来自归属判定。
+        //   与 F-110 那轮从教师换到 A1 是同一形状，只是闸又多了一道。
+        courseFixtures.chapter(CH_UNDER_TA, CourseFixtures.C_TA, 0L, "TA 的章", 1, CourseFixtures.TENANT_ID);
+        long chapter = CH_UNDER_TA;
+        courseFixtures.grantCourse(CourseFixtures.C_TA, CourseFixtures.ROOT, CourseFixtures.TENANT_ID);
 
-        String grantedToken = loginAs(CourseFixtures.A1);
+        String grantedToken = loginAs(CourseFixtures.ROOT);
         JsonNode rejected = client.postWithToken("/api/v1/course/lessons", grantedToken,
                 lessonBody(chapter, 1, CourseFixtures.VIDEO_OK, null, 1));
         assertEquals(403, code(rejected), "被授权方只能用不能改（PRD F2-1 规则 8）—— "
-                + "演员是管理员，他有 course:lesson:add，403 只可能来自归属判定");
+                + "演员是【机构根】ROOT，他过得了 F-114 的机构根闸、也有 course:lesson:add，"
+                + "403 只可能来自归属判定 —— C_TA 的 owner 是 TA");
     }
 
     @Test

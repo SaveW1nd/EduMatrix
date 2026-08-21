@@ -67,21 +67,20 @@ class ChapterIT extends CourseIntegrationTestBase {
     @Test
     @DisplayName("§2.1 是读接口：被授权者可看章节树（订正前的权限栏要求 owner，那是自相矛盾的）")
     void grantedNodeCanReadChapterTree() throws Exception {
-        String ownerToken = loginAs(CourseFixtures.ROOT);
-        createChapter(ownerToken, 0L, "第一章");
-        // 【被授权者换成管理员 A1】教师已无该写权限（V202608210200），
-        // 继续用教师会让这条 403 【绿着退化】：判定从「可见但非 owner」
-        // 变成「压根没这个权限」，而本条要证的正是前者。A1 有权限、只是不是 owner。
-        courseFixtures.grantCourse(CourseFixtures.C_ROOT, CourseFixtures.A1, CourseFixtures.TENANT_ID);
+        // ⚠【F-114 换演员】收窄后 A1 会在【机构根闸】处 403/被拒，本条会绿着退化。
+        //   换成机构根 ROOT + 非 ROOT 拥有的资源：ROOT 过得了机构根闸，判定才落回归属那一层。
+        courseFixtures.chapter(1968000000000004902L, CourseFixtures.C_TA, 0L, "TA 的章", 1,
+                CourseFixtures.TENANT_ID);
+        courseFixtures.grantCourse(CourseFixtures.C_TA, CourseFixtures.ROOT, CourseFixtures.TENANT_ID);
 
-        String grantedToken = loginAs(CourseFixtures.A1);
+        String grantedToken = loginAs(CourseFixtures.ROOT);
         JsonNode tree = client.getWithToken(
-                "/api/v1/course/courses/" + CourseFixtures.C_ROOT + "/chapters", grantedToken);
+                "/api/v1/course/courses/" + CourseFixtures.C_TA + "/chapters", grantedToken);
         assertEquals(200, code(tree));
         assertEquals(1, data(tree).size());
 
         JsonNode created = client.postWithToken("/api/v1/course/chapters", grantedToken,
-                "{\"courseId\":\"" + CourseFixtures.C_ROOT + "\",\"parentId\":\"0\","
+                "{\"courseId\":\"" + CourseFixtures.C_TA + "\",\"parentId\":\"0\","
                         + "\"chapterName\":\"被授权者试图加章\"}");
         assertEquals(403, code(created), "写操作仍要求 owner —— "
                 + "演员是管理员，他有 course:chapter:add，403 只可能来自归属判定");

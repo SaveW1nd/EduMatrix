@@ -93,22 +93,29 @@ class CourseCrudIT extends CourseIntegrationTestBase {
         // 【被授权者换成管理员 A1】教师已无该写权限（V202608210200），
         // 继续用教师会让这条 403 【绿着退化】：判定从「可见但非 owner」
         // 变成「压根没这个权限」，而本条要证的正是前者。A1 有权限、只是不是 owner。
-        courseFixtures.grantCourse(CourseFixtures.C_ROOT, CourseFixtures.A1, CourseFixtures.TENANT_ID);
-        String grantedToken = loginAs(CourseFixtures.A1);
 
-        JsonNode detail = client.getWithToken("/api/v1/course/courses/" + CourseFixtures.C_ROOT, grantedToken);
+        // ⚠【F-114 再换一次演员】收窄之后 A1 会在【机构根闸】处 403，本条会绿着退化成
+        //   「A1 碰不到这个端点」。换成机构根 ROOT + TA 拥有的资源：ROOT 过得了机构根闸、
+        //   也有对应权限位，403 才真的来自归属判定。与 F-110 那轮从教师换到 A1 同一形状。
+        courseFixtures.grantCourse(CourseFixtures.C_TA, CourseFixtures.ROOT, CourseFixtures.TENANT_ID);
+        String grantedToken = loginAs(CourseFixtures.ROOT);
+
+        JsonNode detail = client.getWithToken("/api/v1/course/courses/" + CourseFixtures.C_TA, grantedToken);
         assertEquals(200, code(detail));
         assertEquals(2, data(detail).path("grantType").asInt(), "被授权行的 grantType 应为 2");
         assertTrue(data(detail).path("grantedNodeCount").isNull() || detail.toString().contains("grantType"),
                 "详情不返回 grantedNodeCount，无需断言");
 
-        JsonNode updated = client.putWithToken("/api/v1/course/courses/" + CourseFixtures.C_ROOT,
+        JsonNode updated = client.putWithToken("/api/v1/course/courses/" + CourseFixtures.C_TA,
                 grantedToken, "{\"courseName\":\"被授权者试图改名\"}");
         assertEquals(403, code(updated), "被授权者不可写（契约 §2.5 规则 8）—— "
-                + "演员是管理员，他有 course:course:edit，所以 403 只可能来自归属判定");
+                + "演员是【机构根】ROOT，他过得了 F-114 的机构根闸、也有 course:course:edit，"
+                + "所以 403 只可能来自归属判定 —— 他不是 C_TA 的 owner");
 
-        JsonNode deleted = deleteWithToken("/api/v1/course/courses/" + CourseFixtures.C_ROOT, grantedToken);
-        assertEquals(403, code(deleted));
+        JsonNode deleted = deleteWithToken("/api/v1/course/courses/" + CourseFixtures.C_TA, grantedToken);
+        assertEquals(403, code(deleted), "同上：删除也走归属判定。"
+                + "⚠ 这一句原先指着 C_ROOT，而演员换成 ROOT 之后【他就是 C_ROOT 的 owner】—— "
+                + "删得掉是对的，但那样这一句就什么都没验到");
     }
 
     @Test
@@ -242,5 +249,61 @@ class CourseCrudIT extends CourseIntegrationTestBase {
             }
         }
         throw new AssertionError("列表里没有 id=" + id + "：" + listResponse);
+    }
+    /**
+     * <b>收窄本身要有用例守着</b>，否则把 {@code OrgRootGuard} 删掉全库无人发觉。
+     *
+     * <p><b>两侧都断</b>：只写「分校 403」的话，把整个端点写死拒绝也能全绿。
+     */
+    @Test
+    @DisplayName("⚠ F-114 收窄：课程写操作【仅机构根】—— 分校管理员 403、机构根 200（两侧都断）")
+    void courseWriteIsOrgRootOnly() throws Exception {
+        String body = "{\"courseName\":\"收窄探针\",\"subject\":\"数学\"}";
+
+        JsonNode sub = client.postWithToken("/api/v1/course/courses", loginAs(CourseFixtures.A1), body);
+        assertEquals(403, code(sub),
+                "分校管理员有 course:course:add 权限位，但不是机构根 —— "
+                        + "这是资源归属层级的约束，不是权限等级");
+
+        JsonNode root = client.postWithToken("/api/v1/course/courses", loginAs(CourseFixtures.ROOT), body);
+        assertEquals(200, code(root), "机构根必须过得去；这里若也 403，说明收窄把机构根一起挡了");
+    }
+
+    @Test
+    @DisplayName("F-114 收窄【只管写不管读】：分校管理员仍看得见课程列表")
+    void courseReadStillWorksForSubAdmin() throws Exception {
+        JsonNode list = client.getWithToken("/api/v1/course/courses?pageSize=10",
+                loginAs(CourseFixtures.A1));
+        assertEquals(200, code(list),
+                "读接口一个都没动 —— 分校管理员要看得见才能授权给名下学员");
+    }
+    /**
+     * <b>M56 逼出来的用例</b>：把判据从 {@code id == tenant_id} 换成 {@code parent_id == 0}，
+     * 原先<b>全库没有一条用例会红</b> —— 两者在所有<b>合法</b>的树上完全等价
+     * （平台根的子节点只能是机构根，而机构根的 {@code id} 恒等于 {@code tenant_id}）。
+     *
+     * <p>所以这条用例<b>刻意种一个畸形节点</b>：{@code parent_id = 0} 但 {@code id ≠ tenant_id}。
+     * 它在合法建树路径上产生不出来，但它能把「我们依赖的是哪一个事实」钉住：
+     *
+     * <ul>
+     *   <li>{@code id == tenant_id} 是<b>契约 §2.1 直接写死</b>的；</li>
+     *   <li>{@code parent_id == 0} 是<b>建树规则的推论</b> —— 今天成立，
+     *       但它依赖「机构根一定挂在平台根下」这个树形状。</li>
+     * </ul>
+     *
+     * <p>若将来有人为了「少查一次」把判据换成后者，本条会红。
+     */
+    @Test
+    @DisplayName("⚠ M56：机构根判据是 id==tenant_id，不是 parent_id==0（畸形节点上两者才分得开）")
+    void orgRootJudgedByTenantIdNotParentId() throws Exception {
+        long weirdNode = 1968000000000000090L;   // parent_id=0 但 id != tenant_id —— 合法路径造不出来
+        courseFixtures.malformedRootLikeNode(weirdNode, CourseFixtures.TENANT_ID);
+
+        JsonNode res = client.postWithToken("/api/v1/course/courses",
+                loginAs(weirdNode),
+                "{\"courseName\":\"畸形节点建课\",\"subject\":\"数学\"}");
+        assertEquals(403, code(res),
+                "它 parent_id=0，但 id != tenant_id —— 按契约它【不是】机构根，必须被拒。"
+                        + "判据若换成 parent_id==0，这里会变成 200");
     }
 }

@@ -6,6 +6,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import com.edumatrix.common.subtree.OrgRootGuard;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -64,6 +65,7 @@ public class MaterialService {
     private static final TypeReference<List<Long>> ID_LIST = new TypeReference<>() { };
 
     private final CrsMaterialMapper materialMapper;
+    private final OrgRootGuard orgRootGuard;
     private final CrsLessonMapper lessonMapper;
     private final CourseAccessGuard guard;
     private final SubtreeScopeHelper subtreeScopeHelper;
@@ -79,7 +81,9 @@ public class MaterialService {
                            HtmlSanitizer htmlSanitizer,
                            MaterialContentRewriter contentRewriter,
                            FileMetaReader fileMetaReader,
-                           UserNameReader userNameReader) {
+                           UserNameReader userNameReader,
+                         OrgRootGuard orgRootGuard) {
+        this.orgRootGuard = orgRootGuard;
         this.materialMapper = materialMapper;
         this.lessonMapper = lessonMapper;
         this.guard = guard;
@@ -158,6 +162,7 @@ public class MaterialService {
 
     @Transactional(rollbackFor = Exception.class)
     public CreatedIdVO create(MaterialCreateReq req) {
+        orgRootGuard.assertOrgRoot("图文资料");   // F-114 收窄：三类受管资源写操作仅机构根
         CrsMaterial material = new CrsMaterial();
         material.setOwnerNodeId(guard.myNodeId());
         material.setTitle(req.getTitle().trim());
@@ -182,6 +187,7 @@ public class MaterialService {
      */
     @Transactional(rollbackFor = Exception.class)
     public void update(Long materialId, MaterialUpdateReq req) {
+        orgRootGuard.assertOrgRoot("图文资料");   // F-114 收窄：三类受管资源写操作仅机构根
         CrsMaterial material = loadMaterialByPath(materialId);
         materialMapper.update(null, new com.baomidou.mybatisplus.core.conditions.update
                 .LambdaUpdateWrapper<CrsMaterial>()
@@ -198,6 +204,7 @@ public class MaterialService {
     /** 存在未删除课时引用（{@code crs_lesson.content_id}）时拒绝 → {@code 20010}（§4.5）。 */
     @Transactional(rollbackFor = Exception.class)
     public void delete(Long materialId) {
+        orgRootGuard.assertOrgRoot("图文资料");   // F-114 收窄：三类受管资源写操作仅机构根
         CrsMaterial material = loadMaterialByPath(materialId);
         Long refs = lessonMapper.selectCount(new LambdaQueryWrapper<CrsLesson>()
                 .eq(CrsLesson::getContentId, material.getId()));

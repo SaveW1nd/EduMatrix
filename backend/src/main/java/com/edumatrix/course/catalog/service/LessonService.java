@@ -5,6 +5,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import com.edumatrix.common.subtree.OrgRootGuard;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -81,6 +82,7 @@ import com.edumatrix.course.catalog.vo.LessonListVO;
 public class LessonService {
 
     private final CrsLessonMapper lessonMapper;
+    private final OrgRootGuard orgRootGuard;
     private final CrsChapterMapper chapterMapper;
     private final CrsMaterialMapper materialMapper;
     private final CourseAccessGuard guard;
@@ -92,7 +94,9 @@ public class LessonService {
                          CrsMaterialMapper materialMapper,
                          CourseAccessGuard guard,
                          CourseCounterService counterService,
-                         VideoRefReader videoRefReader) {
+                         VideoRefReader videoRefReader,
+                         OrgRootGuard orgRootGuard) {
+        this.orgRootGuard = orgRootGuard;
         this.lessonMapper = lessonMapper;
         this.chapterMapper = chapterMapper;
         this.materialMapper = materialMapper;
@@ -200,6 +204,7 @@ public class LessonService {
 
     @Transactional(rollbackFor = Exception.class)
     public CreatedIdVO create(LessonCreateReq req) {
+        orgRootGuard.assertOrgRoot("课时");   // F-114 收窄：三类受管资源写操作仅机构根
         CrsChapter chapter = loadChapterOrThrow(req.getChapterId());
         CrsCourse course = guard.loadOwnedForUpdate(CourseRef.DERIVED, chapter.getCourseId());
 
@@ -228,6 +233,7 @@ public class LessonService {
 
     @Transactional(rollbackFor = Exception.class)
     public void update(Long lessonId, LessonUpdateReq req) {
+        orgRootGuard.assertOrgRoot("课时");   // F-114 收窄：三类受管资源写操作仅机构根
         CrsLesson lesson = loadLessonByPath(lessonId);
         CrsCourse course = guard.loadOwnedForUpdate(CourseRef.DERIVED, lesson.getCourseId());
 
@@ -276,6 +282,7 @@ public class LessonService {
 
     @Transactional(rollbackFor = Exception.class)
     public void delete(Long lessonId) {
+        orgRootGuard.assertOrgRoot("课时");   // F-114 收窄：三类受管资源写操作仅机构根
         CrsLesson lesson = loadLessonByPath(lessonId);
         CrsCourse course = guard.loadOwnedForUpdate(CourseRef.DERIVED, lesson.getCourseId());
         lessonMapper.deleteById(lesson.getId());
