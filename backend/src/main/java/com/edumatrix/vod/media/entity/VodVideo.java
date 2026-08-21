@@ -21,12 +21,16 @@ import com.edumatrix.common.entity.TenantEntity;
  * 事件消费按 {@code vod_file_id} 反查租户，<b>反查链路自建号起就是闭合的</b>，
  * 不存在「事件先于写入到达」的竞态。
  *
- * <h2>{@code encrypt_type} 默认值与 R1a 定案</h2>
- * <p>DDL 的默认值是 {@code 1}（HLS 标准加密），而 R1a 定案后实际采用的是
- * <b>{@code 2} 阿里云私有加密</b>。本模块<b>建行时显式写 2</b>，不依赖 DDL 默认值 ——
- * 基线是冻结内容（契约 §7.3），改不了；而依赖一个与事实不符的默认值，
+ * <h2>{@code encrypt_type} 默认值与两次定案</h2>
+ * <p>DDL 的默认值是 {@code 1}（HLS 标准加密）。R1a 定案改为 <b>{@code 2} 阿里云私有加密</b>，
+ * <b>F-114（2026-08-21 需方定案）又改为「第一版不加密」→ 建行时显式写 {@code 0}</b>。
+ * 三个值各出现过一次，正是<b>不能依赖 DDL 默认值</b>的理由 ——
+ * 基线是冻结内容（契约 §7.3）改不了，而依赖一个与事实不符的默认值，
  * 迟早有人绕过 Service 直接 INSERT 出一行 {@code encrypt_type=1} 的媒资。
- * 文档侧的订正见模块 09 的文档提交。
+ *
+ * <p><b>⚠ 本列必须与转码模板实际产出的东西一致</b>，它是事实记录不是意图声明：
+ * 库里写 2 而模板产出明文流，播放侧会按私有加密去解密 —— 表现是「播不了」。
+ * 模块 12 的 {@code play-auth} 正是按本列决定下发给 Aliplayer 的 {@code encryptType}。
  */
 @TableName("vod_video")
 public class VodVideo extends TenantEntity {
@@ -49,6 +53,15 @@ public class VodVideo extends TenantEntity {
 
     /** 加密方式：{@code 2} 阿里云私有加密（R1a 定案）。见类注释。 */
     public static final int ENCRYPT_ALIYUN_PRIVATE = 2;
+
+    /**
+     * {@code 0} 不加密 —— <b>F-114 定案：第一版按此写入</b>。
+     *
+     * <p>本列必须与<b>转码模板实际产出的东西</b>一致。写 2 而模板产出的是明文流，
+     * 播放侧会按私有加密去解密，表现是「播不了」；反过来同样。
+     * <b>这一列不是意图声明，是事实记录。</b>
+     */
+    public static final int ENCRYPT_NONE = 0;
 
     /** 归属节点。创建时写入上传者所在节点，<b>请求体不接受该参数</b>（03-03 §7.3 说明）。 */
     private Long ownerNodeId;

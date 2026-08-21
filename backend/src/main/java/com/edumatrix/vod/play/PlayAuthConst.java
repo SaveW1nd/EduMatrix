@@ -16,20 +16,35 @@ public final class PlayAuthConst {
      */
     public static final int AUTH_EXPIRE_SECONDS = 300;
 
-    /**
-     * 下发给 Aliplayer 的 {@code encryptType}，固定 1 =「私有加密」。
-     *
-     * <p><b>⚠ 它与 {@code vod_video.encrypt_type = 2}（本系统枚举「阿里云私有加密」）
-     * 不是同一套编号，不要互相赋值。</b>两边都叫 encryptType、都是小整数、都描述同一件事，
-     * 是必然会有人踩的地方（F-112 已点名）。
-     */
+    /** Aliplayer 侧 {@code encryptType}：1 = 私有加密。 */
     public static final int ALIPLAYER_ENCRYPT_TYPE_PRIVATE = 1;
 
-    /** 水印随机刷新间隔下界（秒，含），03-03 §8.1、PRD F2-6 规则 2。 */
-    public static final int WATERMARK_INTERVAL_MIN_SECONDS = 8;
+    /** Aliplayer 侧 {@code encryptType}：0 = 不加密（普通视频，播放器不走解密通道）。 */
+    public static final int ALIPLAYER_ENCRYPT_TYPE_NONE = 0;
 
-    /** 水印随机刷新间隔上界（秒，含）。 */
-    public static final int WATERMARK_INTERVAL_MAX_SECONDS = 15;
+    /**
+     * 把库里的 {@code vod_video.encrypt_type} 翻译成下发给 Aliplayer 的 {@code encryptType}。
+     *
+     * <p><b>⚠ 两边都叫 encryptType、都是小整数、都在描述同一件事，但【不是同一套编号】</b>
+     * （F-112 已点名这是必然会有人踩的地方）：
+     *
+     * <table>
+     *   <tr><th>{@code vod_video.encrypt_type}</th><th>下发给 Aliplayer</th></tr>
+     *   <tr><td>0 不加密（<b>F-114：第一版</b>）</td><td>0</td></tr>
+     *   <tr><td>1 HLS 标准加密</td><td>0 —— Aliplayer 的这个参数<b>只表示私有加密</b>，
+     *       标准加密由播放器按 m3u8 里的 {@code #EXT-X-KEY} 自己处理</td></tr>
+     *   <tr><td>2 阿里云私有加密</td><td>1</td></tr>
+     * </table>
+     *
+     * <p><b>做成映射而不是写死常量</b>：第一版不加密、以后可能打开，
+     * 而<b>存量视频与新视频会长期混在一起</b>（早先上传的是 encrypt_type=2）。
+     * 按行翻译使两者都能播；写死任何一个值都会让另一半播不了，
+     * 而那个表现是「视频打不开」，与代码 bug 不可区分。
+     */
+    public static int aliplayerEncryptTypeOf(Integer videoEncryptType) {
+        return videoEncryptType != null && videoEncryptType == 2
+                ? ALIPLAYER_ENCRYPT_TYPE_PRIVATE : ALIPLAYER_ENCRYPT_TYPE_NONE;
+    }
 
     /** {@code vod_play_auth_log.event_type}：1 播放凭证。取值 2 随接口 29 删除后不再写入（F-112）。 */
     public static final int EVENT_TYPE_PLAY_AUTH = 1;

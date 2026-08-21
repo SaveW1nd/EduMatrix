@@ -73,4 +73,9 @@ public class DisabledVodMediaClient implements VodMediaClient {
     static VodPlayInfo empty() {
         return new VodPlayInfo(List.of(), null);
     }
+
+    @Override
+    public String getVideoPlayAuth(String cloudVideoId) {
+        throw new IllegalStateException(NOT_CONFIGURED);
+    }
 }

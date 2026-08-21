@@ -101,8 +101,12 @@ class VodVideoIT extends CourseIntegrationTestBase {
                 "SELECT encrypt_type FROM vod_video WHERE id = ?", Integer.class, Long.valueOf(videoId));
         assertEquals(0, status, "新建即 0 上传中");
         assertNotNull(fileId, "阿里云路径下 vod_file_id 不得为 NULL —— 事件反查链路靠它闭合");
-        assertEquals(2, encryptType,
-                "R1a 定案是阿里云私有加密；DDL 默认值 1 与事实不符，必须由 Service 显式写 2");
+        assertEquals(0, encryptType,
+                "F-114 定案：第一版不加密 → Service 显式写 0。"
+                        + "该列出现过三个值（DDL 默认 1 标准加密、R1a 定案 2 私有加密、F-114 定案 0 不加密），"
+                        + "正因如此不能依赖 DDL 默认值。"
+                        + "⚠ 本列是【事实记录】不是意图声明：它必须与转码模板实际产出的东西一致，"
+                        + "模块 12 的 play-auth 按它决定下发给 Aliplayer 的 encryptType，写错的表现是「播不了」");
     }
 
     @Test

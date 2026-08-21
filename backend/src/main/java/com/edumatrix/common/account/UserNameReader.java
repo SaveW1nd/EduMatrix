@@ -19,4 +19,5 @@ public interface UserNameReader {
      * @return {@code userId → real_name}；查不到的 id 直接缺席
      */
     Map<Long, String> realNames(Collection<Long> userIds);
+
 }

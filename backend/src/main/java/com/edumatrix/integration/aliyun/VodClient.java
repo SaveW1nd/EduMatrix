@@ -15,6 +15,8 @@ import com.aliyuncs.profile.DefaultProfile;
 import com.aliyuncs.vod.model.v20170321.CreateUploadVideoRequest;
 import com.aliyuncs.vod.model.v20170321.CreateUploadVideoResponse;
 import com.aliyuncs.vod.model.v20170321.GetPlayInfoRequest;
+import com.aliyuncs.vod.model.v20170321.GetVideoPlayAuthRequest;
+import com.aliyuncs.vod.model.v20170321.GetVideoPlayAuthResponse;
 import com.aliyuncs.vod.model.v20170321.GetPlayInfoResponse;
 import com.aliyuncs.vod.model.v20170321.RefreshUploadVideoRequest;
 import com.aliyuncs.vod.model.v20170321.RefreshUploadVideoResponse;
@@ -150,6 +152,28 @@ public class VodClient implements VodMediaClient {
             }
             throw new IllegalStateException(
                     "取播放信息失败（GetPlayInfo） videoId=" + cloudVideoId + describe(e), e);
+        }
+    }
+
+    @Override
+    public String getVideoPlayAuth(String cloudVideoId) {
+        GetVideoPlayAuthRequest request = new GetVideoPlayAuthRequest();
+        request.setVideoId(cloudVideoId);
+        applyTimeouts(request);
+        try {
+            GetVideoPlayAuthResponse response = acsClient.getAcsResponse(request);
+            String playAuth = response.getPlayAuth();
+            if (playAuth == null || playAuth.isBlank()) {
+                // 阿里云返回 200 但凭证为空 —— 当成失败而不是下发一个空串：
+                // 空串到了播放器那儿表现是「播不了」，与「没取到凭证」不可区分
+                throw new IllegalStateException(
+                        "点播返回了空的播放凭证 videoId=" + cloudVideoId);
+            }
+            return playAuth;
+        } catch (Exception e) {
+            // 【不把 playAuth 写进日志】：它是能直接解密播放的凭证，落日志等于把它散出去
+            throw new IllegalStateException(
+                    "取播放凭证失败（GetVideoPlayAuth） videoId=" + cloudVideoId + describe(e), e);
         }
     }
 

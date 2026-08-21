@@ -199,6 +199,20 @@ public final class TenantHelper {
     }
 
     /**
+     * 当前账号所在节点。<b>业务代码要走这个静态门面，不要直接注入 {@link CurrentContextProvider}</b>——
+     * 测试上下文里有一个 {@code @Primary} 的替身 bean，直接注入会拿到它而不是会话那个，
+     * 表现是「登录了但 nodeId 恒为 null」，而 {@code TenantHelper} 由测试基类统一切换指向。
+     */
+    public static Long getNodeId() {
+        return provider.getNodeId();
+    }
+
+    /** 当前账号类型（1 管理员 / 2 教师 / 3 学生）。理由同 {@link #getNodeId()}。 */
+    public static Integer getUserType() {
+        return provider.getUserType();
+    }
+
+    /**
      * 按四条路径解析当前租户 ID；解析不出时返回 {@code null}（<b>不抛异常</b>）。
      *
      * <p>只在「拿不到也有合法后续动作」的地方用，例如租户插件先判 {@link #isIgnored()} /
