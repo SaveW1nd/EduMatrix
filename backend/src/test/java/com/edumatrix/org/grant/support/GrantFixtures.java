@@ -247,6 +247,20 @@ public final class GrantFixtures {
         return n == null ? 0 : n;
     }
 
+    /** 本租户下某个 {@code action} 的 {@code sys_oper_log} 行数（F-114 定案三的留痕判据）。 */
+    public int operLogCount(String action) {
+        Integer v = jdbc.queryForObject(
+                "SELECT COUNT(1) FROM sys_oper_log WHERE tenant_id = ? AND action = ?",
+                Integer.class, TENANT_ID, action);
+        return v == null ? 0 : v;
+    }
+
+    /** 节点当前的 {@code parent_id}（验「校验失败不留痕迹」）。 */
+    public Long parentOf(long nodeId) {
+        return jdbc.queryForObject("SELECT parent_id FROM org_node WHERE id = ?",
+                Long.class, nodeId);
+    }
+
     public int activeGrantCount(int resourceType, long resourceId, long targetNodeId) {
         Integer n = jdbc.queryForObject("SELECT COUNT(*) FROM org_resource_grant "
                         + "WHERE resource_type = ? AND resource_id = ? AND target_node_id = ? "

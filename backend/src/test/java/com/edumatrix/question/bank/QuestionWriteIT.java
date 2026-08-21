@@ -40,7 +40,9 @@ class QuestionWriteIT extends QuestionIntegrationTestBase {
         // 演员从教师王（TA）换成下级管理员 A1：V202608210200 之后教师没有
         // question:question:add。本条验的是「owner 由服务端按会话写入、请求体说了不算」，
         // 换成一个【不是 ROOT】的下级管理员，这个判据一字不变。
-        JsonNode created = postWithToken(QUESTIONS, loginAs(QuestionFixtures.A1),
+        // 【F-114】题目写操作收窄到机构根：创建者从 A1 换成 ROOT。
+        // 本条要证的是「owner 取自会话节点而不是请求体」，与谁能写无关，换演员不影响它。
+        JsonNode created = postWithToken(QUESTIONS, loginAs(QuestionFixtures.ROOT),
                 single("{\"answer\":\"A\"}"));
         assertEquals(200, code(created));
         long id = data(created).path("id").asLong();
@@ -50,7 +52,7 @@ class QuestionWriteIT extends QuestionIntegrationTestBase {
 
         Long owner = jdbcTemplate.queryForObject(
                 "SELECT owner_node_id FROM qb_question WHERE id = ?", Long.class, id);
-        assertEquals(QuestionFixtures.A1, owner, "owner 必须是创建者所在节点，不是请求体给的");
+        assertEquals(QuestionFixtures.ROOT, owner, "owner 必须是创建者所在节点，不是请求体给的");
     }
 
     /**
@@ -237,11 +239,16 @@ class QuestionWriteIT extends QuestionIntegrationTestBase {
         // 教师现在没有 question:question:edit，这条断言会【绿着退化】：
         // 403 从「可见但非 owner」变成「压根没这个权限」，而它要证的正是前者。
         // A1 是管理员、有 edit 权限，403 只可能来自归属判定。
-        questionFixtures.grantQuestion(QuestionFixtures.Q_SINGLE, QuestionFixtures.A1,
+        // ⚠【F-114 换演员】收窄后 A1 会在【机构根闸】处 403，本条会绿着退化成
+        //   「A1 碰不到题目写端点」。Q_TA 的 owner 是教师 TA，演员换成机构根 ROOT：
+        //   ROOT 过得了机构根闸、也有 question:question:edit，403 才真的来自归属判定。
+        questionFixtures.grantQuestion(QuestionFixtures.Q_TA, QuestionFixtures.ROOT,
                 QuestionFixtures.TENANT_ID);
         assertEquals(ErrorCode.FORBIDDEN.getCode(), code(putWithToken(
-                QUESTIONS + "/" + QuestionFixtures.Q_SINGLE, loginAs(QuestionFixtures.A1),
-                "{\"difficulty\":5}")));
+                QUESTIONS + "/" + QuestionFixtures.Q_TA, loginAs(QuestionFixtures.ROOT),
+                "{\"difficulty\":5}")),
+                "演员是【机构根】ROOT，过得了 F-114 的机构根闸、也有写权限位，"
+                        + "403 只可能来自归属判定 —— Q_TA 的 owner 是 TA");
     }
 
     @Test
@@ -359,5 +366,23 @@ class QuestionWriteIT extends QuestionIntegrationTestBase {
                 "SELECT content, correct_answer, analysis, score_default, create_by, create_time, "
                         + "update_by, update_time, deleted_at FROM qb_question_version "
                         + "WHERE question_id = ? AND version = ?", questionId, version);
+    }
+    /** 与课程侧同构；<b>两侧都断</b>，只写一侧的话端点写死拒绝也能全绿。 */
+    @Test
+    @DisplayName("⚠ F-114 收窄：题目写操作【仅机构根】—— 分校管理员 403、机构根 200（两侧都断）")
+    void questionWriteIsOrgRootOnly() throws Exception {
+        assertEquals(403, code(postWithToken(QUESTIONS, loginAs(QuestionFixtures.A1),
+                        single("{\"answer\":\"A\"}"))),
+                "分校管理员有 question:question:add 权限位，但不是机构根");
+        assertEquals(200, code(postWithToken(QUESTIONS, loginAs(QuestionFixtures.ROOT),
+                        single("{\"answer\":\"A\"}"))),
+                "机构根必须过得去；这里若也 403，说明收窄把机构根一起挡了");
+    }
+
+    @Test
+    @DisplayName("F-114 收窄【只管写不管读】：分校管理员仍看得见题目列表（组卷要用）")
+    void questionReadStillWorksForSubAdmin() throws Exception {
+        assertEquals(200, code(getWithToken(QUESTIONS + "?pageSize=10", loginAs(QuestionFixtures.A1))),
+                "读接口一个都没动 —— 分校管理员要看得见才能组卷");
     }
 }

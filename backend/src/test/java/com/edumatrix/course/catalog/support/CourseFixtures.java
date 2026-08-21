@@ -206,6 +206,22 @@ public final class CourseFixtures {
                 nodeId + 900000L, nodeId, userIdOf(nodeId), "S" + nodeId, status, tenantId);
     }
 
+    /**
+     * 种一个<b>畸形</b>节点：{@code parent_id = 0} 但 {@code id != tenant_id}。
+     *
+     * <p>合法建树路径造不出它（平台根下只能建机构根，而机构根的 id 恒等于 tenant_id）。
+     * 它存在的唯一理由是让 {@code CourseCrudIT#orgRootJudgedByTenantIdNotParentId}
+     * 能把两种判据分开 —— 变异 M56 把判据换成 {@code parent_id == 0} 时，
+     * <b>原先全库没有一条用例会红</b>。
+     *
+     * <p><b>放在夹具里而不是用例里</b>：它要往共享表 {@code sys_user_role} 插固定主键，
+     * 而那类插入点必须登记在夹具中（约定检查⑧ 按「夹具文件 → 主键偏移量」逐条比对）。
+     * 本方法沿用本类既有的 {@code 500000L} 偏移，<b>不新增派生规则</b>。
+     */
+    public void malformedRootLikeNode(long nodeId, long tenantId) {
+        node(nodeId, 0L, "0", "畸形节点（parent_id=0 但 id!=tenant_id）", 1, tenantId);
+    }
+
     public void course(long id, String name, long ownerNodeId, long tenantId, int status) {
         jdbc.update("INSERT INTO crs_course (id, course_name, owner_node_id, cover_file_id, subject, "
                         + "description, status, lesson_count, total_duration, tenant_id, create_by, "

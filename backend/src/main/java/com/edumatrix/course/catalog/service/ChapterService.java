@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import com.edumatrix.common.subtree.OrgRootGuard;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -43,6 +44,7 @@ import com.edumatrix.course.catalog.vo.CreatedIdVO;
 public class ChapterService {
 
     private final CrsChapterMapper chapterMapper;
+    private final OrgRootGuard orgRootGuard;
     private final CrsLessonMapper lessonMapper;
     private final CourseAccessGuard guard;
     private final CourseCounterService counterService;
@@ -50,7 +52,9 @@ public class ChapterService {
     public ChapterService(CrsChapterMapper chapterMapper,
                           CrsLessonMapper lessonMapper,
                           CourseAccessGuard guard,
-                          CourseCounterService counterService) {
+                          CourseCounterService counterService,
+                         OrgRootGuard orgRootGuard) {
+        this.orgRootGuard = orgRootGuard;
         this.chapterMapper = chapterMapper;
         this.lessonMapper = lessonMapper;
         this.guard = guard;
@@ -128,6 +132,7 @@ public class ChapterService {
 
     @Transactional(rollbackFor = Exception.class)
     public CreatedIdVO create(ChapterCreateReq req) {
+        orgRootGuard.assertOrgRoot("章节");   // F-114 收窄：三类受管资源写操作仅机构根
         // 请求体里显式指定的 courseId —— 用户请求的资源是「章节」，课程只是归属参数，
         // 查不到必须明确告诉他选错了，返 404 会指代不清（F-42 定案的边界，CourseRef.PARAM）
         CrsCourse course = guard.loadOwnedForUpdate(CourseRef.PARAM, req.getCourseId());
@@ -174,6 +179,7 @@ public class ChapterService {
      */
     @Transactional(rollbackFor = Exception.class)
     public void update(Long chapterId, ChapterUpdateReq req) {
+        orgRootGuard.assertOrgRoot("章节");   // F-114 收窄：三类受管资源写操作仅机构根
         CrsChapter chapter = loadChapter(chapterId);
         guard.loadOwned(CourseRef.DERIVED, chapter.getCourseId());
         CrsChapter patch = new CrsChapter();
@@ -195,6 +201,7 @@ public class ChapterService {
      */
     @Transactional(rollbackFor = Exception.class)
     public ChapterDeleteVO delete(Long chapterId) {
+        orgRootGuard.assertOrgRoot("章节");   // F-114 收窄：三类受管资源写操作仅机构根
         CrsChapter chapter = loadChapter(chapterId);
         CrsCourse course = guard.loadOwnedForUpdate(CourseRef.DERIVED, chapter.getCourseId());
 
@@ -242,6 +249,7 @@ public class ChapterService {
      */
     @Transactional(rollbackFor = Exception.class)
     public void sort(Long courseId, ChapterSortReq req) {
+        orgRootGuard.assertOrgRoot("章节");   // F-114 收窄：三类受管资源写操作仅机构根
         // 路径上的资源（/courses/{id}/chapters/sort）
         CrsCourse course = guard.loadOwnedForUpdate(CourseRef.PATH, courseId);
 

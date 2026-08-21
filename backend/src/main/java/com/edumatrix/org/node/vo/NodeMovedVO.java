@@ -44,6 +44,27 @@ public class NodeMovedVO {
 
     private List<OutOfScopeGrantVO> outOfScopeGrants = new ArrayList<>();
 
+    /**
+     * 本次<b>是否回收</b>了跨管辖授权（F-114 定案三，接口 4 的 {@code revokeOutOfScopeGrants} 原样回传）。
+     *
+     * <p><b>为什么要把入参回传出来</b>：{@code outOfScopeGrants} 这个清单在两种情况下
+     * 长得一模一样 —— 「选了回收，且已经全撤了」与「选了保留，这些就是留下的」。
+     * 光看清单分不出来，而<b>这两件事的后续动作完全相反</b>。
+     *
+     * <p>内部封装调用（分配导师 / 转交管理员 / 教师调岗）走 {@code NodeMoveOptions.none()}，
+     * 这里回 {@code false}。
+     */
+    private boolean revokedOutOfScopeGrants;
+
+    /**
+     * 「保留跨管辖授权」这个决定<b>是不是操作人显式做的</b>，以及记在了哪里。
+     *
+     * <p>{@code true} 时 {@code sys_oper_log} 里有一行
+     * {@code action = 保留跨管辖授权}，含操作人与时间戳（F-114 定案三：
+     * 「{@code false} 时把是谁、什么时候选的写进 {@code sys_oper_log} 与响应」）。
+     */
+    private boolean retentionRecorded;
+
     private LocalDateTime changeTime;
 
     public Long getNodeId() {
@@ -148,5 +169,21 @@ public class NodeMovedVO {
 
     public void setChangeTime(LocalDateTime changeTime) {
         this.changeTime = changeTime;
+    }
+
+    public boolean isRevokedOutOfScopeGrants() {
+        return revokedOutOfScopeGrants;
+    }
+
+    public void setRevokedOutOfScopeGrants(boolean revokedOutOfScopeGrants) {
+        this.revokedOutOfScopeGrants = revokedOutOfScopeGrants;
+    }
+
+    public boolean isRetentionRecorded() {
+        return retentionRecorded;
+    }
+
+    public void setRetentionRecorded(boolean retentionRecorded) {
+        this.retentionRecorded = retentionRecorded;
     }
 }

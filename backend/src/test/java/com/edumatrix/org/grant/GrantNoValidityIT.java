@@ -270,7 +270,7 @@ class GrantNoValidityIT extends GrantIntegrationTestBase {
 
         // 移动 T1 到 A2 名下 → 跨管辖判定必须看见探针行
         JsonNode move = putWithToken("/api/v1/org/nodes/" + GrantFixtures.T1 + "/move", token, body("""
-                {"toParentId":"%d","reason":"教师调岗"}
+                {"toParentId":"%d","revokeOutOfScopeGrants":false,"reason":"教师调岗"}
                 """.formatted(GrantFixtures.A2)));
         assertThat(code(move)).isEqualTo(200);
         assertThat(data(move).path("outOfScopeGrants").size())

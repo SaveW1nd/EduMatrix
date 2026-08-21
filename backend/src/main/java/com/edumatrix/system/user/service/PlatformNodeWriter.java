@@ -6,6 +6,7 @@ import com.edumatrix.common.errorcode.ErrorCode;
 import com.edumatrix.common.response.BizException;
 import com.edumatrix.common.subtree.NodeAncestorCache;
 import com.edumatrix.common.subtree.NodePath;
+import com.edumatrix.common.subtree.OrgTreeShape;
 import com.edumatrix.common.tenant.TenantHelper;
 import com.edumatrix.system.user.entity.SystemOrgNode;
 import com.edumatrix.system.user.entity.SystemOrgNodeChangeLog;
@@ -314,6 +315,11 @@ public class PlatformNodeWriter {
                 if (childType == NodePath.NODE_TYPE_PLATFORM) {
                     throw new BizException(ErrorCode.NODE_PARENT_CHILD_TYPE_INVALID);
                 }
+                // 【F-114】机构下只允许一层管理员。§2.2 建账号的 parentNodeId 是调用方给的，
+                // 超管照样能把管理员建到分校管理员名下 —— 这条路径必须和 NodeTypeRule 一起拦。
+                // 判定共用 common/ 的那一份，不在这里抄第二遍
+                OrgTreeShape.assertOnlyOneAdminLayer(parentType, childType,
+                        OrgTreeShape.isOrgRoot(parent.getId(), parent.getTenantId()));
             }
             case NodePath.NODE_TYPE_TEACHER -> {
                 if (childType != NodePath.NODE_TYPE_STUDENT) {

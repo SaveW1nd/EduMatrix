@@ -15,6 +15,7 @@ import com.edumatrix.common.subtree.NodeAncestorCache;
 import com.edumatrix.common.subtree.NodePath;
 import com.edumatrix.common.subtree.SubtreeScopeHelper;
 import com.edumatrix.common.tenant.TenantHelper;
+import com.edumatrix.common.subtree.OrgTreeShape;
 import com.edumatrix.org.node.entity.OrgNode;
 import com.edumatrix.org.node.entity.OrgNodeChangeLog;
 import com.edumatrix.org.node.mapper.NodeAccountMapper;
@@ -100,7 +101,10 @@ public class MemberWriteSupport {
         OrgNode parent = requireParentInMyScope(cmd.parentNodeId());
 
         // -------- 写入之前把校验做完（自检项：失败时不得有任何行产生） --------
-        NodeTypeRule.assertCanBeChildOf(parent.getNodeType(), cmd.userType());
+        // 【F-114】机构下只允许一层管理员 —— 父节点是不是机构根，决定它下面能不能再挂管理员。
+        // 机构根的判据是 id == tenant_id（契约 §2.1），不是 parent_id == 0（那只是建树规则的推论）
+        NodeTypeRule.assertCanBeChildOf(parent.getNodeType(), cmd.userType(),
+                OrgTreeShape.isOrgRoot(parent.getId(), parent.getTenantId()));
         assertDepthWithinLimit(parent);
         if (parent.isDisabled()) {
             // §4.2 / §5.2 / §6.2 错误码表都列了 10109

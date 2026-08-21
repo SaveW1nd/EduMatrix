@@ -4,6 +4,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import com.edumatrix.auth.support.AuthFixtures;
+import com.edumatrix.common.errorcode.ErrorCode;
 import com.edumatrix.system.support.SystemIntegrationTestBase;
 import com.fasterxml.jackson.databind.JsonNode;
 
@@ -200,6 +201,43 @@ class SystemUserWriteScopeIT extends SystemIntegrationTestBase {
                 .forEach(row -> tenantUsers.add(row.path("username").asText()));
         assertThat(tenantUsers).contains(AuthFixtures.ADMIN_USERNAME, AuthFixtures.TEACHER_USERNAME);
         assertThat(tenantUsers).doesNotContain(AuthFixtures.SUPER_ADMIN_USERNAME);
+    }
+
+    // =====================================================================
+    // F-114 定案二：承载规则的【第二份实现】也要拦（PlatformNodeWriter）
+    // =====================================================================
+
+    @Test
+    @DisplayName("F-114｜§2.2 超管建管理员：挂机构根 200，挂分校管理员 10104")
+    void superAdminCannotCreateNestedAdminEither() throws Exception {
+        // 【这条用例存在的理由】承载规则在全库有两份实现：org 的 NodeTypeRule 与
+        // system 的 PlatformNodeWriter#assertParentAcceptsChild（检查③ 挡着不能合并，
+        // 时机见 NodeTypeRule 类注释）。两份的类注释都写着同一句警告：
+        // 「改任一份都要同时改另一份，【且不会有任何东西报错】」。
+        // F-114 只改一份的话，同一个非法结构会在 03-02 接口 8 被拒、在 03-01 §2.2 被放行 ——
+        // 而 org 那边的用例照样全绿。这条就是把第二条路径也钉住。
+        // 【用户名必须带 it_new_ 前缀】SystemFixtures.clean() 就按这个前缀删账号、节点、
+        // 角色绑定与异动轨迹。用别的前缀的话，第二个成功建出来的账号会留在库里，
+        // 下一次跑撞唯一键 → 10001，而报出来的现象与本用例要验的东西毫无关系
+        String token = superAdminToken();
+
+        JsonNode underSubAdmin = client.postWithToken(USERS, token, """
+                {"username":"it_new_nested_admin","password":"Abcd1234","realName":"嵌套管理员",
+                 "userType":1,"parentNodeId":"%d","roleIds":["%d"]}
+                """.formatted(AuthFixtures.ADMIN_NODE, AuthFixtures.ROLE_ORG_ADMIN));
+        assertThat(code(underSubAdmin))
+                .as("ADMIN_NODE 是机构根下的校区管理员，它下面不能有第二层管理员")
+                .isEqualTo(ErrorCode.NODE_PARENT_CHILD_TYPE_INVALID.getCode());
+        // 建人是「先插账号再建节点」的复合事务，被拒时账号也不能留下
+        assertThat(systemFixtures.userRowCount("it_new_nested_admin")).isZero();
+
+        JsonNode underOrgRoot = client.postWithToken(USERS, token, """
+                {"username":"it_new_first_layer_admin","password":"Abcd1234","realName":"一层管理员",
+                 "userType":1,"parentNodeId":"%d","roleIds":["%d"]}
+                """.formatted(AuthFixtures.ROOT_NODE, AuthFixtures.ROLE_ORG_ADMIN));
+        assertThat(code(underOrgRoot))
+                .as("机构根下建管理员是 F-114 允许的唯一一层")
+                .isEqualTo(200);
     }
 
     // =====================================================================

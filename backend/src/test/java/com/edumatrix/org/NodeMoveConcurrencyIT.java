@@ -53,7 +53,7 @@ class NodeMoveConcurrencyIT extends OrgIntegrationTestBase {
     private static final Logger log = LoggerFactory.getLogger(NodeMoveConcurrencyIT.class);
 
     /** 夹具树的节点总数（含租户根）。 */
-    private static final int TOTAL_NODES = 17;
+    private static final int TOTAL_NODES = 15;
 
     @Autowired
     private NodeMoveService nodeMoveService;
@@ -67,7 +67,8 @@ class NodeMoveConcurrencyIT extends OrgIntegrationTestBase {
                 OrgFixtures.TENANT_ID, OrgFixtures.userIdOf(OrgFixtures.ROOT), OrgFixtures.ROOT);
 
         // 交叉：既有学员在教师之间横跳，也有教师/管理员整支换上级，
-        // 且 9/10 两条会与 1~8 抢同一批行（A3 与它底下的 T1 同时在动）
+        // 且 9/10 两条会与 1~8 抢同一批行（T1/T2 与它们底下的学员同时在动）。
+        // F-114 之前第 10 条搬的是嵌套管理员 A3，现在树里没有嵌套管理员了
         long[][] moves = {
                 {OrgFixtures.S1, OrgFixtures.T2},
                 {OrgFixtures.S2, OrgFixtures.T3},
@@ -78,7 +79,7 @@ class NodeMoveConcurrencyIT extends OrgIntegrationTestBase {
                 {OrgFixtures.S7, OrgFixtures.T2},
                 {OrgFixtures.S8, OrgFixtures.TX},
                 {OrgFixtures.T1, OrgFixtures.A2},
-                {OrgFixtures.A3, OrgFixtures.A2},
+                {OrgFixtures.T2, OrgFixtures.A2},
         };
 
         ExecutorService pool = Executors.newFixedThreadPool(moves.length);
@@ -125,7 +126,7 @@ class NodeMoveConcurrencyIT extends OrgIntegrationTestBase {
                 .as("全树 ancestors 与 parent_id 必须自洽（§3.1.1 递归 CTE 巡检）")
                 .isEmpty();
 
-        // 判据②：从租户根出发能走到全部 17 个节点 —— 没有节点掉出树，也没有节点被数两遍
+        // 判据②：从租户根出发能走到全部 15 个节点 —— 没有节点掉出树，也没有节点被数两遍
         assertThat(orgFixtures.reachableNodeCount())
                 .as("全部节点仍应从租户根可达")
                 .isEqualTo(TOTAL_NODES);

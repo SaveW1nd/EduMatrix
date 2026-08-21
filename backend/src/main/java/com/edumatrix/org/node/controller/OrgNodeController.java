@@ -126,8 +126,11 @@ public class OrgNodeController {
     @SaCheckPermission("org:node:move")
     @OperLog(module = "组织树管理", action = "移动节点")
     public R<NodeMovedVO> move(@PathVariable("id") Long id, @Valid @RequestBody NodeMoveReq req) {
+        // 【F-114 定案三】revokeOutOfScopeGrants 必填、无默认值，不传在 @Valid 就已经 400。
+        // explicitChoice 标记「这是操作人自己表的态」—— 选了 false 才写留痕，
+        // 而模块 07 的内部封装走 none()，不写（它们从来没被问过这个问题）
         NodeMoveOptions options =
-                new NodeMoveOptions(req.getReason(), req.isRevokeOutOfScopeGrants());
+                NodeMoveOptions.explicitChoice(req.getReason(), req.getRevokeOutOfScopeGrants());
         return R.ok(nodeMoveService.move(id, req.getToParentId(), options));
     }
 

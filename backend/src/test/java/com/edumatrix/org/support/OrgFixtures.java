@@ -21,18 +21,27 @@ import com.edumatrix.auth.support.AuthFixtures;
  *
  * <h2>树形（判据全部落在这一棵树上）</h2>
  * <pre>
- * ROOT(1,机构最高管理员 = 操作人)
- *  ├─ A1(1)
- *  │   └─ P(1)              ← 【判据：12 个后代，移动它 affectedNodeCount 必须是 13】
- *  │       ├─ A3(1)
- *  │       │   ├─ T1(2) ── S1 S2 S3(3)
- *  │       │   └─ T2(2) ── S4 S5(3)
- *  │       └─ T3(2) ────── S6 S7 S8(3)
- *  └─ A2(1)
- *      └─ TX(2)             ← 学员搬到这里，验原上级立即失去访问权
+ * ROOT(1,机构最高管理员 = 操作人)   depth 1
+ *  ├─ A1(1) 华东大区               depth 2
+ *  │   ├─ T1(2) 王丽 ── S1 S2 S3   depth 3 / 4   ← 【移动它：3 个后代，affectedNodeCount = 4】
+ *  │   ├─ T2(2) 李强 ── S4 S5      depth 3 / 4
+ *  │   └─ T3(2) 赵敏 ── S6 S7 S8   depth 3 / 4
+ *  └─ A2(1) 华南大区               depth 2
+ *      └─ TX(2) 周伟               depth 3       ← 学员搬到这里，验原上级立即失去访问权
  * </pre>
- * <p>P 的子树共 <b>4 层</b>（P → A3 → T1 → S1），满足边界 B4「覆盖多层嵌套的移动用例」：
- * 不是移动一个叶子，而是移动一棵三层以上的子树，且要逐层断言 {@code ancestors}。
+ *
+ * <h2>⚠ 这棵树 F-114 之后<b>改过形</b>，原来的形状现在是非法的</h2>
+ * <p>原形是 {@code ROOT → A1 → P(1) → A3(1) → T1(2) → S1(3)}，<b>三层管理员、深 6</b>，
+ * 用来满足边界 B4「覆盖多层嵌套的移动用例」（移动 P，12 个后代，{@code affectedNodeCount = 13}）。
+ * F-114 定案二之后：
+ * <ul>
+ *   <li>「机构下只允许一层管理员」—— {@code P} 与 {@code A3} 这两个嵌套管理员建不出来了；</li>
+ *   <li>{@code MAX_DEPTH} 由 50 收到 4 —— 原来的 {@code S1}（depth 6）超限。</li>
+ * </ul>
+ * <p><b>B4 因此缩水了，而且是缩到不能再小</b>：合法树里<b>最深的可移动子树就是「教师 + 学员」两层</b>
+ * （管理员的合法父节点只剩机构根一个，等于不可移动；学员是叶子）。
+ * 「逐层断言 ancestors」还在，只是层数从 4 变成 2 —— <b>这不是把用例改弱了，是合法形状本身只剩这么高</b>。
+ * 常量 {@code P} / {@code A3} 已删；{@link #LEGACY_NODES} 只用来把历史遗留行删干净。
  *
  * <h2>冗余计数按真实值播种，不是全 0</h2>
  * <p>{@code student_count} / {@code child_count} 播成移动前的正确值，
@@ -46,8 +55,6 @@ public final class OrgFixtures {
     public static final long ROOT = TENANT_ID;
     public static final long A1 = 1962000000000000010L;
     public static final long A2 = 1962000000000000011L;
-    public static final long P = 1962000000000000020L;
-    public static final long A3 = 1962000000000000030L;
     public static final long T1 = 1962000000000000040L;
     public static final long T2 = 1962000000000000041L;
     public static final long T3 = 1962000000000000042L;
@@ -63,7 +70,16 @@ public final class OrgFixtures {
 
     /** 全部节点，按建树顺序（父在子之前）。清理时倒序删。 */
     public static final long[] ALL_NODES = {
-            ROOT, A1, A2, P, A3, T1, T2, T3, TX, S1, S2, S3, S4, S5, S6, S7, S8};
+            ROOT, A1, A2, T1, T2, T3, TX, S1, S2, S3, S4, S5, S6, S7, S8};
+
+    /**
+     * F-114 改形前存在、现在不再播种的节点 id（原 {@code P} 苏州中心、{@code A3} 教学一组）。
+     *
+     * <p>它们只出现在 {@link #clean()} 里：开发库上跑过旧夹具的机器仍留着这两行，
+     * 不删的话 {@code auditTreeConsistency()} 会把它们当成掉在树外的节点报出来。
+     * <b>不要往树里加回去</b> —— 它们是两层嵌套管理员，F-114 之后建不出来。
+     */
+    public static final long[] LEGACY_NODES = {1962000000000000020L, 1962000000000000030L};
 
     /** {@code sys_user.id} 由节点 id 偏移得到，与任何节点 id 都不相等。 */
     public static final long USER_OFFSET = 100000L;
@@ -106,28 +122,24 @@ public final class OrgFixtures {
         String lvl2 = "0," + ROOT;
         String underA1 = lvl2 + "," + A1;
         String underA2 = lvl2 + "," + A2;
-        String underP = underA1 + "," + P;
-        String underA3 = underP + "," + A3;
 
         // 节点：id, parent, ancestors, 名称, 类型, child_count, student_count
         node(ROOT, 0L, rootAnc, "IT06 组织树机构", 1, 2, 8);
-        node(A1, ROOT, lvl2, "华东大区", 1, 1, 8);
+        node(A1, ROOT, lvl2, "华东大区", 1, 3, 8);
         node(A2, ROOT, lvl2, "华南大区", 1, 1, 0);
-        node(P, A1, underA1, "苏州中心", 1, 2, 8);
-        node(A3, P, underP, "教学一组", 1, 2, 5);
-        node(T1, A3, underA3, "王丽", 2, 3, 3);
-        node(T2, A3, underA3, "李强", 2, 2, 2);
-        node(T3, P, underP, "赵敏", 2, 3, 3);
+        node(T1, A1, underA1, "王丽", 2, 3, 3);
+        node(T2, A1, underA1, "李强", 2, 2, 2);
+        node(T3, A1, underA1, "赵敏", 2, 3, 3);
         node(TX, A2, underA2, "周伟", 2, 0, 0);
 
-        student(S1, T1, underA3 + "," + T1, "学生一");
-        student(S2, T1, underA3 + "," + T1, "学生二");
-        student(S3, T1, underA3 + "," + T1, "学生三");
-        student(S4, T2, underA3 + "," + T2, "学生四");
-        student(S5, T2, underA3 + "," + T2, "学生五");
-        student(S6, T3, underP + "," + T3, "学生六");
-        student(S7, T3, underP + "," + T3, "学生七");
-        student(S8, T3, underP + "," + T3, "学生八");
+        student(S1, T1, underA1 + "," + T1, "学生一");
+        student(S2, T1, underA1 + "," + T1, "学生二");
+        student(S3, T1, underA1 + "," + T1, "学生三");
+        student(S4, T2, underA1 + "," + T2, "学生四");
+        student(S5, T2, underA1 + "," + T2, "学生五");
+        student(S6, T3, underA1 + "," + T3, "学生六");
+        student(S7, T3, underA1 + "," + T3, "学生七");
+        student(S8, T3, underA1 + "," + T3, "学生八");
 
         // 教师档案：student_count 与 org_node.student_count 同源同步（DDL 列注释）
         teacher(T1, 3);
@@ -137,6 +149,13 @@ public final class OrgFixtures {
     }
 
     public void clean() {
+        for (long nodeId : LEGACY_NODES) {
+            jdbc.update("DELETE FROM sys_user_role WHERE user_id = ?", userIdOf(nodeId));
+            jdbc.update("DELETE FROM sys_user WHERE id = ?", userIdOf(nodeId));
+            jdbc.update("DELETE FROM org_node_change_log WHERE node_id = ?", nodeId);
+            jdbc.update("DELETE FROM org_resource_grant WHERE target_node_id = ?", nodeId);
+            jdbc.update("DELETE FROM org_node WHERE id = ?", nodeId);
+        }
         for (long nodeId : ALL_NODES) {
             long userId = userIdOf(nodeId);
             jdbc.update("DELETE FROM sys_user_role WHERE user_id = ?", userId);

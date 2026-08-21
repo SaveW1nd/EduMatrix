@@ -65,6 +65,11 @@ public abstract class CourseIntegrationTestBase extends AuthIntegrationTestBase 
         return client.loginForToken(CourseFixtures.usernameOf(nodeId), CourseFixtures.PASSWORD);
     }
 
+    /** 按用户名登录 —— 用例自己种的、不走 {@code usernameOf(nodeId)} 规则的账号用它。 */
+    protected String loginAsUsername(String username) throws Exception {
+        return client.loginForToken(username, CourseFixtures.PASSWORD);
+    }
+
     /** 平台超管 —— 用于「超管不参与本模块业务操作」那条断言（03-03 §0.2）。 */
     protected String loginAsSuperAdmin() throws Exception {
         return client.loginForToken(AuthFixtures.SUPER_ADMIN_USERNAME, AuthFixtures.PASSWORD);

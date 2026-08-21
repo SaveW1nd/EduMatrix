@@ -461,12 +461,19 @@ class VodVideoIT extends CourseIntegrationTestBase {
         // 【被授权者换成管理员 A1】教师已无该写权限（V202608210200），
         // 继续用教师会让这条 403 【绿着退化】：判定从「可见但非 owner」
         // 变成「压根没这个权限」，而本条要证的正是前者。A1 有权限、只是不是 owner。
-        grantVideoTo(CourseFixtures.VIDEO_OK, CourseFixtures.A1);
-        String token = loginAs(CourseFixtures.A1);
+        // ⚠【F-114 换演员 —— 这条上一轮就被我弄退化了，当时没抓到】
+        //   媒资写操作收窄到机构根之后，A1 会在【机构根闸】处 403，本条绿着退化成
+        //   「A1 碰不到删除端点」。把 VIDEO_OK 的 owner 改成教师 TA、演员换成机构根 ROOT：
+        //   ROOT 过得了机构根闸、也有 vod:video:remove，403 才真的来自归属判定。
+        jdbcTemplate.update("UPDATE vod_video SET owner_node_id = ? WHERE id = ?",
+                CourseFixtures.TA, CourseFixtures.VIDEO_OK);
+        grantVideoTo(CourseFixtures.VIDEO_OK, CourseFixtures.ROOT);
+        String token = loginAs(CourseFixtures.ROOT);
 
         JsonNode res = deleteWithToken(VIDEOS + "/" + CourseFixtures.VIDEO_OK, token);
         assertEquals(403, code(res), "§7.4/§7.5/§7.6 逐字：仅被授权者只读，写操作返回 403 —— "
-                + "演员是管理员，他有 vod:video:remove，403 只可能来自归属判定");
+                + "演员是【机构根】ROOT，过得了 F-114 的机构根闸、也有 vod:video:remove，"
+                + "403 只可能来自归属判定 —— owner 已改为 TA");
     }
 
     // =====================================================================

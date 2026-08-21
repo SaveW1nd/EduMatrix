@@ -95,16 +95,26 @@ class CourseShelfIT extends CourseIntegrationTestBase {
         // 【被授权者换成管理员 A1】教师已无该写权限（V202608210200），
         // 继续用教师会让这条 403 【绿着退化】：判定从「可见但非 owner」
         // 变成「压根没这个权限」，而本条要证的正是前者。A1 有权限、只是不是 owner。
-        courseFixtures.grantCourse(CourseFixtures.C_ROOT, CourseFixtures.A1, CourseFixtures.TENANT_ID);
-        String token = loginAs(CourseFixtures.A1);
-        assertEquals(403, code(shelf(token, 1)),
-                "演员是管理员，他有 course:course:status，403 只可能来自归属判定");
+
+        // ⚠【F-114 再换一次演员】收窄之后 A1 会在【机构根闸】处 403，本条会绿着退化成
+        //   「A1 碰不到这个端点」。换成机构根 ROOT + TA 拥有的资源：ROOT 过得了机构根闸、
+        //   也有对应权限位，403 才真的来自归属判定。与 F-110 那轮从教师换到 A1 同一形状。
+        courseFixtures.grantCourse(CourseFixtures.C_TA, CourseFixtures.ROOT, CourseFixtures.TENANT_ID);
+        String token = loginAs(CourseFixtures.ROOT);
+        assertEquals(403, code(shelf(token, CourseFixtures.C_TA, 1)),
+                "演员是【机构根】ROOT，他过得了 F-114 的机构根闸、也有 course:course:status，"
+                        + "403 只可能来自归属判定");
     }
 
     // =====================================================================
 
     private JsonNode shelf(String token, int targetStatus) throws Exception {
-        return client.putWithToken("/api/v1/course/courses/" + CourseFixtures.C_ROOT + "/shelf",
+        return shelf(token, CourseFixtures.C_ROOT, targetStatus);
+    }
+
+    /** 指定课程的重载 —— 「非 owner 不可上下架」那条要拿 TA 的课程来验。 */
+    private JsonNode shelf(String token, long courseId, int targetStatus) throws Exception {
+        return client.putWithToken("/api/v1/course/courses/" + courseId + "/shelf",
                 token, "{\"targetStatus\":" + targetStatus + "}");
     }
 

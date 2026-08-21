@@ -3,6 +3,7 @@ package com.edumatrix.org.member;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import com.edumatrix.common.errorcode.ErrorCode;
 import com.edumatrix.org.member.support.MemberFixtures;
 import com.edumatrix.org.member.support.MemberIntegrationTestBase;
 import com.edumatrix.org.member.service.MemberOperLogWriter;
@@ -233,13 +234,62 @@ class MemberCreateIT extends MemberIntegrationTestBase {
     void createAdminWritesTwoTables() throws Exception {
         String token = loginAsRoot();
 
+        // 【F-114 改】父节点由 A1 换成 ROOT。A1 是机构根下的分校管理员，
+        // 「机构下只允许一层管理员」之后往它下面建管理员会被 10104 拒 ——
+        // 本用例验的是「两写一事务」，不是承载规则，所以换一个仍然合法的父节点
         JsonNode response = client.postWithToken("/api/v1/org/admins", token, """
                 {"parentNodeId":"%s","realName":"孙浩","phone":"17099990011","sort":3}
-                """.formatted(MemberFixtures.A1));
+                """.formatted(MemberFixtures.ROOT));
 
         assertThat(code(response)).isEqualTo(200);
         // 管理员无档案表 —— id 恒为 null，nodeId 才是本节其余接口的 {id}
         assertThat(data(response).path("id").isNull()).isTrue();
         assertThat(data(response).path("nodeId").asText()).isNotBlank();
+    }
+
+    // =====================================================================
+    // F-114 定案二：机构下只允许一层管理员（03-02 接口 8）
+    // =====================================================================
+
+    @Test
+    @DisplayName("F-114：机构根下建管理员 200，分校管理员下建管理员 10104（两侧都断）")
+    void onlyOneAdminLayerUnderOrgRoot() throws Exception {
+        String token = loginAsRoot();
+        int nodesBefore = memberFixtures.nodeCountInTenant();
+
+        // ① 父节点 = 机构根 → 允许（这一侧断掉的话，说明判定把合法的也拦了）
+        JsonNode underRoot = client.postWithToken("/api/v1/org/admins", token, """
+                {"parentNodeId":"%s","realName":"周敏","phone":"17099990021"}
+                """.formatted(MemberFixtures.ROOT));
+        assertThat(code(underRoot))
+                .as("机构根下建管理员是 L1→L2，F-114 允许的唯一一层")
+                .isEqualTo(200);
+
+        // ② 父节点 = 非机构根的管理员 → 拒。【复用 10104，没有新开码】
+        JsonNode underSubAdmin = client.postWithToken("/api/v1/org/admins", token, """
+                {"parentNodeId":"%s","realName":"郑凯","phone":"17099990022"}
+                """.formatted(MemberFixtures.A1));
+        assertThat(code(underSubAdmin))
+                .as("A1 是机构根下的分校管理员，再往下挂管理员就是第二层管理员")
+                .isEqualTo(ErrorCode.NODE_PARENT_CHILD_TYPE_INVALID.getCode());
+
+        // 被拒的那次一行都不能留（建人是三写一事务，节点/账号必须一起没有）
+        assertThat(memberFixtures.nodeCountInTenant())
+                .as("只应多出 ① 建的那一个节点")
+                .isEqualTo(nodesBefore + 1);
+    }
+
+    @Test
+    @DisplayName("F-114：分校管理员下建教师、教师下建学生仍然放行（只封管理员那一层）")
+    void teacherAndStudentUnderSubAdminStillAllowed() throws Exception {
+        String token = loginAsRoot();
+
+        JsonNode teacher = client.postWithToken("/api/v1/org/teachers", token, """
+                {"parentNodeId":"%s","realName":"何蕾","phone":"17099990023","teacherNo":"T07901"}
+                """.formatted(MemberFixtures.A1));
+        assertThat(code(teacher))
+                .as("F-114 封的是「管理员挂管理员」，不是「管理员挂人」—— "
+                        + "封错了的话整棵树就建不出来了")
+                .isEqualTo(200);
     }
 }

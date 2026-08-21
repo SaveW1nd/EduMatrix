@@ -60,10 +60,11 @@ class NodeStatusIT extends OrgIntegrationTestBase {
         JsonNode data = data(client.putWithToken("/api/v1/org/nodes/" + OrgFixtures.A1 + "/status",
                 token, "{\"status\":1}"));
 
-        // A1 + P + A3 + T1 + T2 + T3 + 8 名学生 = 14
-        assertThat(data.path("affectedNodeCount").asInt()).isEqualTo(14);
+        // A1 + T1 + T2 + T3 + 8 名学生 = 12
+        //（F-114 改形前是 14：还含 P 与 A3 两个嵌套管理员）
+        assertThat(data.path("affectedNodeCount").asInt()).isEqualTo(12);
         // 每个节点都是一个人，所以两个计数恒等
-        assertThat(data.path("affectedUserCount").asInt()).isEqualTo(14);
+        assertThat(data.path("affectedUserCount").asInt()).isEqualTo(12);
     }
 
     @Test
@@ -109,7 +110,7 @@ class NodeStatusIT extends OrgIntegrationTestBase {
     void cannotDisableOutsideMySubtree() throws Exception {
         String token = loginAs(OrgFixtures.A2);
 
-        assertThat(code(client.putWithToken("/api/v1/org/nodes/" + OrgFixtures.P + "/status",
+        assertThat(code(client.putWithToken("/api/v1/org/nodes/" + OrgFixtures.T1 + "/status",
                 token, "{\"status\":1}"))).isEqualTo(10107);
     }
 }
