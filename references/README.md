@@ -31,7 +31,9 @@
   - 自动判卷逻辑（客观题比对）与主观题人工批改流转
   - 错题本 `t_task_exam` 相关实现 → 对应 `hw_wrong_book`
 
-### 4. DPlayer — 前端视频播放与防刷
+### 4. DPlayer — 前端视频播放与防刷 ~~（本项目已不采用）~~
+
+> **⚠ 播放器已改为 Aliplayer**（加密路线改为阿里云私有加密，见契约 §1 订正段与 `04-实施计划.md` F-112）：私有加密的解密只能由阿里云播放器 SDK 完成，`DPlayer + hls.js` 这条路**在本项目里已经走不通**。**本节保留供回溯** —— 它记录的「禁拖拽 / 水印 / 心跳」三项能力要求仍然成立，只是承载它们的播放器换了。
 - 仓库：https://github.com/DIYgod/DPlayer
 - 借鉴模块 → EduMatrix 对应：学生端播放器二开
 - 重点阅读路径：
@@ -43,7 +45,7 @@
 
 ### 5. 云端 VOD（无仓库，文档参考）
 - 阿里云 VOD：https://help.aliyun.com/product/29932.html （PlayAuth 播放凭证模式）
-- 对应契约表：`vod_video`；接口 `POST /api/v1/vod/videos/upload-token`、`POST /api/v1/vod/play-auth`、`GET /api/v1/vod/decrypt-key`；转码事件经 XXL-Job 拉取 SMQ 消费（03-课程与视频 §7.2），**无 HTTP 回调端点**
+- 对应契约表：`vod_video`；接口 `POST /api/v1/vod/videos/upload-token`、`POST /api/v1/vod/play-auth`（原「获取解密密钥」已随加密路线改为阿里云私有加密而**删除**，见 03-课程与视频 §8.2 墓碑小节）；转码事件经 XXL-Job 拉取 SMQ 消费（03-课程与视频 §7.2），**无 HTTP 回调端点**
 
 ## 克隆维护
 
