@@ -139,7 +139,12 @@ var opt = {
   inline:    (Q.get('inline')    || 'on') === 'on',
   x5:        (Q.get('x5')        || 'on') === 'on',
   wm:        (Q.get('wm')        || 'on') === 'on',
-  seekguard: (Q.get('seekguard') || 'on') === 'on'
+  seekguard: (Q.get('seekguard') || 'on') === 'on',
+  // enc=off：不传 encryptType，用来播【不加密】的视频。
+  // 存在的理由：③水印 与 ④禁前跳 跟加密毫无关系，加不加密都要做、都能被绕过。
+  // 私有加密在 iOS 上要 Service Worker（硬性要 HTTPS），备案没下来之前测不了；
+  // 但 ③④ 不碰 Service Worker —— 用不加密的源，iOS 今天就能把这两项测掉。
+  enc:       (Q.get('enc')       || 'on') === 'on'
 };
 var SESSION = 'A' + Math.random().toString(36).slice(2, 8) + '-' + Date.now().toString(36);
 
@@ -227,6 +232,7 @@ window.addEventListener('unhandledrejection', function (ev) { L.err('JS', 'unhan
                     'border-radius:10px;padding:1px 8px;font-size:12px;text-decoration:none';
   bar.appendChild(g);
   pill(null, 'mode=' + opt.mode);
+  pill(opt.enc ? null : 'warn', opt.enc ? '加密=私有加密' : '加密=关（本轮只验 ③④）');
   pill(opt.inline, 'inline ' + (opt.inline ? 'ON' : 'OFF'));
   pill(opt.x5, 'x5同层 ' + (opt.x5 ? 'ON' : 'OFF'));
   pill(opt.wm, '水印 ' + (opt.wm ? 'ON' : 'OFF'));
@@ -448,6 +454,7 @@ setInterval(function () {
   var v = activeVideo, el = document.fullscreenElement || document.webkitFullscreenElement;
   vitals.innerHTML =
     '<span>mode=<b>' + opt.mode + '</b></span>' +
+    '<span>enc=<b>' + (opt.enc ? 'on/私有加密' : 'off/不加密') + '</b></span>' +
     '<span>readyState=<b>' + (v ? v.readyState : '-') + '</b></span>' +
     '<span>t=<b>' + (v ? v.currentTime.toFixed(1) : '-') + '</b>/' + (v && isFinite(v.duration) ? v.duration.toFixed(1) : '?') + '</span>' +
     '<span>max=<b>' + maxPosition.toFixed(1) + '</b></span>' +
@@ -613,8 +620,14 @@ function startVid() {
     L.err('ENGINE', '★ mode=vid 但没给 ?vid=  —— 需要阿里云 VOD 里那条视频的 VideoId');
     return;
   }
-  L.hi('ENGINE', '★ mode=vid —— VidAuth + encryptType:1（私有加密）vid=' + opt.vid);
-  L.info('ENGINE', '注意：此模式下 ② 不存在（密钥由点播服务托管，无自建密钥接口）');
+  if (opt.enc) {
+    L.hi('ENGINE', '★ mode=vid + enc=on —— VidAuth + encryptType:1（私有加密）vid=' + opt.vid);
+    L.info('ENGINE', '注意：此模式下 ② 不存在（密钥由点播服务托管，无自建密钥接口）');
+  } else {
+    L.hi('ENGINE', '★ mode=vid + enc=off —— VidAuth【不加密】vid=' + opt.vid);
+    L.info('ENGINE', '本轮只验 ③水印 与 ④禁前跳 —— 这两项与加密无关，不加密照样要做、照样能被绕过');
+    L.info('ENGINE', '① 加密播放在本模式下【不参与判定】，别拿这一轮的"能播"去回答 ①');
+  }
   L.info('ENGINE', '向 /playauth 取凭证 ...');
   fetch('playauth?videoId=' + encodeURIComponent(opt.vid))
     .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
@@ -627,13 +640,20 @@ function startVid() {
       var cfg = commonCfg();
       cfg.vid = opt.vid;
       cfg.playauth = res.j.playAuth;
-      cfg.encryptType = 1;          // ★ 私有加密必须显式打开
+      if (opt.enc) {
+        cfg.encryptType = 1;        // ★ 私有加密必须显式打开
 
-      // 私有加密的解密在 JS 层做，解密后的数据只能经 MSE 喂给 video。
-      // iOS 的 WKWebView 不提供 MSE —— 这一行让"为什么播不了"在日志里一目了然。
-      if (!env.mse) {
-        L.err('ENGINE', '★ 本环境 MediaSource 不可用（mse=false, mms=' + env.mms +
-                        '）—— 私有加密依赖 MSE 解密，此处大概率播不了');
+        // 私有加密在 iOS 上【不走 MSE，走 Service Worker 插件】（aliplayer-worker-min.js，
+        // 须与播放器同版本、同源部署，且 Service Worker 硬性要求 HTTPS）。本页尚未接该插件，
+        // 所以 iOS 上这条路目前是【没测过】，不是【测过不行】—— 2026-08-21 那轮 4010 报错
+        // 同时缺插件与 HTTPS 两样东西，不构成对 iOS 的判定。
+        if (!env.mse) {
+          L.err('ENGINE', '★ 本环境 MediaSource 不可用（mse=false, mms=' + env.mms + '）');
+          L.err('ENGINE', '★ 且本页未接 aliplayer-worker-min.js 插件、当前也非 HTTPS —— ' +
+                          'iOS 上私有加密【无法在此环境判定】，播不了不等于 iOS 不支持');
+        }
+      } else {
+        L.info('ENGINE', '未传 encryptType —— 按不加密播放（mse=' + env.mse + ' mms=' + env.mms + '，本模式两者都用不上）');
       }
 
       try {
