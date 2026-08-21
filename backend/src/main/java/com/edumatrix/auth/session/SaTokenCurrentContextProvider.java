@@ -51,4 +51,9 @@ public class SaTokenCurrentContextProvider implements CurrentContextProvider {
     public Long getNodeId() {
         return LoginHelper.getNodeId();
     }
+
+    @Override
+    public Integer getUserType() {
+        return LoginHelper.getUserType();
+    }
 }

@@ -60,4 +60,15 @@ public interface CurrentContextProvider {
      * 走 {@code NodeAncestorCache}（Redis {@code node:anc:{nodeId}}，节点移动时失效）。
      */
     Long getNodeId();
+
+    /**
+     * 当前账号类型：{@code 1} 管理员 / {@code 2} 教师 / {@code 3} 学生（{@code sys_user.user_type}）。
+     *
+     * <p>模块 12 需要它来分叉「学生播放」与「管理端预览」两条路径，并写进
+     * {@code vod_play_auth_log.viewer_type}。会话里本来就有这个值（{@code LoginHelper.SESSION_USER_TYPE}），
+     * 从 SPI 取比每次回查 {@code sys_user} 少一次查询，也避免了在 {@code vod} 里 import {@code system} 领域。
+     *
+     * @return 无会话时 {@code null}
+     */
+    Integer getUserType();
 }

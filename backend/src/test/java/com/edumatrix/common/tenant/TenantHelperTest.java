@@ -40,6 +40,11 @@ class TenantHelperTest {
             public Long getNodeId() {
                 return 200L;
             }
+
+    @Override
+    public Integer getUserType() {
+        return null;
+    }
         };
     }
 

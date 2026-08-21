@@ -44,6 +44,11 @@ public final class CourseFixtures {
     public static final long TB = 1968000000000000021L;
     public static final long ROOT2 = TENANT2_ID;
 
+    /** 在读学生（模块 12 校验链第 1 步的正例）。 */
+    public static final long S_ACTIVE = 1968000000000000030L;
+    /** 已退课学生（{@code org_student.status = 1}）—— 第 1 步的反例。 */
+    public static final long S_QUIT = 1968000000000000031L;
+
     /** ROOT 自有课程（草稿）。 */
     public static final long C_ROOT = 1968000000000001001L;
     /** TA 自有课程 —— 验「ROOT 看不到下级教师自建的课」。 */
@@ -117,6 +122,8 @@ public final class CourseFixtures {
     }
 
     public void clean() {
+        jdbc.update("DELETE FROM vod_play_auth_log WHERE tenant_id IN (?, ?)", TENANT_ID, TENANT2_ID);
+        jdbc.update("DELETE FROM org_student WHERE tenant_id IN (?, ?)", TENANT_ID, TENANT2_ID);
         for (long tenant : new long[]{TENANT_ID, TENANT2_ID}) {
             jdbc.update("DELETE FROM crs_lesson WHERE tenant_id = ?", tenant);
             jdbc.update("DELETE FROM crs_chapter WHERE tenant_id = ?", tenant);
@@ -179,6 +186,24 @@ public final class CourseFixtures {
                         + "create_time, update_time, deleted_at) "
                         + "VALUES (?, ?, 2, 1, ?, ?, ?, ?, ?, ?, NOW(), NOW(), ?)",
                 id, ROOT, "vod-it08-" + id, name, duration, status, userIdOf(ROOT), tenantId, deletedAt);
+    }
+
+    /**
+     * 建一个学生节点 + {@code org_student} 档案行。
+     *
+     * <p><b>复用 {@link #node} 里的 {@code account()}</b>，不新增 {@code INSERT INTO sys_user_role}
+     * 的插入点 —— 约定检查⑧ 按「夹具文件 → 主键偏移量」逐条比对，多一个插入点就要回去登记。
+     * 本类的偏移量仍是 {@code 500000L}，未变。
+     *
+     * @param status {@code org_student.status}：0 在读 / 1 已退课 / 2 已归档
+     */
+    public void studentNode(long nodeId, long parentId, String ancestors, String name,
+                            int status, long tenantId) {
+        node(nodeId, parentId, ancestors, name, 3, tenantId);
+        jdbc.update("INSERT INTO org_student (id, node_id, user_id, student_no, status, "
+                        + "tenant_id, create_time, update_time, deleted_at) "
+                        + "VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW(), 0)",
+                nodeId + 900000L, nodeId, userIdOf(nodeId), "S" + nodeId, status, tenantId);
     }
 
     public void course(long id, String name, long ownerNodeId, long tenantId, int status) {

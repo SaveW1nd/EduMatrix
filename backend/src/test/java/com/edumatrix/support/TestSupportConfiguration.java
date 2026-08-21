@@ -66,12 +66,33 @@ public class TestSupportConfiguration {
             failNext = false;
             notReady = false;
             streams = java.util.List.of();
+            playAuth = "FAKE-PLAY-AUTH-0123456789";
+            playAuthFails = false;
         }
 
         /** 一路正常的加密 HLS（GetPlayInfo 形态：Encrypt 是 Long=1、Duration 是 String）。 */
         public void oneEncryptedHls(String duration) {
             streams = java.util.List.of(new VodPlayStream("m3u8", 1L, "AliyunVoDEncryption",
                     null, "https://vod.example.cn/x.m3u8", duration, 9486668L, "SD"));
+        }
+
+        /** 模块 12：下发的播放凭证。IT 里断言它原样出现在响应 playAuth 字段上。 */
+        public String playAuth = "FAKE-PLAY-AUTH-0123456789";
+
+        /** 置 true 模拟阿里云侧失败（缺 RAM 权限、网络等），用于验证不把内部异常泄露给学生端。 */
+        public boolean playAuthFails;
+
+        @Override
+        public String getVideoPlayAuth(String cloudVideoId) {
+            calls.add("getVideoPlayAuth:" + cloudVideoId);
+            if (playAuthFails) {
+                throw new IllegalStateException("取播放凭证失败（GetVideoPlayAuth） videoId=" + cloudVideoId);
+            }
+            return playAuth;
+        }
+
+        public long playAuthCalls() {
+            return calls.stream().filter(c -> c.startsWith("getVideoPlayAuth")).count();
         }
 
         public long playInfoCalls() {

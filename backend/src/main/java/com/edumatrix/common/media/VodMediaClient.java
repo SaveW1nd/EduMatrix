@@ -36,6 +36,22 @@ public interface VodMediaClient {
     /** 重新发起转码（{@code SubmitTranscodeJobs}），用配置里的模板组。 */
     void submitTranscodeJobs(String cloudVideoId);
 
+    /**
+     * 取播放凭证（阿里云 {@code GetVideoPlayAuth}）—— 模块 12 的 {@code playAuth} 字段。
+     *
+     * <p><b>它由点播服务签发、有自己的有效期，我们控制不了也读不到</b>：{@code GetVideoPlayAuth}
+     * 不回传剩余秒数。<b>不要把它和我们自己的 {@code authToken}（TTL 固定 300s）混用同一个常量</b>——
+     * 「两种凭证、两个有效期」是 03-03 §8.1.1 单列一张对照表的原因。
+     *
+     * <p><b>需要 RAM 权限 {@code vod:GetVideoPlayAuth}</b>。缺权限时阿里云返回
+     * {@code Forbidden.RAM}，表现是「签不出凭证」——<b>与代码写错长得一模一样</b>，
+     * 排查时先查权限再怀疑代码（2026-08-21 已在生产核实：权限在）。
+     *
+     * @param cloudVideoId {@code vod_video.vod_file_id}
+     * @return 播放凭证串（POC 实测长度约 2276~2288）
+     */
+    String getVideoPlayAuth(String cloudVideoId);
+
     /** 本实现是不是「未配置」的空实现。 */
     default boolean enabled() {
         return true;

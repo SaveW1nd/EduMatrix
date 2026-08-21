@@ -21,6 +21,7 @@ public class TestCurrentContextProvider implements CurrentContextProvider {
     private boolean superAdmin;
     private Long userId;
     private Long nodeId;
+    private Integer userType;
 
     /** 模拟一个普通（非超管）用户会话。 */
     public TestCurrentContextProvider asTenantUser(Long tenantId, Long userId, Long nodeId) {
@@ -67,5 +68,16 @@ public class TestCurrentContextProvider implements CurrentContextProvider {
     @Override
     public Long getNodeId() {
         return nodeId;
+    }
+
+    /** 模块 12 起需要它分叉「学生播放」与「管理端预览」，并写进 vod_play_auth_log.viewer_type。 */
+    public TestCurrentContextProvider withUserType(Integer userType) {
+        this.userType = userType;
+        return this;
+    }
+
+    @Override
+    public Integer getUserType() {
+        return userType;
     }
 }

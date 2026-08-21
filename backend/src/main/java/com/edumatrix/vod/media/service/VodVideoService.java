@@ -131,9 +131,11 @@ public class VodVideoService {
         VodVideo video = new VodVideo();
         video.setOwnerNodeId(ownerNodeId);
         video.setProvider(VodVideo.PROVIDER_ALIYUN);
-        // 【显式写 2】DDL 默认值是 1（HLS 标准加密），而 R1a 定案实际采用阿里云私有加密。
-        // 基线是冻结内容改不了；依赖一个与事实不符的默认值，迟早有人绕过本 Service 直接 INSERT
-        video.setEncryptType(VodVideo.ENCRYPT_ALIYUN_PRIVATE);
+        // 【显式写 0，F-114 定案：第一版不加密】DDL 默认值是 1（HLS 标准加密）、R1a 曾定案 2（私有加密），
+        // 三个值都出现过 —— 正因如此不能依赖默认值（基线冻结改不了）。
+        // ⚠ 本列必须与【转码模板实际产出的东西】一致：写 0 的前提是需方侧模板已配成不加密输出。
+        // 模块 12 按本列决定下发给 Aliplayer 的 encryptType，写错的表现是「播不了」。
+        video.setEncryptType(VodVideo.ENCRYPT_NONE);
         video.setVodFileId(credential.cloudVideoId());
         video.setVideoName(req.getVideoName().trim());
         video.setStatus(VodVideo.STATUS_UPLOADING);
