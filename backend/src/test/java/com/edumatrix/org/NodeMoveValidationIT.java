@@ -178,6 +178,37 @@ class NodeMoveValidationIT extends OrgIntegrationTestBase {
     }
 
     @Test
+    @DisplayName("⚠ F-114 树高：把一棵【存量的】深子树整个搬走 → 400，"
+            + "这是 MAX_DEPTH 唯一真正生效的场合")
+    void movingLegacyDeepSubtreeExceedsDepthLimit() throws Exception {
+        // 【这条用例是自查补上来的，来历值得写下】M59（把 OrgTreeShape.MAX_DEPTH
+        // 从 4 改回 50）当时【全套 571 条全绿】—— 定案二的「树高」那一半
+        // 当时没有任何东西守着。
+        //
+        // 补它的时候才想清楚为什么会这样：assertOnlyOneAdminLayer 一旦生效，
+        // 承载规则自己就把合法树封在 depth 4 了（管理员永远 2、教师永远 3、学生永远 4），
+        // 【合法树里根本造不出第 5 层】，「建人超深」那条路走不到深度校验。
+        // 所以要验它，只能拿一棵【改形前留下的、今天已经建不出来的】深子树来搬。
+        orgFixtures.seedLegacyDeepSubtree();
+        String token = loginAs(OrgFixtures.ROOT);
+
+        // LEGACY_TEACHER 在 depth 4，名下学员 depth 5；把它搬到 A2（depth 2）下 ——
+        // 新深度 = 2 + 1 + 1 = 4，【不超】，这一侧必须放行
+        assertThat(code(move(token, OrgFixtures.LEGACY_TEACHER, OrgFixtures.A2)))
+                .as("搬浅了是修复动作，不能连它一起拒 —— 否则存量深树永远没法救")
+                .isEqualTo(200);
+
+        // 再搬回 LEGACY_ADMIN（depth 3）下 —— 新深度 = 3 + 1 + 1 = 5 > 4，必须拒
+        JsonNode response = move(token, OrgFixtures.LEGACY_TEACHER, OrgFixtures.LEGACY_ADMIN);
+        assertThat(code(response))
+                .as("超限返回 400（契约 §2.3 约束 5），不是 1xxxx 段业务码")
+                .isEqualTo(400);
+        assertThat(orgFixtures.parentOf(OrgFixtures.LEGACY_TEACHER))
+                .as("被拒就不能动")
+                .isEqualTo(OrgFixtures.A2);
+    }
+
+    @Test
     @DisplayName("非 org_admin 调移动接口 → 403（权限的真相在菜单绑定数据里）")
     void teacherCannotMoveNodes() throws Exception {
         String token = loginAs(OrgFixtures.T3);
