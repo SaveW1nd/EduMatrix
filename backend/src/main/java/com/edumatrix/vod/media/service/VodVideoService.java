@@ -131,10 +131,16 @@ public class VodVideoService {
         VodVideo video = new VodVideo();
         video.setOwnerNodeId(ownerNodeId);
         video.setProvider(VodVideo.PROVIDER_ALIYUN);
-        // 【显式写 0，F-114 定案：第一版不加密】DDL 默认值是 1（HLS 标准加密）、R1a 曾定案 2（私有加密），
-        // 三个值都出现过 —— 正因如此不能依赖默认值（基线冻结改不了）。
-        // ⚠ 本列必须与【转码模板实际产出的东西】一致：写 0 的前提是需方侧模板已配成不加密输出。
-        // 模块 12 按本列决定下发给 Aliplayer 的 encryptType，写错的表现是「播不了」。
+        // 【这里写的是【占位值】，不是判断 —— F-114 第二半】
+        // 上传这一刻【我们并不知道模板组会产出什么】：加密与否要等转码完成、GetPlayInfo 回来才知道。
+        // 真值由 VodEventConsumeService 在 TranscodeComplete 时按【实际挑中那一路】回填
+        // （VodPlayStream.resolvedEncryptType()）。
+        //
+        // ⚠ 原注释写着「写 0 的前提是需方侧模板已配成不加密输出」——【那个约束在新设计下不存在了】，
+        //   留着就是在描述一个不存在的前提。现在模板配成什么都不影响这一行。
+        //
+        // 仍然显式写而不靠 DDL 默认值：默认值是 1（HLS 标准加密），而 status=0/1 期间
+        // 这一列还没有真值，落一个「标准加密」比落一个中性的 0 更容易被误读成事实。
         video.setEncryptType(VodVideo.ENCRYPT_NONE);
         video.setVodFileId(credential.cloudVideoId());
         video.setVideoName(req.getVideoName().trim());

@@ -43,12 +43,21 @@ class VodEventConsumeIT extends CourseIntegrationTestBase {
     }
 
     private static String transcodeComplete(String fileId, String status) {
+        return transcodeComplete(fileId, status, true);
+    }
+
+    /**
+     * @param encrypted 事件里那一路的 {@code Encrypt}。
+     *                  <b>F-114 第二半起它不再是准入条件</b> —— 加不加密都收，
+     *                  真值由 {@code GetPlayInfo} 侧观测后落库
+     */
+    private static String transcodeComplete(String fileId, String status, boolean encrypted) {
         return """
                 {"Status":"%s","VideoId":"%s","EventType":"TranscodeComplete",\
                 "EventTime":"2026-08-19T19:14:31Z","StreamInfos":[{"Status":"%s","IsAudio":false,\
-                "Size":9486668,"Definition":"SD","Duration":52.233433,"Encrypt":true,\
+                "Size":9486668,"Definition":"SD","Duration":52.233433,"Encrypt":%s,\
                 "FileUrl":"http://outin-x/y.m3u8","Format":"m3u8"}]}"""
-                .formatted(status, fileId, status);
+                .formatted(status, fileId, status, encrypted);
     }
 
     // =====================================================================
@@ -112,6 +121,58 @@ class VodEventConsumeIT extends CourseIntegrationTestBase {
         assertNull(coverUrlOf(CourseFixtures.VIDEO_TRANSCODING),
                 "GetPlayInfo 的 CoverURL 是 http:// 且带 Expires 签名 —— 存进去既是混合内容"
                         + "又迟早过期。按 D-2 先例不落库，口径待需方定（F 清单已登记）");
+    }
+
+    // =====================================================================
+    // 【F-114 第二半】encrypt_type 记【实际观测值】，不记上传时的假设
+    //
+    // 下面两条【必须成对存在】：单独任何一条都可能是「恒记某个值」而照样绿。
+    // 这条路此前【全库零覆盖】—— 喂「不加密的流」进消费链路的用例一个都没有，
+    // 所以「传一个不加密视频 → 被判转码失败」这个缺陷能一直绿着。
+    // =====================================================================
+
+    /**
+     * <b>不加密的一路 m3u8：必须被采纳，而不是被判成转码失败。</b>
+     *
+     * <p>改这条之前的行为：挑流条件写死 {@code Encrypt == 1} →
+     * 阿里云转码<b>成功</b>而我们判「挑不出加密流」→ 置 {@code status=3} →
+     * <b>控制台一切正常、我们这边显示失败，那个视频永远用不了</b>。
+     */
+    @Test
+    @DisplayName("⚠ F-114 不加密的 m3u8：status→2、encrypt_type 记 0、hls_url 回填（旧代码在这里置 3）")
+    void plainHlsIsAcceptedAndRecordedAsUnencrypted() {
+        setStatus(CourseFixtures.VIDEO_TRANSCODING, 1);
+        cloud.onePlainHls("52.233433");
+        queue.offer("r-plain", transcodeComplete(FILE_ID_TRANSCODING, "success", false));
+
+        consumeService.consumeOnce();
+
+        assertEquals(2, statusOf(CourseFixtures.VIDEO_TRANSCODING),
+                "转码成功的不加密 m3u8 必须落 2 —— 判 3 等于把一条好视频永久废掉");
+        assertEquals(0, encryptTypeOf(CourseFixtures.VIDEO_TRANSCODING),
+                "记【实际观测到的】加密状态：GetPlayInfo 返回 Encrypt≠1 → 落 0");
+        assertEquals("https://vod.example.cn/plain.m3u8", hlsUrlOf(CourseFixtures.VIDEO_TRANSCODING));
+    }
+
+    /**
+     * <b>对照组</b>：同一条链路喂加密的一路，必须记 2。
+     *
+     * <p>与上一条<b>成对</b>才证明「按实际记」—— 只有不加密那条的话，
+     * 把 {@code encrypt_type} 写死成 0 照样全绿（变异 M48）；
+     * 只有加密这条的话，写死成 2 照样全绿（变异 M49）。
+     */
+    @Test
+    @DisplayName("⚠ F-114 对照：加密的 m3u8 → encrypt_type 记 2（与上一条成对，缺一条就抓不住写死）")
+    void encryptedHlsIsRecordedAsPrivateEncryption() {
+        setStatus(CourseFixtures.VIDEO_TRANSCODING, 1);
+        cloud.oneEncryptedHls("52.233433");
+        queue.offer("r-enc", transcodeComplete(FILE_ID_TRANSCODING, "success", true));
+
+        consumeService.consumeOnce();
+
+        assertEquals(2, statusOf(CourseFixtures.VIDEO_TRANSCODING));
+        assertEquals(2, encryptTypeOf(CourseFixtures.VIDEO_TRANSCODING),
+                "GetPlayInfo 返回 Encrypt=1 且 EncryptType=AliyunVoDEncryption → 落 2 私有加密");
     }
 
     /**
@@ -241,6 +302,11 @@ class VodEventConsumeIT extends CourseIntegrationTestBase {
     // =====================================================================
     // 工具
     // =====================================================================
+
+    private Integer encryptTypeOf(long videoId) {
+        return jdbcTemplate.queryForObject(
+                "SELECT encrypt_type FROM vod_video WHERE id = ?", Integer.class, videoId);
+    }
 
     private int statusOf(long videoId) {
         Integer s = jdbcTemplate.queryForObject(

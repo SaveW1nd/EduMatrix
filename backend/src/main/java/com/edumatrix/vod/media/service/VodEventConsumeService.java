@@ -242,6 +242,13 @@ public class VodEventConsumeService {
         if (picked.sizeBytes() != null) {
             update.set(VodVideo::getSizeBytes, picked.sizeBytes());
         }
+        if (picked.encryptType() != null) {
+            // 【F-114 第二半】记下【实际挑中那一路】的加密状态，而不是上传时猜的那个值。
+            // 上传侧写的只是占位：那一刻我们不知道模板组会产出什么。
+            // 这样需方改 ALIYUN_VOD_TEMPLATE_GROUP_ID 之后，下一个视频自动跟上，代码一个字不动 ——
+            // 模块 12 的 play-auth 按本列翻译成 Aliplayer 的 encryptType，两端因此天然一致。
+            update.set(VodVideo::getEncryptType, picked.encryptType());
+        }
         // 【cover_url 刻意不写】实测 GetPlayInfo 的 VideoBase.CoverURL 是
         //   http://outin-…/snapshots/….jpg?Expires=1787169594&Signature=…
         // 两个毛病：① http://（全站 HTTPS 下混合内容拦截）；② 带 Expires 时效签名，

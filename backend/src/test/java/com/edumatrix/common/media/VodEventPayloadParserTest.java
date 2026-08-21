@@ -198,7 +198,7 @@ class VodEventPayloadParserTest {
         assertThat(stream.playUrl())
                 .as("FileUrl 实测仍是 http:// —— 契约「报文里的 URL 一律不采信」被坐实")
                 .startsWith("http://");
-        assertThat(event.encryptedHlsStreams()).hasSize(1);
+        assertThat(event.hlsStreams()).as("F-114 起挑流不问加密，只问 Format==m3u8 且自身成功").hasSize(1);
     }
 
     /**
@@ -234,9 +234,20 @@ class VodEventPayloadParserTest {
                 .isNull();
         assertThat(stream.audio()).as("IsAudio=0 同理，不是布尔就取不出").isNull();
         assertThat(stream.isEncryptedHls())
-                .as("取不出就挑不中 —— 宁可响亮地置 status=3 并告警，也不要靠隐式转换蒙对一次")
+                .as("取不出就判 false —— 宁可判错方向也不要靠隐式转换蒙对一次")
                 .isFalse();
-        assertThat(event.encryptedHlsStreams()).isEmpty();
+
+        // ⚠ F-114 第二半改了这里的语义，【原断言 encryptedHlsStreams().isEmpty() 已不成立】：
+        //   挑流条件放宽为 Format==m3u8（加不加密都收），所以这一路【现在会被挑中】。
+        //   那是【对的】—— 一个转码成功的 m3u8 本来就该被采纳，加密与否是落库时记的事实，
+        //   不再是准入条件。
+        // 本用例的证明力【不在这一行】：两个解析器没有被合并，是由上面
+        //   stream.encrypt() == null（Encrypt=1 这个 GetPlayInfo 形状读不出布尔）证明的。
+        //   把这一行改成 isEmpty() 那种「顺带成立」的断言留着，反而会在下次放宽条件时
+        //   变成一条挡路的假判据。
+        assertThat(event.hlsStreams())
+                .as("F-114：m3u8 且 Status=success 就该被挑中，加密与否不再是准入条件")
+                .hasSize(1);
     }
 
     /** 反向：{@code GetPlayInfo} 那一侧的 {@code VodPlayStream} 拿到事件形态的布尔也判不出。 */

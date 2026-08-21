@@ -37,13 +37,19 @@ public class VodPlayInfoResolver {
      * @param sizeBytes       该路字节数；取不到为 null
      * @param reason          挑不到时说清为什么（写进 {@code remark} 与 ERROR 日志）
      */
-    public record Picked(String playUrl, int durationSeconds, Long sizeBytes, String reason) {
+    /**
+     * @param encryptType 挑中那一路的<b>实际</b>加密状态，落 {@code vod_video.encrypt_type}
+     *                    （0 不加密 / 1 标准加密 / 2 私有加密）。
+     *                    <b>它是观测结果不是配置意图</b> —— 见 {@link VodPlayStream#resolvedEncryptType()}
+     */
+    public record Picked(String playUrl, int durationSeconds, Long sizeBytes,
+                         Integer encryptType, String reason) {
         public boolean usable() {
             return playUrl != null;
         }
 
         static Picked fail(String reason) {
-            return new Picked(null, 0, null, reason);
+            return new Picked(null, 0, null, null, reason);
         }
     }
 
@@ -54,31 +60,37 @@ public class VodPlayInfoResolver {
     public Picked pick(VodEvent event) {
         // ① 先看事件自己报了几路：多路 = 模板组配了多档（契约 §1 第 1 条警告的情形），
         //    这条诊断信息在 GetPlayInfo 回来之前就能拿到
-        List<?> fromEvent = event.encryptedHlsStreams();
+        List<?> fromEvent = event.hlsStreams();
         if (event.streams() != null && event.streams().size() > 1) {
             return Picked.fail("模板组配了多档：事件报了 " + event.streams().size()
                     + " 路流。契约 §1 部署约定第 1 条只允许单一清晰度加密 HLS 输出 —— "
                     + "多档下 hls_url 只存得下一路，学生实际看到的清晰度不可控");
         }
         if (event.streams() != null && !event.streams().isEmpty() && fromEvent.isEmpty()) {
-            return Picked.fail("事件里那一路不是「加密 m3u8 且自身转码成功」："
+            return Picked.fail("事件里那一路不是「m3u8 且自身转码成功」（加不加密都收，F-114）："
                     + event.streams().get(0).describe());
         }
 
         // ② 播放地址一律反调 GetPlayInfo 取 —— 见类注释
         VodPlayInfo playInfo = vodClient.getPlayInfo(event.vodFileId());
         List<VodPlayStream> candidates = playInfo.streams() == null ? List.of()
-                : playInfo.streams().stream().filter(VodPlayStream::isEncryptedHls).toList();
+                : playInfo.streams().stream().filter(VodPlayStream::isHls).toList();
 
         if (candidates.isEmpty()) {
-            return Picked.fail("GetPlayInfo 挑不出 Format==m3u8 且 Encrypt==1 的流（共 "
-                    + (playInfo.streams() == null ? 0 : playInfo.streams().size()) + " 路）");
+            return Picked.fail("GetPlayInfo 挑不出 Format==m3u8 的流（共 "
+                    + (playInfo.streams() == null ? 0 : playInfo.streams().size())
+                    + " 路）—— F-114 起加不加密都收，挑不到说明模板组根本没产出 HLS");
         }
         if (candidates.size() > 1) {
             // 分册只写了「空集置 3」，多路没写（F-54）。同样置 3：
-            // 任选一路 = 学生看到的清晰度不可控，正是契约 §1 第 1 条要禁的
+            // 任选一路 = 学生看到的清晰度不可控，正是契约 §1 第 1 条要禁的。
+            //
+            // 【⚠ F-114 明确保留这道守卫，它不是漏改】需方提过「以后可能两个模板并存、
+            // 自适应选择（这门课加密、那门课不加密）」。那天 GetPlayInfo 会返回两路，
+            // 本条会失败 —— 【那个失败是对的】：任选一路会让学生看到的清晰度【与加密状态】
+            // 都不可控。真要并存，需方要先定「优先取哪一路」，那是一次新定案而不是实现细节。
             return Picked.fail("GetPlayInfo 挑出 " + candidates.size()
-                    + " 路加密 m3u8 —— 模板组配了多档，无法确定该给学生哪一路");
+                    + " 路 m3u8 —— 模板组配了多档，无法确定该给学生哪一路");
         }
         VodPlayStream stream = candidates.get(0);
         if (!stream.isHttps()) {
@@ -93,6 +105,9 @@ public class VodPlayInfoResolver {
             // 课时能上架、完播判定的分母是 0，且不报错
             return Picked.fail("时长解析不出或非正：Duration=" + stream.duration());
         }
-        return new Picked(stream.playUrl(), duration, stream.sizeBytes(), null);
+        // 【记实际值，不记假设】上传那一刻我们并不知道模板组会产出什么，
+        // 只有转码完成、GetPlayInfo 回来之后才知道 —— 这是整条链上唯一知道真相的地方
+        return new Picked(stream.playUrl(), duration, stream.sizeBytes(),
+                stream.resolvedEncryptType(), null);
     }
 }
