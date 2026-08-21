@@ -31,9 +31,9 @@ class NodeTreeQueryIT extends OrgIntegrationTestBase {
         assertThat(data.get(1).path("children")).isEmpty();
         // refUserName「恒非空」（§3.1 响应字段说明）
         assertThat(data.get(0).path("refUserName").asText()).isNotBlank();
-        // 冗余计数照原样回传
+        // 冗余计数照原样回传：A1 有 3 个教师、A2 有 1 个
         assertThat(data.get(0).path("childCount").asInt() + data.get(1).path("childCount").asInt())
-                .isEqualTo(2);
+                .isEqualTo(4);
     }
 
     @Test
@@ -44,8 +44,8 @@ class NodeTreeQueryIT extends OrgIntegrationTestBase {
         JsonNode data = data(client.getWithToken(
                 "/api/v1/org/nodes/tree?parentId=" + OrgFixtures.A1, token));
 
-        assertThat(data).hasSize(1);
-        assertThat(data.get(0).path("id").asText()).isEqualTo(String.valueOf(OrgFixtures.P));
+        assertThat(data).hasSize(3);
+        assertThat(data.get(0).path("id").asText()).isEqualTo(String.valueOf(OrgFixtures.T1));
     }
 
     @Test
@@ -66,16 +66,15 @@ class NodeTreeQueryIT extends OrgIntegrationTestBase {
         JsonNode data = data(client.getWithToken(
                 "/api/v1/org/nodes/tree?deep=true&nodeTypes=1", token));
 
-        // 只画到管理员层：A1 → P → A3、A2；教师与学生整支不返回
+        // 只画到管理员层：A1、A2；教师与学生整支不返回。
+        // F-114 之后管理员只有一层，所以这里断言的是【它们没有管理员子节点】——
+        // 原先这条走的是 A1 → P → A3 三层管理员，那种形状现在建不出来
+        assertThat(data).hasSize(2);
         JsonNode a1 = data.get(0).path("id").asText().equals(String.valueOf(OrgFixtures.A1))
                 ? data.get(0) : data.get(1);
-        JsonNode p = a1.path("children").get(0);
-        assertThat(p.path("id").asText()).isEqualTo(String.valueOf(OrgFixtures.P));
-        assertThat(p.path("children")).hasSize(1);
-        assertThat(p.path("children").get(0).path("id").asText())
-                .isEqualTo(String.valueOf(OrgFixtures.A3));
-        // A3 下的两个教师被 nodeTypes=1 排除，它们的学员也就整支不返回
-        assertThat(p.path("children").get(0).path("children")).isEmpty();
+        assertThat(a1.path("id").asText()).isEqualTo(String.valueOf(OrgFixtures.A1));
+        // A1 下的三个教师被 nodeTypes=1 排除，它们的学员也就整支不返回
+        assertThat(a1.path("children")).isEmpty();
     }
 
     @Test
@@ -97,12 +96,14 @@ class NodeTreeQueryIT extends OrgIntegrationTestBase {
 
         JsonNode data = data(client.getWithToken("/api/v1/org/nodes/tree?keyword=学生一", token));
 
-        // 命中 S1，链路 A1 → P → A3 → T1 → S1 一并回来；A2 那一支完全不返回
+        // 命中 S1，链路 A1 → T1 → S1 一并回来；A2 那一支完全不返回
         assertThat(data).hasSize(1);
         JsonNode a1 = data.get(0);
         assertThat(a1.path("id").asText()).isEqualTo(String.valueOf(OrgFixtures.A1));
-        JsonNode s1 = a1.path("children").get(0).path("children").get(0)
-                .path("children").get(0).path("children").get(0);
+        assertThat(a1.path("children")).hasSize(1);
+        JsonNode t1 = a1.path("children").get(0);
+        assertThat(t1.path("id").asText()).isEqualTo(String.valueOf(OrgFixtures.T1));
+        JsonNode s1 = t1.path("children").get(0);
         assertThat(s1.path("id").asText()).isEqualTo(String.valueOf(OrgFixtures.S1));
     }
 
@@ -147,20 +148,21 @@ class NodeTreeQueryIT extends OrgIntegrationTestBase {
     void detailReturnsBreadcrumbAndChildStat() throws Exception {
         String token = loginAs(OrgFixtures.ROOT);
 
-        JsonNode data = data(client.getWithToken("/api/v1/org/nodes/" + OrgFixtures.A3, token));
+        JsonNode data = data(client.getWithToken("/api/v1/org/nodes/" + OrgFixtures.A1, token));
 
-        assertThat(data.path("parentName").asText()).isEqualTo("苏州中心");
-        // 路径：ROOT → A1 → P → A3。平台根哨兵 0 【不在】里面（契约 §2.9）
+        assertThat(data.path("parentName").asText()).isEqualTo("IT06 组织树机构");
+        // 路径：ROOT → A1。平台根哨兵 0 【不在】里面（契约 §2.9）。
+        // F-114 之后合法树最深就是 ROOT → A1 → T → S，面包屑因此最长 4 段
         JsonNode path = data.path("path");
-        assertThat(path).hasSize(4);
+        assertThat(path).hasSize(2);
         assertThat(path.get(0).path("id").asText()).isEqualTo(String.valueOf(OrgFixtures.ROOT));
-        assertThat(path.get(3).path("id").asText()).isEqualTo(String.valueOf(OrgFixtures.A3));
-        // A3 的直接子节点是 T1 / T2 两个教师；它们底下的 5 个学生【不算】
-        assertThat(data.path("childStat").path("teacherCount").asInt()).isEqualTo(2);
+        assertThat(path.get(1).path("id").asText()).isEqualTo(String.valueOf(OrgFixtures.A1));
+        // A1 的直接子节点是 T1 / T2 / T3 三个教师；它们底下的 8 个学生【不算】
+        assertThat(data.path("childStat").path("teacherCount").asInt()).isEqualTo(3);
         assertThat(data.path("childStat").path("studentCount").asInt()).isZero();
         assertThat(data.path("childStat").path("orgCount").asInt()).isZero();
         // studentCount 是【整棵子树】的在读学生数
-        assertThat(data.path("studentCount").asInt()).isEqualTo(5);
+        assertThat(data.path("studentCount").asInt()).isEqualTo(8);
     }
 
     @Test
@@ -170,9 +172,9 @@ class NodeTreeQueryIT extends OrgIntegrationTestBase {
                 OrgFixtures.T1, OrgFixtures.ROOT);
         orgFixtures.grantResource(1962000000000009012L, 3, 1959000000000000001L,
                 OrgFixtures.T1, OrgFixtures.ROOT);
-        // 授给 T1 的上级 A3 —— 契约 §2.5 规则 3「不向下继承」，不该出现在 T1 的统计里
+        // 授给 T1 的上级 A1 —— 契约 §2.5 规则 3「不向下继承」，不该出现在 T1 的统计里
         orgFixtures.grantResource(1962000000000009013L, 2, 1958000000000000001L,
-                OrgFixtures.A3, OrgFixtures.ROOT);
+                OrgFixtures.A1, OrgFixtures.ROOT);
         String token = loginAs(OrgFixtures.ROOT);
 
         JsonNode stat = data(client.getWithToken("/api/v1/org/nodes/" + OrgFixtures.T1, token))
@@ -188,7 +190,7 @@ class NodeTreeQueryIT extends OrgIntegrationTestBase {
     void detailOutsideMySubtreeReturns404() throws Exception {
         String token = loginAs(OrgFixtures.A2);
 
-        var result = client.getRawWithToken("/api/v1/org/nodes/" + OrgFixtures.P, token);
+        var result = client.getRawWithToken("/api/v1/org/nodes/" + OrgFixtures.T1, token);
 
         assertThat(result.getResponse().getStatus()).isEqualTo(404);
     }

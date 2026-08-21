@@ -15,58 +15,67 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * 03-02 §3.4 移动节点 —— 本模块的核心判据。
  *
- * <p>覆盖 PRD F1-2 验收标准第 1 条（12 个后代整棵重算）、边界 B4（多层嵌套逐层断言）、
+ * <p>覆盖 PRD F1-2 验收标准第 1 条（整棵子树重算）、边界 B4（多层嵌套逐层断言）、
  * 04-实施计划.md 模块 06 规则 9/10（异动类型推断、教师调岗只写 1 条轨迹）。
+ *
+ * <h2>⚠ F-114 之后这里的数字全部小了一圈，原因不在用例</h2>
+ * <p>原来移动的是 {@code P}（12 个后代，{@code affectedNodeCount = 13}，四层子树逐层断言）。
+ * F-114 定案二「机构下只允许一层管理员 + 树高 4」之后，{@code P}/{@code A3} 这两个嵌套管理员
+ * 在合法树里不存在了，<b>最深的可移动子树就是「教师 + 学员」两层</b>：
+ * 管理员的合法父节点只剩机构根一个（等于不可移动），学员是叶子。
+ * 于是主角换成 {@code T1}（3 名学员，{@code affectedNodeCount = 4}）。
+ * <b>验的东西一条没少（前缀 UPDATE 是否命中整棵子树、parent_id 是否原样不动、
+ * 两条祖先链的计数增量），少的是层数 —— 而层数是合法形状本身给的上界。</b>
  */
 class NodeMoveIT extends OrgIntegrationTestBase {
 
     private static final String LVL2 = "0," + OrgFixtures.ROOT;
+    private static final String UNDER_A1 = LVL2 + "," + OrgFixtures.A1;
     private static final String UNDER_A2 = LVL2 + "," + OrgFixtures.A2;
 
     @Test
-    @DisplayName("PRD F1-2：P 的子树含 12 个后代，移动后 13 个节点的 ancestors 全部重算，"
-            + "且 affectedNodeCount 恰好是 13")
+    @DisplayName("PRD F1-2：T1 的子树含 3 个后代，移动后 4 个节点的 ancestors 全部重算，"
+            + "且 affectedNodeCount 恰好是 4")
     void movingSubtreeRecalculatesEveryDescendant() throws Exception {
         String token = loginAs(OrgFixtures.ROOT);
 
-        JsonNode response = move(token, OrgFixtures.P, OrgFixtures.A2);
+        JsonNode response = move(token, OrgFixtures.T1, OrgFixtures.A2);
 
         assertThat(code(response)).isEqualTo(200);
         JsonNode data = data(response);
 
-        // 【本模块的唯一外部可见证据】affectedNodeCount = 步骤 5 的返回行数（12 个后代）
+        // 【本模块的唯一外部可见证据】affectedNodeCount = 步骤 5 的返回行数（3 个后代）
         // + 1（步骤 4 单独更新的被移动节点自身）。少 1 就说明那条前缀 UPDATE 没命中整棵子树
-        assertThat(data.path("affectedNodeCount").asInt()).isEqualTo(13);
+        assertThat(data.path("affectedNodeCount").asInt()).isEqualTo(4);
         assertThat(data.path("newAncestors").asText()).isEqualTo(UNDER_A2);
         assertThat(data.path("fromParentId").asText()).isEqualTo(String.valueOf(OrgFixtures.A1));
         assertThat(data.path("toParentId").asText()).isEqualTo(String.valueOf(OrgFixtures.A2));
 
-        // 边界 B4：不是移一个叶子，而是移一棵四层子树，【每一层】都要重算对
-        String newP = UNDER_A2;                                       // 深度 3
-        String newA3 = newP + "," + OrgFixtures.P;                    // 深度 4
-        String newT1 = newA3 + "," + OrgFixtures.A3;                  // 深度 5
-        String newS1 = newT1 + "," + OrgFixtures.T1;                  // 深度 6
-        assertThat(orgFixtures.ancestorsOf(OrgFixtures.P)).isEqualTo(newP);
-        assertThat(orgFixtures.parentOf(OrgFixtures.P)).isEqualTo(OrgFixtures.A2);
-        assertThat(orgFixtures.ancestorsOf(OrgFixtures.A3)).isEqualTo(newA3);
+        // 边界 B4：不是移一个叶子，而是移一棵带后代的子树，【每一层】都要重算对。
+        // F-114 之后合法树里最深的可移动子树就是这两层（见类注释）
+        String newT1 = UNDER_A2;                                      // depth 3
+        String newS = newT1 + "," + OrgFixtures.T1;                   // depth 4
         assertThat(orgFixtures.ancestorsOf(OrgFixtures.T1)).isEqualTo(newT1);
-        assertThat(orgFixtures.ancestorsOf(OrgFixtures.T2)).isEqualTo(newT1);
-        assertThat(orgFixtures.ancestorsOf(OrgFixtures.S1)).isEqualTo(newS1);
+        assertThat(orgFixtures.parentOf(OrgFixtures.T1)).isEqualTo(OrgFixtures.A2);
+        assertThat(orgFixtures.ancestorsOf(OrgFixtures.S1)).isEqualTo(newS);
+        assertThat(orgFixtures.ancestorsOf(OrgFixtures.S2)).isEqualTo(newS);
+        assertThat(orgFixtures.ancestorsOf(OrgFixtures.S3)).isEqualTo(newS);
+
+        // 【没被移动的那几支一个字都不能变】——前缀 UPDATE 写宽了会连它们一起改
+        assertThat(orgFixtures.ancestorsOf(OrgFixtures.T2)).isEqualTo(UNDER_A1);
         assertThat(orgFixtures.ancestorsOf(OrgFixtures.S5))
-                .isEqualTo(newA3 + "," + OrgFixtures.A3 + "," + OrgFixtures.T2);
-        // 另一支（T3 挂在 P 下，比 A3 支浅一层）也要对
-        assertThat(orgFixtures.ancestorsOf(OrgFixtures.T3)).isEqualTo(newP + "," + OrgFixtures.P);
+                .isEqualTo(UNDER_A1 + "," + OrgFixtures.T2);
         assertThat(orgFixtures.ancestorsOf(OrgFixtures.S8))
-                .isEqualTo(newP + "," + OrgFixtures.P + "," + OrgFixtures.T3);
+                .isEqualTo(UNDER_A1 + "," + OrgFixtures.T3);
 
         // 【parent_id 一个都没动】——移动只改被移动节点自己的父，子树的父子关系原样跟随
-        assertThat(orgFixtures.parentOf(OrgFixtures.A3)).isEqualTo(OrgFixtures.P);
         assertThat(orgFixtures.parentOf(OrgFixtures.S1)).isEqualTo(OrgFixtures.T1);
+        assertThat(orgFixtures.parentOf(OrgFixtures.T2)).isEqualTo(OrgFixtures.A1);
 
-        // PRD F1-2：「以 Y 为根做子树查询能命中全部 13 个节点」
+        // PRD F1-2：「以 Y 为根做子树查询能命中全部 4 个节点」
         JsonNode subtree = client.getWithToken(
-                "/api/v1/org/nodes/tree?rootId=" + OrgFixtures.P + "&deep=true&nodeTypes=1,2,3", token);
-        assertThat(flatten(data(subtree))).hasSize(12);   // 不含树根自身，12 + P = 13
+                "/api/v1/org/nodes/tree?rootId=" + OrgFixtures.T1 + "&deep=true&nodeTypes=1,2,3", token);
+        assertThat(flatten(data(subtree))).hasSize(3);    // 不含树根自身，3 + T1 = 4
     }
 
     @Test
@@ -74,18 +83,17 @@ class NodeMoveIT extends OrgIntegrationTestBase {
     void redundantCountersAreMaintainedAlongBothChains() throws Exception {
         String token = loginAs(OrgFixtures.ROOT);
 
-        assertThat(code(move(token, OrgFixtures.P, OrgFixtures.A2))).isEqualTo(200);
+        assertThat(code(move(token, OrgFixtures.T1, OrgFixtures.A2))).isEqualTo(200);
 
-        assertThat(orgFixtures.childCountOf(OrgFixtures.A1)).isZero();
+        assertThat(orgFixtures.childCountOf(OrgFixtures.A1)).isEqualTo(2);
         assertThat(orgFixtures.childCountOf(OrgFixtures.A2)).isEqualTo(2);
 
-        // 旧链 [ROOT, A1] 各 -8；新链 [ROOT, A2] 各 +8 —— ROOT 是两条链的公共祖先，净变化 0
+        // 旧链 [ROOT, A1] 各 -3；新链 [ROOT, A2] 各 +3 —— ROOT 是两条链的公共祖先，净变化 0
         assertThat(orgFixtures.studentCountOf(OrgFixtures.ROOT)).isEqualTo(8);
-        assertThat(orgFixtures.studentCountOf(OrgFixtures.A1)).isZero();
-        assertThat(orgFixtures.studentCountOf(OrgFixtures.A2)).isEqualTo(8);
+        assertThat(orgFixtures.studentCountOf(OrgFixtures.A1)).isEqualTo(5);
+        assertThat(orgFixtures.studentCountOf(OrgFixtures.A2)).isEqualTo(3);
         // 子树内部的计数不受影响（它们的相对结构没变）
-        assertThat(orgFixtures.studentCountOf(OrgFixtures.P)).isEqualTo(8);
-        assertThat(orgFixtures.studentCountOf(OrgFixtures.A3)).isEqualTo(5);
+        assertThat(orgFixtures.studentCountOf(OrgFixtures.T1)).isEqualTo(3);
     }
 
     @Test
@@ -99,9 +107,8 @@ class NodeMoveIT extends OrgIntegrationTestBase {
         assertThat(data(response).path("affectedNodeCount").asInt()).isEqualTo(1);
         assertThat(data(response).path("changeType").asInt()).isEqualTo(2);
 
-        // org_node 侧：旧链 [ROOT,A1,P,T3] -1，新链 [ROOT,A2,TX] +1
+        // org_node 侧：旧链 [ROOT,A1,T3] -1，新链 [ROOT,A2,TX] +1
         assertThat(orgFixtures.studentCountOf(OrgFixtures.T3)).isEqualTo(2);
-        assertThat(orgFixtures.studentCountOf(OrgFixtures.P)).isEqualTo(7);
         assertThat(orgFixtures.studentCountOf(OrgFixtures.A1)).isEqualTo(7);
         assertThat(orgFixtures.studentCountOf(OrgFixtures.ROOT)).isEqualTo(8);
         assertThat(orgFixtures.studentCountOf(OrgFixtures.TX)).isEqualTo(1);
@@ -134,14 +141,34 @@ class NodeMoveIT extends OrgIntegrationTestBase {
     }
 
     @Test
-    @DisplayName("§3.4 映射表：学生→管理员 = 3 转交管理员；管理员→管理员 = 8 节点移动")
+    @DisplayName("§3.4 映射表：学生→教师 = 2 分配导师；学生→管理员 = 3 转交管理员")
     void changeTypeIsInferredFromNodeTypes() throws Exception {
         String token = loginAs(OrgFixtures.ROOT);
 
+        assertThat(data(move(token, OrgFixtures.S8, OrgFixtures.TX)).path("changeType").asInt())
+                .isEqualTo(2);
         assertThat(data(move(token, OrgFixtures.S8, OrgFixtures.A2)).path("changeType").asInt())
                 .isEqualTo(3);
-        assertThat(data(move(token, OrgFixtures.P, OrgFixtures.A2)).path("changeType").asInt())
-                .isEqualTo(8);
+    }
+
+    @Test
+    @DisplayName("F-114 的副作用：changeType=8「节点移动」经接口 4 已【不可达】")
+    void nodeMoveChangeTypeIsNowUnreachableThroughTheApi() throws Exception {
+        String token = loginAs(OrgFixtures.ROOT);
+
+        // 8 是 inferChangeType 的兜底分支，原先唯一能走到它的组合是「管理员 → 管理员」。
+        // F-114 之后：管理员挂管理员被 10104 拒，管理员挂机构根撞校验 11（10205），
+        // 挂教师/学生撞 10105/10106 —— 【剩下的每一种组合都命中前面三个分支】。
+        //
+        // 这条用例不是为了断言一个数字，而是把「那一行代码现在一次都执行不到」钉在测试里：
+        // 下一个人看到 inferChangeType 的兜底分支没有覆盖率时，不必再重新推一遍原因。
+        // 【不要因此删掉那个分支】—— movingType/targetType 为 null 时仍会走它。
+        assertThat(code(move(token, OrgFixtures.A1, OrgFixtures.A2))).isEqualTo(10104);
+        assertThat(code(move(token, OrgFixtures.A1, OrgFixtures.ROOT))).isEqualTo(10205);
+        // 目标教师必须取【A1 子树之外】的 TX：取 A1 名下的教师会先撞成环（10103）
+        assertThat(code(move(token, OrgFixtures.A1, OrgFixtures.TX))).isEqualTo(10105);
+        // 10106（挂到学生下）在这棵树上没法单独验：A1 子树外一个学员都没有，
+        // 取 A1 名下的学员会先撞成环。它由 studentParentIsAlwaysRejected 覆盖
     }
 
     @Test
@@ -150,12 +177,12 @@ class NodeMoveIT extends OrgIntegrationTestBase {
         String token = loginAs(OrgFixtures.ROOT);
 
         JsonNode response = client.putWithToken(
-                "/api/v1/org/nodes/" + OrgFixtures.P + "/move", token,
-                moveBody(OrgFixtures.A2, "华东大区撤并，苏州中心划归华南"));
+                "/api/v1/org/nodes/" + OrgFixtures.T1 + "/move", token,
+                moveBody(OrgFixtures.A2, "华东大区撤并，王丽带班划归华南"));
 
         assertThat(code(response)).isEqualTo(200);
         assertThat(data(response).path("changeTime").asText()).isNotBlank();
-        assertThat(orgFixtures.changeLogCount(OrgFixtures.P)).isEqualTo(1);
+        assertThat(orgFixtures.changeLogCount(OrgFixtures.T1)).isEqualTo(1);
     }
 
     @Test
@@ -166,24 +193,24 @@ class NodeMoveIT extends OrgIntegrationTestBase {
         // 契约 §2.5 规则 9 的完整判据要读 owner_node_id 与【有效授权链】，
         // 于是读不到资源的行一律判为「不可再下发」——对照组也会进清单。故改用真实课程。
         long courseIntact = 1962000000000008001L;   // ROOT 自有，逐级授到 T1：链完整
-        long courseBroken = 1962000000000008002L;   // A1 自有：P 移走后 A1 不在链上，链断
+        long courseBroken = 1962000000000008002L;   // A1 自有：T1 移走后 A1 不在链上，链断
         orgFixtures.course(courseIntact, "链完整的课程", OrgFixtures.ROOT);
         orgFixtures.course(courseBroken, "原上级自有的课程", OrgFixtures.A1);
 
         // 逐级显式授权（契约 §2.5 规则 3：每一层都要有），含【移动后的新父】A2
         long seq = 1962000000000009000L;
-        for (long node : new long[]{OrgFixtures.A2, OrgFixtures.P, OrgFixtures.A3, OrgFixtures.T1}) {
+        for (long node : new long[]{OrgFixtures.A2, OrgFixtures.T1}) {
             orgFixtures.grantResource(++seq, 1, courseIntact, node, OrgFixtures.ROOT);
         }
         orgFixtures.grantResource(++seq, 1, courseBroken, OrgFixtures.T1, OrgFixtures.A1);
 
         String token = loginAs(OrgFixtures.ROOT);
-        JsonNode response = move(token, OrgFixtures.P, OrgFixtures.A2);
+        JsonNode response = move(token, OrgFixtures.T1, OrgFixtures.A2);
 
         assertThat(code(response)).isEqualTo(200);
         JsonNode grants = data(response).path("outOfScopeGrants");
         assertThat(data(response).path("outOfScopeGrantCount").asInt())
-                .as("只有 A1 自有的那门课链断了：P 移到 A2 之下后，A1 既不在 T1 的祖先链上，"
+                .as("只有 A1 自有的那门课链断了：T1 移到 A2 之下后，A1 既不在 T1 的祖先链上，"
                         + "链上也没有任何一层持有它。ROOT 那门逐级授到位的不算")
                 .isEqualTo(1);
         assertThat(grants).hasSize(1);
@@ -203,18 +230,19 @@ class NodeMoveIT extends OrgIntegrationTestBase {
     @DisplayName("PRD F1-2：A 是 B 的祖先，把 A 移到 B 之下 → 10103，且两棵子树一律不变")
     void movingAncestorUnderItsDescendantIsRejectedAndChangesNothing() throws Exception {
         String token = loginAs(OrgFixtures.ROOT);
-        String pAncestorsBefore = orgFixtures.ancestorsOf(OrgFixtures.P);
+        String a1AncestorsBefore = orgFixtures.ancestorsOf(OrgFixtures.A1);
         String s1AncestorsBefore = orgFixtures.ancestorsOf(OrgFixtures.S1);
 
-        JsonNode response = move(token, OrgFixtures.P, OrgFixtures.T1);
+        // 成环（校验 4）排在承载规则（校验 5/6/7）之前，所以这里报的是 10103 而不是 F-114 的 10104
+        JsonNode response = move(token, OrgFixtures.A1, OrgFixtures.T1);
 
         assertThat(code(response)).isEqualTo(10103);
-        assertThat(orgFixtures.ancestorsOf(OrgFixtures.P)).isEqualTo(pAncestorsBefore);
+        assertThat(orgFixtures.ancestorsOf(OrgFixtures.A1)).isEqualTo(a1AncestorsBefore);
         assertThat(orgFixtures.ancestorsOf(OrgFixtures.S1)).isEqualTo(s1AncestorsBefore);
-        assertThat(orgFixtures.parentOf(OrgFixtures.P)).isEqualTo(OrgFixtures.A1);
-        assertThat(orgFixtures.parentOf(OrgFixtures.T1)).isEqualTo(OrgFixtures.A3);
-        assertThat(orgFixtures.childCountOf(OrgFixtures.A1)).isEqualTo(1);
-        assertThat(orgFixtures.changeLogCount(OrgFixtures.P)).isZero();
+        assertThat(orgFixtures.parentOf(OrgFixtures.A1)).isEqualTo(OrgFixtures.ROOT);
+        assertThat(orgFixtures.parentOf(OrgFixtures.T1)).isEqualTo(OrgFixtures.A1);
+        assertThat(orgFixtures.childCountOf(OrgFixtures.A1)).isEqualTo(3);
+        assertThat(orgFixtures.changeLogCount(OrgFixtures.A1)).isZero();
     }
 
     @Test
@@ -224,8 +252,8 @@ class NodeMoveIT extends OrgIntegrationTestBase {
 
         // 节点自身的 ancestors 不含自己，所以「目标不能是自己的后代」这一条永远判为通过；
         // 挡住它的是另一条：targetParentId != movingId
-        assertThat(code(move(token, OrgFixtures.P, OrgFixtures.P))).isEqualTo(10103);
-        assertThat(orgFixtures.parentOf(OrgFixtures.P)).isEqualTo(OrgFixtures.A1);
+        assertThat(code(move(token, OrgFixtures.T1, OrgFixtures.T1))).isEqualTo(10103);
+        assertThat(orgFixtures.parentOf(OrgFixtures.T1)).isEqualTo(OrgFixtures.A1);
     }
 
     /** 把嵌套的 {@code children} 拍平成一个列表。 */

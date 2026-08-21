@@ -3,6 +3,7 @@ package com.edumatrix.org.node.service;
 import com.edumatrix.common.errorcode.ErrorCode;
 import com.edumatrix.common.response.BizException;
 import com.edumatrix.common.subtree.NodePath;
+import com.edumatrix.common.subtree.OrgTreeShape;
 
 /**
  * 承载规则的<b>唯一判定</b>（契约 §2.3 结构约束 1、02-数据库设计 §3.1.5）。
@@ -66,7 +67,41 @@ public final class NodeTypeRule {
      * @param parentType 目标父节点的 {@code node_type}
      * @param childType  被挂/被移动节点的 {@code node_type}
      */
+    /**
+     * @deprecated 用 {@link #assertCanBeChildOf(Integer, Integer, boolean)} —— F-114 之后
+     *             「管理员下能挂什么」<b>取决于这个管理员是不是机构根</b>，只看类型判不出来。
+     *             保留本重载只为不动那些确实与机构根无关的调用点；新代码不要用。
+     */
+    @Deprecated
     public static void assertCanBeChildOf(Integer parentType, Integer childType) {
+        assertCanBeChildOf(parentType, childType, true);
+    }
+
+    /**
+     * @param parentIsOrgRoot 父节点是不是<b>机构根</b>（{@code id == tenant_id}）。
+     *
+     * <p><b>F-114（需方 2026-08-22 定案）：机构下只允许一层管理员，树高最多 5 层。</b>
+     * <pre>
+     *   L0 平台根 → L1 机构根 → L2 普通管理员 → L3 教师 → L4 学生
+     * </pre>
+     * 改之前，树里<b>唯一能无限长的就是「管理员挂管理员」</b>（02-数据库设计 §444
+     * 「父节点 {@code node_type=1} → 允许 1/2/3」）。现在：
+     * <ul>
+     *   <li>父节点是<b>机构根</b>的管理员 → 允许 1 / 2 / 3</li>
+     *   <li>父节点是<b>非机构根</b>的管理员 → <b>只允许 2 / 3</b></li>
+     * </ul>
+     *
+     * <p><b>需方给的理由比「结构清晰」硬，原样登记</b>：授权的规矩是「不能授你自己没有的东西」，
+     * 所以要让某节点不悬挂，<b>上级必须先有</b>。任意深度下，补授会一路往上串，
+     * <b>补几层没有上界</b>；限死 5 层之后 ——
+     * 挪教师 → 断在 L2→L3，补 L2 一个节点（L2 的上级是机构根，永远有）；
+     * 挪学生 → 断在 L3→L4，最多补 L3 与 L2 两个。
+     * <b>加：最多两个节点，上界固定；去：永远一个动作（级联撤销）。</b>
+     *
+     * <p><b>深度限制不能让断链不发生</b>，但让每次修复的成本有了硬上界 —— 这才是它的价值。
+     */
+    public static void assertCanBeChildOf(Integer parentType, Integer childType,
+                                          boolean parentIsOrgRoot) {
         if (parentType == null || childType == null) {
             throw new BizException(ErrorCode.NODE_PARENT_CHILD_TYPE_INVALID);
         }
@@ -90,10 +125,13 @@ public final class NodeTypeRule {
             return;
         }
         if (parentType == NodePath.NODE_TYPE_ADMIN) {
-            // 管理员可挂 1/2/3；不可挂 0 —— 平台根全表唯一一行，不可能有第二个
+            // 管理员不可挂 0 —— 平台根全表唯一一行，不可能有第二个
             if (childType == NodePath.NODE_TYPE_PLATFORM) {
                 throw new BizException(ErrorCode.NODE_PARENT_CHILD_TYPE_INVALID);
             }
+            // 【F-114】机构下只允许一层管理员。判定不在这里 —— PlatformNodeWriter 有
+            // 同源的第二份承载规则，两份都要拦这一条，所以这条判定只放在 common/ 那一份
+            OrgTreeShape.assertOnlyOneAdminLayer(parentType, childType, parentIsOrgRoot);
             return;
         }
         throw new BizException(ErrorCode.NODE_PARENT_CHILD_TYPE_INVALID);

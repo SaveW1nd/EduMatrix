@@ -3,6 +3,7 @@ package com.edumatrix.org.node.entity;
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.edumatrix.common.entity.TenantEntity;
 import com.edumatrix.common.subtree.NodePath;
+import com.edumatrix.common.subtree.OrgTreeShape;
 
 /**
  * {@code org_node} 统一组织树（契约 §2.3）。<b>每个节点都是一个人</b>，
@@ -42,7 +43,16 @@ public class OrgNode extends TenantEntity {
      * <b>必须在服务层校验</b>：不校验的话第 51 级会在写入时 {@code Data too long}
      * 让整个<b>移动复合事务</b>回滚，而那种失败点难以定位。
      */
-    public static final int MAX_DEPTH = 50;
+    /**
+     * 组织树最大层数 —— <b>F-114（2026-08-22 需方定案）由 50 收到 5</b>：
+     * <pre>L0 平台根 → L1 机构根 → L2 普通管理员 → L3 教师 → L4 学生</pre>
+     * 配合 {@code NodeTypeRule}「机构下只允许一层管理员」，两者合起来才封死深度：
+     * 光有本常量的话，管理员仍可嵌套到第 5 层。
+     *
+     * <p>它的价值<b>不是让断链不发生</b>，而是让每次修复的成本有硬上界 ——
+     * 理由见 {@code NodeTypeRule.assertCanBeChildOf} 的类注释。
+     */
+    public static final int MAX_DEPTH = OrgTreeShape.MAX_DEPTH;
 
     /** {@code status}：0 正常。 */
     public static final int STATUS_NORMAL = 0;

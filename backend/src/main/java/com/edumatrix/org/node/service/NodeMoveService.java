@@ -19,6 +19,7 @@ import com.edumatrix.common.subtree.NodeAncestorCache;
 import com.edumatrix.common.subtree.NodePath;
 import com.edumatrix.common.subtree.SubtreeScopeHelper;
 import com.edumatrix.common.tenant.TenantHelper;
+import com.edumatrix.common.subtree.OrgTreeShape;
 import com.edumatrix.org.member.mapper.OrgStudentMapper;
 import com.edumatrix.org.member.mapper.OrgTeacherMapper;
 import com.edumatrix.org.node.entity.OrgNode;
@@ -158,7 +159,11 @@ public class NodeMoveService {
         assertNoCycle(moving, target);
 
         // -------- 校验 5/6/7：承载规则（10105 / 10106 / 10104） --------
-        NodeTypeRule.assertCanBeChildOf(target.getNodeType(), moving.getNodeType());
+        // 【F-114】同一条规则也管移动：把一个管理员挪到【非机构根的管理员】名下会被拒。
+        // 推论：管理员节点的合法目标父节点只剩机构根一个 —— 它原本就挂在那儿，
+        // 加上校验 11「目标父节点不等于当前上级」，【管理员节点等于不可移动】。这是定案的直接结果，不是缺陷。
+        NodeTypeRule.assertCanBeChildOf(target.getNodeType(), moving.getNodeType(),
+                OrgTreeShape.isOrgRoot(target.getId(), target.getTenantId()));
 
         // -------- 校验 8：目标父节点未停用 --------
         if (target.isDisabled()) {

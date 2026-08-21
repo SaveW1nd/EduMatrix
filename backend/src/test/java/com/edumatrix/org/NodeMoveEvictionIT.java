@@ -59,17 +59,17 @@ class NodeMoveEvictionIT extends OrgIntegrationTestBase {
         String adminToken = loginAs(OrgFixtures.ROOT);
 
         // 先把 P 子树里几个节点的祖先链都填热
-        for (long nodeId : new long[]{OrgFixtures.P, OrgFixtures.A3, OrgFixtures.T1, OrgFixtures.S1}) {
+        for (long nodeId : new long[]{OrgFixtures.T1, OrgFixtures.S1, OrgFixtures.S2, OrgFixtures.S3}) {
             assertThat(code(client.getWithToken("/api/v1/org/nodes/" + nodeId, adminToken)))
                     .isEqualTo(200);
         }
         assertThat(redisTemplate.hasKey(RedisKeys.nodeAncestors(OrgFixtures.S1))).isTrue();
 
-        assertThat(code(move(adminToken, OrgFixtures.P, OrgFixtures.A2))).isEqualTo(200);
+        assertThat(code(move(adminToken, OrgFixtures.T1, OrgFixtures.A2))).isEqualTo(200);
 
         // 被移动节点自身与它的后代，键都必须没了 ——
         // 只清自己那一个的话，S1 的祖先链会在 TTL 内一直是旧的那条
-        for (long nodeId : new long[]{OrgFixtures.P, OrgFixtures.A3, OrgFixtures.T1, OrgFixtures.S1}) {
+        for (long nodeId : new long[]{OrgFixtures.T1, OrgFixtures.S1, OrgFixtures.S2, OrgFixtures.S3}) {
             assertThat(redisTemplate.hasKey(RedisKeys.nodeAncestors(nodeId)))
                     .as("节点 " + nodeId + " 的祖先链缓存应已被递归清除")
                     .isFalse();

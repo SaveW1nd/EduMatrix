@@ -27,13 +27,9 @@ import com.edumatrix.common.tenant.TenantHelper;
  * 写成「例外」会让下一个人以为 F-110 的纪律可破。
  *
  * <h2>判据</h2>
- * <b>机构根节点的 {@code id} 等于它的 {@code tenant_id}</b> —— 契约 §2.1 与
- * 02-数据库设计 §28 逐字写死的两个 ID 例外之一（另一个是平台根固定 {@code id = 0}）。
- * 所以这是<b>一次比较，不查库、不遍历树、不看 {@code ancestors} 前缀</b>。
- *
- * <p><b>⚠ 不要改成按 {@code parent_id == 0} 判</b>：那依赖树的形状
- * （「机构根挂在平台根下」这件事今天成立，但它是建树规则的推论，不是契约事实），
- * 而 {@code id == tenant_id} 是契约<b>直接写死</b>的。两者今天等价、来源不同。
+ * 判据本身<b>不在本类</b>，在 {@link OrgTreeShape#isOrgRoot} —— 建节点、移节点两条路径
+ * 拿到的是<b>实体</b>而不是会话，判的却是同一件事，所以那一份是唯一的一份。
+ * 本类只负责「把会话里的 {@code nodeId} / {@code tenantId} 取出来交给它」。
  */
 @Component
 public class OrgRootGuard {
@@ -48,7 +44,7 @@ public class OrgRootGuard {
     public boolean isOrgRoot() {
         Long nodeId = currentNodeProvider.currentNodeId();
         Long tenantId = TenantHelper.getTenantIdOrNull();
-        return nodeId != null && tenantId != null && tenantId.equals(nodeId);
+        return OrgTreeShape.isOrgRoot(nodeId, tenantId);
     }
 
     /**

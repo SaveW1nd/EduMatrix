@@ -2,6 +2,7 @@ package com.edumatrix.system.user.entity;
 
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.edumatrix.common.entity.TenantEntity;
+import com.edumatrix.common.subtree.OrgTreeShape;
 
 /**
  * {@code org_node} 的<b>窄写模型</b>，只服务 03-01 §2.2 建号与 §2.4 删号两条路径。
@@ -85,13 +86,10 @@ public class SystemOrgNode extends TenantEntity {
     public static final long PLATFORM_ROOT_ID = 0L;
 
     /**
-     * 树深度上限 50 级（契约 §2.3 约束 5）。
-     *
-     * <p>{@code ancestors} 是 {@code VARCHAR(1000)}，雪花 ID 19 位 + 逗号 = 20 字符/级。
-     * <b>必须在服务层校验</b>：不校验的话第 51 级会在写入时 {@code Data too long}
-     * 让整个事务回滚，而那种失败点难以定位。
+     * 树深度上限 —— <b>F-114 由 50 收到 5</b>，与 {@code org/node/entity/OrgNode.MAX_DEPTH}
+     * <b>取自同一个常量</b>，不再是两个各写各的数字（理由见 {@link OrgTreeShape}）。
      */
-    public static final int MAX_DEPTH = 50;
+    public static final int MAX_DEPTH = OrgTreeShape.MAX_DEPTH;
 
     private Long parentId;
 
