@@ -193,16 +193,65 @@ set -a; . /etc/edumatrix/db.env; set +a
 HOSTPORT=$(echo "$MYSQL_URL" | sed -E 's#^jdbc:mysql://([^/]+)/.*#\1#')
 DBHOST=${HOSTPORT%%:*}; DBPORT=${HOSTPORT##*:}; [ "$DBPORT" = "$DBHOST" ] && DBPORT=3306
 
-# 客户端可能是 MariaDB 版（--skip-ssl）或 Oracle 版（--ssl-mode=DISABLED）。
-# 走 VPC 内网，关掉 SSL 只影响这几条管理命令；应用侧仍按 MYSQL_URL 的 useSSL 走
-if mysql --version | grep -qi mariadb; then SSLFLAG="--skip-ssl"; else SSLFLAG="--ssl-mode=DISABLED"; fi
-M="mysql -h$DBHOST -P$DBPORT -u$MYSQL_USER -p$MYSQL_PASSWORD $SSLFLAG"
+# ============================================================================
+# 【服务端强制加密 —— 这不是「内网可以免」的那类开关】（F-111）
+# ============================================================================
+# 实测（2026-08-21，生产 RDS）：
+#     SHOW VARIABLES LIKE 'require_secure_transport';  →  ON
+# 未加密的连接在【握手阶段】就被直接拒绝，与走不走 VPC 内网无关：
+#     ERROR 3159 (HY000): Connections using insecure transport are prohibited
+#                         while --require_secure_transport=ON.        （退出码 1）
+# 【应用侧一直是对的】：db.env 里 MYSQL_URL 写着 sslMode=REQUIRED，
+# 错的只有下面这几条管理命令 —— 它们此前显式写了 --skip-ssl / --ssl-mode=DISABLED。
+# 「应用连得上而脚本连不上」的全部差别就在这一个开关上。
+#
+# 客户端实测是 MariaDB 版（mysql from 11.8.6-MariaDB, client 15.2），
+# 所以是 --ssl 而【不是】--ssl-mode —— 后者在它上面报
+#     mysql: unknown variable 'ssl-mode=REQUIRED'
+# 分支保留是为了将来换成 Oracle 客户端时不用再查一遍，两边现在都【开】TLS。
+#
+# --ssl-verify-server-cert=0 是【明写出来的取舍】，不是疏忽：验 CA 要往机器上
+# 放一份 CA 文件，那是一个新的部署产物，本轮不引入。写成显式的 0 顺带消掉
+# MariaDB 11.4+ 的那句
+#     WARNING: option --ssl-verify-server-cert is disabled,
+#              because of an insecure passwordless login
+# —— 它是因为口令走 MYSQL_PWD、客户端以为没给口令才打的，与连接安不安全无关。
+# 实测本次连接协商到 TLSv1.2 / ECDHE-RSA-AES256-GCM-SHA384。
+if mysql --version | grep -qi mariadb; then
+  SSLFLAGS="--ssl --ssl-verify-server-cert=0"
+else
+  SSLFLAGS="--ssl-mode=REQUIRED"
+fi
+
+# ============================================================================
+# 【口令走环境变量，不走 -p】—— 一处改动解掉三层，根因链见 F-111
+# ============================================================================
+#   -p"$MYSQL_PASSWORD" → mysql 每次在 stderr 打一行 "Using a password" 警告
+#     → 为藏警告加 `| grep -v` → 管道让退出码变成 grep 的，mysql 的丢了
+#     → grep 在【无输出】时返回 1，而「0 行」恰恰是 verify_charset 检查 ② 的
+#       【通过】条件 → 通过的那一步反而被 set -e 杀掉
+#     → 为不被误杀又加 `|| true` → 真错误（连不上、口令错、库不存在）一起被吞光
+#   最上面那一环本来就不该有。去掉它，下面三层就都不需要了。
+#
+#   【顺带纠正一个流传很广、但本机实测不成立的理由】常见说法是「-p 会把口令
+#   暴露给同机器上任何能 ps 的用户」。实测（本机 MariaDB 客户端 11.8.6）：
+#       ps -eo args  →  mysql ... -u<user> -px xxxxxxxxxxxxx -e SELECT SLEEP(4);
+#   客户端启动后会把 argv 里的口令【就地覆盖】，真口令在 ps 里出现 0 次
+#   —— 新旧两种写法都是 0。所以本轮换掉 -p 的理由【不是】ps，是上面那条根因链。
+#   MYSQL_PWD 仍然更好，但理由要说准：覆盖发生在 exec 之【后】，中间有一个窗口；
+#   而且那是客户端的行为、不是可依赖的契约（换个客户端就未必）。
+#   把理由写准是有代价的事 —— 拿一个假理由去改对的代码，下一个人会照着假理由
+#   做出错的决定（本项目 F-100 就是「判断对、理由错」的那一次）。
+#   【不用临时 defaults 文件】：那需要 trap 清理，而 trap 没触发（kill -9、断网）
+#   就会在磁盘上留下一份明文口令。环境变量不落盘。
+export MYSQL_PWD="$MYSQL_PASSWORD"
+M="mysql $SSLFLAGS -h$DBHOST -P$DBPORT -u$MYSQL_USER"
 
 # 基线第 77 行原文
-$M -e "CREATE DATABASE IF NOT EXISTS \`edumatrix\` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;" 2>&1 | grep -v "Using a password" || true
+$M -e "CREATE DATABASE IF NOT EXISTS \`edumatrix\` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;"
 
 echo "--- 建库后的默认字符集（必须 utf8mb4 / utf8mb4_0900_ai_ci）---"
-$M -N -B -e "SELECT DEFAULT_CHARACTER_SET_NAME, DEFAULT_COLLATION_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='edumatrix';" 2>&1 | grep -v "Using a password" || true
+$M -N -B -e "SELECT DEFAULT_CHARACTER_SET_NAME, DEFAULT_COLLATION_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='edumatrix';"
 REMOTE
 }
 
@@ -238,25 +287,35 @@ set -euo pipefail
 set -a; . /etc/edumatrix/db.env; set +a
 HOSTPORT=$(echo "$MYSQL_URL" | sed -E 's#^jdbc:mysql://([^/]+)/.*#\1#')
 DBHOST=${HOSTPORT%%:*}; DBPORT=${HOSTPORT##*:}; [ "$DBPORT" = "$DBHOST" ] && DBPORT=3306
-if mysql --version | grep -qi mariadb; then SSLFLAG="--skip-ssl"; else SSLFLAG="--ssl-mode=DISABLED"; fi
-# 每条查询后面的 `|| true` 不可省：grep 在【无输出】时返回 1，
-# 而「0 行」恰恰是检查 ② 的【通过】条件 —— 不加就会被 set -e 杀在通过的那一步上，
-# 表现是脚本跑到 ② 就无声结束，后面三条根本没执行（第一版就是这样）
-M="mysql -h$DBHOST -P$DBPORT -u$MYSQL_USER -p$MYSQL_PASSWORD $SSLFLAG -N -B"
+# TLS 与口令的处置逐字同 ensure_database，理由见那里的两段注释与 F-111。
+# 【原来这里每条查询尾巴上的 `2>&1 | grep -v "Using a password" || true` 已全部去掉】。
+# 那三层是连在一起的：-p 打警告 → grep 藏警告 → 管道吃掉 mysql 的退出码 →
+# grep 无输出返回 1（而「0 行」正是检查 ② 的通过条件）→ 只好再加 || true 兜住 →
+# 真错误一起被吞。去掉最上面的 -p，下面三层就都不需要了。
+# 【当初那个 || true 不是多余的】：直接删它、而把 -p 留着，会修回第一版的 bug ——
+# 脚本跑到检查 ② 就无声结束，③④⑤ 根本不执行。所以要动的是链条最上面那一环。
+# 实测：口令走 MYSQL_PWD 之后，检查 ② 返回 0 行时 mysql 退出码是 0（不是 1）。
+if mysql --version | grep -qi mariadb; then
+  SSLFLAGS="--ssl --ssl-verify-server-cert=0"
+else
+  SSLFLAGS="--ssl-mode=REQUIRED"
+fi
+export MYSQL_PWD="$MYSQL_PASSWORD"
+M="mysql $SSLFLAGS -h$DBHOST -P$DBPORT -u$MYSQL_USER -N -B"
 echo "--- ① 库默认字符集（必须 utf8mb4 / utf8mb4_0900_ai_ci）---"
-$M -e "SELECT DEFAULT_CHARACTER_SET_NAME, DEFAULT_COLLATION_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='edumatrix';" 2>&1 | grep -v "Using a password" || true
+$M -e "SELECT DEFAULT_CHARACTER_SET_NAME, DEFAULT_COLLATION_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='edumatrix';"
 echo "--- ② 排序规则不一致的表（必须 0 行）---"
-$M -e "SELECT TABLE_NAME, TABLE_COLLATION FROM information_schema.TABLES WHERE TABLE_SCHEMA='edumatrix' AND TABLE_COLLATION <> 'utf8mb4_0900_ai_ci';" 2>&1 | grep -v "Using a password" || true
-echo "--- ③ Flyway 迁移记录（应 6 条全 success）---"
-$M -e "SELECT installed_rank, version, description, success FROM edumatrix.flyway_schema_history ORDER BY installed_rank;" 2>&1 | grep -v "Using a password" || true
+$M -e "SELECT TABLE_NAME, TABLE_COLLATION FROM information_schema.TABLES WHERE TABLE_SCHEMA='edumatrix' AND TABLE_COLLATION <> 'utf8mb4_0900_ai_ci';"
+echo "--- ③ Flyway 迁移记录（每条都必须 success=1；条数以 db/migration 下的文件数为准，不写死）---"
+$M -e "SELECT installed_rank, version, description, success FROM edumatrix.flyway_schema_history ORDER BY installed_rank;"
 echo "--- ④ 连接级字符集（表对了，传输层未必对）---"
 # 服务端默认是 utf8mb3，而 URL 写的是 characterEncoding=utf8 ——
 # 要确认实际协商到 utf8mb4，否则 4 字节字符（emoji、部分生僻字）会在【传输层】
 # 被截断，而表本身是对的，查起来非常难。若不是 utf8mb4，把 URL 的
 # characterEncoding 显式改成 utf8mb4 再验。
-$M -e "SHOW VARIABLES WHERE Variable_name IN ('character_set_client','character_set_connection','character_set_results','character_set_database','collation_connection');" 2>&1 | grep -v "Using a password" || true
+$M -e "SHOW VARIABLES WHERE Variable_name IN ('character_set_client','character_set_connection','character_set_results','character_set_database','collation_connection');"
 echo "--- ⑤ 表数量（应为 41 + flyway_schema_history = 42）---"
-$M -e "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='edumatrix';" 2>&1 | grep -v "Using a password" || true
+$M -e "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='edumatrix';"
 REMOTE
 }
 
@@ -278,7 +337,19 @@ set -euo pipefail
 echo "--- 健康检查（经 Caddy）---"
 curl -fsS http://127.0.0.1/actuator/health; echo
 echo "--- 验证码（认证白名单，不需要 token）---"
-curl -fsS http://127.0.0.1/api/v1/auth/captcha | head -c 200; echo
+# 【不要写成 `curl ... | head -c 200`】—— 与 F-111 是同一个形状的第二处：
+#   验证码响应体是一张 base64 图片（约 10KB），head 取够 200 字节就关掉管道，
+#   curl 还在写 → SIGPIPE → curl 退 23（"Failed writing body"），
+#   而 `set -euo pipefail` 里 pipefail 会把这个 23 变成整条管道的退出码 ——
+#   于是【这一步明明成功了，却把整个 verify 杀掉】。
+#   后果不是少打几个字：verify_actuator_not_public（下面那个断言 /actuator/*
+#   不可从公网读取的安全检查）【根本不会执行】。2026-08-21 那次部署就是这样
+#   停在这一行的，EXIT=23。
+#   而且它是【race，不是必现】：实测同一命令连跑 8 次，6 次 23、2 次 0 ——
+#   偶尔绿一次比每次都红更坏，因为没人会去查一个「有时候好的」步骤。
+#   改成先收进变量再截断，压根不产生管道。
+CAPTCHA_BODY=$(curl -fsS http://127.0.0.1/api/v1/auth/captcha)
+printf '%s\n' "${CAPTCHA_BODY:0:200}"
 REMOTE
   # 【外网冒烟打业务接口，不打 /actuator/health】
   #   /actuator/* 自本轮起对公网一律 404（见 deploy/prod/Caddyfile 头注释），
