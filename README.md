@@ -43,4 +43,4 @@
 
 ## 技术栈基线
 
-Java 17 · Spring Boot 3.x · MyBatis-Plus · Sa-Token · MySQL 8.0 · Redis 7 · Vue 3 + Element Plus · DPlayer + hls.js（二开）· **阿里云 VOD**（HLS 标准加密 AES-128；`provider` 列保留腾讯兼容位，本期不实现）
+Java 17 · Spring Boot 3.x · MyBatis-Plus · Sa-Token · MySQL 8.0 · Redis 7 · Vue 3 + Element Plus · **Aliplayer**（二开）· **阿里云 VOD**（**私有加密 `AliyunVoDEncryption` + `VidAuth`**；`provider` 列保留腾讯兼容位，本期不实现）
