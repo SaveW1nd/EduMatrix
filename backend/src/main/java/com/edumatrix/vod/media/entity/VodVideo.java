@@ -21,16 +21,19 @@ import com.edumatrix.common.entity.TenantEntity;
  * 事件消费按 {@code vod_file_id} 反查租户，<b>反查链路自建号起就是闭合的</b>，
  * 不存在「事件先于写入到达」的竞态。
  *
- * <h2>{@code encrypt_type} 默认值与两次定案</h2>
- * <p>DDL 的默认值是 {@code 1}（HLS 标准加密）。R1a 定案改为 <b>{@code 2} 阿里云私有加密</b>，
- * <b>F-114（2026-08-21 需方定案）又改为「第一版不加密」→ 建行时显式写 {@code 0}</b>。
- * 三个值各出现过一次，正是<b>不能依赖 DDL 默认值</b>的理由 ——
- * 基线是冻结内容（契约 §7.3）改不了，而依赖一个与事实不符的默认值，
- * 迟早有人绕过 Service 直接 INSERT 出一行 {@code encrypt_type=1} 的媒资。
+ * <h2>{@code encrypt_type}：由观测回填，不由配置声明</h2>
+ * <p>这一列被改过三次口径（DDL 默认 {@code 1} 标准加密 → R1a 定案 {@code 2} 私有加密 →
+ * F-114 第一半「第一版不加密、上传时写 {@code 0}」），<b>每一次都是在代码里存一个
+ * 「模板组配成了什么」的假设</b> —— 而配置在需方侧，改了代码不知道。
  *
- * <p><b>⚠ 本列必须与转码模板实际产出的东西一致</b>，它是事实记录不是意图声明：
- * 库里写 2 而模板产出明文流，播放侧会按私有加密去解密 —— 表现是「播不了」。
- * 模块 12 的 {@code play-auth} 正是按本列决定下发给 Aliplayer 的 {@code encryptType}。
+ * <p><b>F-114 第二半把这个形态整个换掉了：不在上传时猜，在转码完成时记下实际是什么。</b>
+ * 挑流条件放宽为 {@code Format == m3u8}（加不加密都收），落库时写
+ * {@code VodPlayStream.resolvedEncryptType()} —— 即 {@code GetPlayInfo} 实际返回的加密状态。
+ * 上传时写的那个值只是<b>占位</b>。
+ *
+ * <p>于是：配加密模板 → 记 2 → Aliplayer 收 1 → 能播；配不加密模板 → 记 0 → 收 0 → 能播；
+ * 需方改 {@code ALIYUN_VOD_TEMPLATE_GROUP_ID} → 下一个视频自动跟上，<b>代码一个字不动</b>。
+ * <b>加密的代码因此天然留着</b>（需方明确要求保留），不用删也不用加开关。
  */
 @TableName("vod_video")
 public class VodVideo extends TenantEntity {
@@ -55,11 +58,15 @@ public class VodVideo extends TenantEntity {
     public static final int ENCRYPT_ALIYUN_PRIVATE = 2;
 
     /**
-     * {@code 0} 不加密 —— <b>F-114 定案：第一版按此写入</b>。
+     * {@code 0} 不加密。
      *
-     * <p>本列必须与<b>转码模板实际产出的东西</b>一致。写 2 而模板产出的是明文流，
-     * 播放侧会按私有加密去解密，表现是「播不了」；反过来同样。
-     * <b>这一列不是意图声明，是事实记录。</b>
+     * <p><b>F-114 第二半起，本列由转码完成时【实际观测到的值】回填</b>
+     * （{@code VodPlayStream.resolvedEncryptType()}），上传时写的只是占位 ——
+     * 那一刻我们并不知道模板组会产出什么。
+     *
+     * <p><b>这一列是事实记录，不是意图声明。</b>模块 12 的 play-auth 按它翻译成
+     * Aliplayer 的 {@code encryptType}；两端都读同一个观测值，所以需方换模板组之后
+     * 下一个视频自动跟上，<b>代码一个字不动</b>。
      */
     public static final int ENCRYPT_NONE = 0;
 

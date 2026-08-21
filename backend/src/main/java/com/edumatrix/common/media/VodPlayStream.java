@@ -40,6 +40,9 @@ public record VodPlayStream(String format,
     /** {@code getEncrypt()} 的「已加密」取值。SDK 给的是 {@code Long}，不是布尔。 */
     public static final long ENCRYPTED = 1L;
 
+    /** {@code GetPlayInfo} 里阿里云私有加密的 {@code EncryptType} 取值。 */
+    private static final String ALIYUN_PRIVATE_ENCRYPT_TYPE = "AliyunVoDEncryption";
+
     /**
      * 契约 §1 部署约定第 2 条：<b>挑选规则写死为 {@code Format == "m3u8" && Encrypt == true}</b>。
      *
@@ -58,6 +61,42 @@ public record VodPlayStream(String format,
      */
     public boolean isEncryptedHls() {
         return FORMAT_M3U8.equalsIgnoreCase(format) && Long.valueOf(ENCRYPTED).equals(encrypt);
+    }
+
+    /**
+     * 是不是 m3u8 —— <b>加不加密都收</b>（F-114 第二半，2026-08-21 需方定案）。
+     *
+     * <p><b>为什么不再按 {@link #isEncryptedHls()} 挑</b>：那个条件把
+     * 「模板组配的是加密输出」这个<b>假设</b>写进了代码。需方把模板换成不加密之后，
+     * 阿里云转码<b>成功</b>、而我们判「挑不出加密流」→ 媒资置 3 转码失败 →
+     * <b>控制台一切正常、我们这边显示失败，那个视频永远用不了</b>。
+     *
+     * <p>新口径：<b>挑流不问加密，落库时记下实际是什么</b>（{@link #resolvedEncryptType()}）。
+     * 于是需方改 {@code ALIYUN_VOD_TEMPLATE_GROUP_ID} 之后，下一个视频自动跟上，<b>代码一个字不动</b>。
+     */
+    public boolean isHls() {
+        return FORMAT_M3U8.equalsIgnoreCase(format);
+    }
+
+    /**
+     * 把这一路<b>实际的</b>加密状态翻译成 {@code vod_video.encrypt_type} 的取值。
+     *
+     * <table>
+     *   <tr><th>GetPlayInfo 返回</th><th>落库</th></tr>
+     *   <tr><td>{@code Encrypt != 1}</td><td>{@code 0} 不加密</td></tr>
+     *   <tr><td>{@code Encrypt == 1} 且 {@code EncryptType == AliyunVoDEncryption}</td><td>{@code 2} 阿里云私有加密</td></tr>
+     *   <tr><td>{@code Encrypt == 1} 其余</td><td>{@code 1} HLS 标准加密</td></tr>
+     * </table>
+     *
+     * <p><b>这个值是【观测结果】不是【配置意图】</b> —— 上传那一刻我们并不知道模板组会产出什么，
+     * 只有转码完成、{@code GetPlayInfo} 回来之后才知道。把它当成事实记录，
+     * 上下游（模块 12 的 {@code encryptType} 下发）才能自动跟着走。
+     */
+    public int resolvedEncryptType() {
+        if (!Long.valueOf(ENCRYPTED).equals(encrypt)) {
+            return 0;
+        }
+        return ALIYUN_PRIVATE_ENCRYPT_TYPE.equalsIgnoreCase(encryptType) ? 2 : 1;
     }
 
     /**

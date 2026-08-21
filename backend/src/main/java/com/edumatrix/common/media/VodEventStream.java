@@ -59,6 +59,16 @@ public record VodEventStream(String status,
                 && !Boolean.TRUE.equals(audio);
     }
 
+    /**
+     * 是不是（非纯音频的）m3u8 —— <b>加不加密都收</b>（F-114 第二半）。
+     * 理由见 {@link VodPlayStream#isHls()}：挑流不问加密，落库时记实际值。
+     *
+     * <p><b>{@code audio} 那个排除保留</b>：纯音频轨不是要给学生播的那一路，与加密无关。
+     */
+    public boolean isHls() {
+        return FORMAT_M3U8.equalsIgnoreCase(format) && !Boolean.TRUE.equals(audio);
+    }
+
     /** 该路自身是否转码成功（顶层 {@code Status} 之外的第二层）。 */
     public boolean succeeded() {
         return VodEvent.STATUS_SUCCESS.equalsIgnoreCase(status);

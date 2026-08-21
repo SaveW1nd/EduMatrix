@@ -107,10 +107,16 @@ public record VodEvent(String receiptHandle,
         return isUploadComplete() || TYPE_TRANSCODE_COMPLETE.equalsIgnoreCase(eventType);
     }
 
-    /** 挑出唯一一路「加密 m3u8 且自身转码成功」的流；不是恰好一路时返回空。 */
-    public List<VodEventStream> encryptedHlsStreams() {
+    /**
+     * 挑出「m3u8 且自身转码成功」的流 —— <b>加不加密都收</b>（F-114 第二半，2026-08-21 需方定案）。
+     *
+     * <p><b>原方法名 {@code encryptedHlsStreams} 与过滤条件 {@code isEncryptedHls} 已改</b>：
+     * 那个条件把「模板组配的是加密输出」这个假设写进了代码，需方换成不加密模板后，
+     * 转码成功的视频会被我们判成失败。理由详见 {@link VodPlayStream#isHls()}。
+     */
+    public List<VodEventStream> hlsStreams() {
         return streams == null ? List.of()
-                : streams.stream().filter(VodEventStream::isEncryptedHls)
+                : streams.stream().filter(VodEventStream::isHls)
                         .filter(VodEventStream::succeeded).toList();
     }
 

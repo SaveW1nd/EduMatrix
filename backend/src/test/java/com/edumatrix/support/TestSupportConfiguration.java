@@ -76,6 +76,17 @@ public class TestSupportConfiguration {
                     null, "https://vod.example.cn/x.m3u8", duration, 9486668L, "SD"));
         }
 
+        /**
+         * 一路<b>不加密</b>的 HLS —— F-114 第二半：需方把模板组配成不加密输出时的真实形态。
+         *
+         * <p>{@code Encrypt} 不是 1、{@code EncryptType} 为空，其余与加密那一路同形。
+         * <b>这条路此前全库零覆盖</b>，正是「传一个不加密视频就被标成转码失败」能一直绿着的原因。
+         */
+        public void onePlainHls(String duration) {
+            streams = java.util.List.of(new VodPlayStream("m3u8", 0L, null,
+                    null, "https://vod.example.cn/plain.m3u8", duration, 8123456L, "SD"));
+        }
+
         /** 模块 12：下发的播放凭证。IT 里断言它原样出现在响应 playAuth 字段上。 */
         public String playAuth = "FAKE-PLAY-AUTH-0123456789";
 
