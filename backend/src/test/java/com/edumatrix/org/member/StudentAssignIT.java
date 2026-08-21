@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import com.edumatrix.org.member.support.MemberFixtures;
 import com.edumatrix.org.member.support.MemberIntegrationTestBase;
 import com.edumatrix.org.node.entity.OrgNodeChangeLog;
+import com.edumatrix.org.node.service.NodeMoveOperLogWriter;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -55,6 +56,29 @@ class StudentAssignIT extends MemberIntegrationTestBase {
         // A1 是两位教师的公共祖先，净变化 0
         assertThat(memberFixtures.studentCountOf(MemberFixtures.A1))
                 .isEqualTo(MemberFixtures.STUDENT_COUNT);
+    }
+
+    @Test
+    @DisplayName("⚠ F-114 定案三：分配导师【不写】「保留跨管辖授权」那条留痕 —— "
+            + "调用方从来没被问过这个问题")
+    void internalMoveDoesNotFakeARetentionDecision() throws Exception {
+        String token = loginAsRoot();
+        long profileId = MemberFixtures.profileIdOf(MemberFixtures.STUDENTS[0]);
+
+        assertThat(code(client.postWithToken(
+                "/api/v1/org/students/" + profileId + "/assign-teacher", token,
+                "{\"toTeacherNodeId\":\"" + MemberFixtures.T2 + "\"}"))).isEqualTo(200);
+
+        // 【这条用例是补上来的，来历值得写下】M58c（把 NodeMoveService 里
+        // 「是不是显式选的」那一位去掉，让内部封装也记留痕）当时【全绿】——
+        // 没有任何用例能区分「操作人显式选了 false」与「模块 07 内部调用」。
+        // 少了它，sys_oper_log 里会出现一条「某人选择了保留跨管辖授权」，
+        // 而那个人从来没被问过 —— 一条假的审计记录比没有更糟，
+        // 与 MemberOperLogWriter 对 Job 路径「user_id 留 null 而不是填 0」是同一条纪律
+        assertThat(memberFixtures.operLogCount(
+                NodeMoveOperLogWriter.ACTION_KEEP_OUT_OF_SCOPE_GRANTS))
+                .as("分配导师（接口 20）的语义里没有 revokeOutOfScopeGrants 这个选项")
+                .isZero();
     }
 
     @Test

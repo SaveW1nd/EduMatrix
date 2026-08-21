@@ -31,7 +31,7 @@ class TeacherReassignIT extends MemberIntegrationTestBase {
 
         JsonNode response = client.putWithToken(
                 "/api/v1/org/nodes/" + MemberFixtures.T1 + "/move", token,
-                "{\"toParentId\":\"" + MemberFixtures.A2 + "\",\"reason\":\"调岗至华南大区\"}");
+                "{\"revokeOutOfScopeGrants\":false,\"toParentId\":\"" + MemberFixtures.A2 + "\",\"reason\":\"调岗至华南大区\"}");
 
         assertThat(code(response)).isEqualTo(200);
         // affectedNodeCount「含被移动节点自身」（§3.4 响应字段说明）：12 名学员 + 教师 = 13
@@ -57,7 +57,7 @@ class TeacherReassignIT extends MemberIntegrationTestBase {
     void formerSupervisorLosesAccessImmediately() throws Exception {
         String rootToken = loginAsRoot();
         client.putWithToken("/api/v1/org/nodes/" + MemberFixtures.T1 + "/move", rootToken,
-                "{\"toParentId\":\"" + MemberFixtures.A2 + "\"}");
+                "{\"revokeOutOfScopeGrants\":false,\"toParentId\":\"" + MemberFixtures.A2 + "\"}");
 
         // 原上级 A1：教师与学员都已不在其子树内 —— 路径上的对象越界一律 404（契约 §2.4）
         String a1Token = loginAs(MemberFixtures.A1);
@@ -93,7 +93,7 @@ class TeacherReassignIT extends MemberIntegrationTestBase {
 
         String token = loginAsRoot();
         client.putWithToken("/api/v1/org/nodes/" + MemberFixtures.T1 + "/move", token,
-                "{\"toParentId\":\"" + MemberFixtures.A2 + "\"}");
+                "{\"revokeOutOfScopeGrants\":false,\"toParentId\":\"" + MemberFixtures.A2 + "\"}");
 
         // 教师节点：恰好多 1 条，且类型是 4 教师调岗
         assertThat(memberFixtures.changeLogCount(MemberFixtures.T1))
@@ -116,7 +116,7 @@ class TeacherReassignIT extends MemberIntegrationTestBase {
     void reassignMaintainsRedundantCounts() throws Exception {
         String token = loginAsRoot();
         client.putWithToken("/api/v1/org/nodes/" + MemberFixtures.T1 + "/move", token,
-                "{\"toParentId\":\"" + MemberFixtures.A2 + "\"}");
+                "{\"revokeOutOfScopeGrants\":false,\"toParentId\":\"" + MemberFixtures.A2 + "\"}");
 
         // 旧祖先链 A1 减 12，新祖先链 A2 加 12；ROOT 是两者的公共祖先，净变化 0
         assertThat(memberFixtures.studentCountOf(MemberFixtures.A1)).isZero();

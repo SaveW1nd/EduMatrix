@@ -72,6 +72,7 @@ public class NodeMoveService {
     private final OrgTeacherMapper teacherMapper;
     private final OutOfScopeGrantResolver outOfScopeGrantResolver;
     private final NodeChangeLogWriter changeLogWriter;
+    private final NodeMoveOperLogWriter moveOperLogWriter;
     private final SubtreeScopeHelper subtreeScopeHelper;
     private final NodeAncestorCache nodeAncestorCache;
     private final CurrentNodeResolver currentNodeResolver;
@@ -82,6 +83,7 @@ public class NodeMoveService {
                            OrgTeacherMapper teacherMapper,
                            OutOfScopeGrantResolver outOfScopeGrantResolver,
                            NodeChangeLogWriter changeLogWriter,
+                           NodeMoveOperLogWriter moveOperLogWriter,
                            SubtreeScopeHelper subtreeScopeHelper,
                            NodeAncestorCache nodeAncestorCache,
                            CurrentNodeResolver currentNodeResolver,
@@ -91,6 +93,7 @@ public class NodeMoveService {
         this.teacherMapper = teacherMapper;
         this.outOfScopeGrantResolver = outOfScopeGrantResolver;
         this.changeLogWriter = changeLogWriter;
+        this.moveOperLogWriter = moveOperLogWriter;
         this.subtreeScopeHelper = subtreeScopeHelper;
         this.nodeAncestorCache = nodeAncestorCache;
         this.currentNodeResolver = currentNodeResolver;
@@ -256,16 +259,27 @@ public class NodeMoveService {
         // 本模块负责的是「在 ancestors 重算之后、同一事务内」把它叫起来
         List<OutOfScopeGrantResolver.OutOfScopeGrantRow> outOfScopeRows =
                 outOfScopeGrantResolver.collect(movingNodeId, newPrefix);
+        boolean retentionRecorded = false;
         if (opts.isRevokeOutOfScopeGrants()) {
             // 【必须级联】清单是按「链断没断」逐层算的：教师跨管辖、而其名下学员的链
             // 经过该教师仍然完整，于是学员不在清单里。只撤清单里的行会让学员当场变成悬挂授权。
             // 走的是与接口 39 同一条 GrantCascadeMapper#revokeSubtree
             outOfScopeGrantResolver.revokeCascade(outOfScopeRows, opts.getReason());
+        } else if (opts.isRetentionChosenExplicitly()) {
+            // 【F-114 定案三】选了 false 的语义是「我知道会留下跨管辖，是有意的」——
+            // 那就必须能查出「是谁、什么时候选的」。0 条也记：「当时确实没有跨管辖授权」
+            // 与「没人做过这个决定」是两件事，而事后只有这行日志能把它们分开。
+            // 走 none() 的内部封装（分配导师/转交/调岗）不记 —— 它们从来没被问过这个问题
+            moveOperLogWriter.keptOutOfScopeGrants(
+                    movingNodeId, outOfScopeRows.size(), moving.getTenantId());
+            retentionRecorded = true;
         }
         List<OutOfScopeGrantVO> outOfScopeGrants = outOfScopeGrantResolver.toVo(outOfScopeRows);
 
         NodeMovedVO vo = buildVO(moving, target, newSelfAncestors, changeType,
                 affectedNodeCount, outOfScopeGrants, changeLog, oldParentId);
+        vo.setRevokedOutOfScopeGrants(opts.isRevokeOutOfScopeGrants());
+        vo.setRetentionRecorded(retentionRecorded);
 
         // =================================================================
         // 事务【提交之后】：清缓存 + 埋点

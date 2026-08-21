@@ -71,12 +71,22 @@ public abstract class OrgIntegrationTestBase extends AuthIntegrationTestBase {
     }
 
     /** 组一个移动请求体。 */
+    /**
+     * 常规移动请求体。
+     *
+     * <p><b>{@code revokeOutOfScopeGrants} 必须显式带上</b>（F-114 定案三：必填、无默认值），
+     * 这里统一带 {@code false} —— 绝大多数用例验的是树结构本身，与回不回收无关，
+     * 而 {@code false} 保持了这些用例改动前的行为。
+     * <b>「不传会被拒」由 {@code NodeMoveOutOfScopeGrantIT#omittingTheChoiceIsRejected} 单独守着</b>，
+     * 不要在本方法里把它兜掉。
+     */
     protected static String moveBody(long toParentId) {
-        return "{\"toParentId\":\"" + toParentId + "\"}";
+        return "{\"toParentId\":\"" + toParentId + "\",\"revokeOutOfScopeGrants\":false}";
     }
 
     protected static String moveBody(long toParentId, String reason) {
-        return "{\"toParentId\":\"" + toParentId + "\",\"reason\":\"" + reason + "\"}";
+        return "{\"toParentId\":\"" + toParentId + "\",\"revokeOutOfScopeGrants\":false,"
+                + "\"reason\":\"" + reason + "\"}";
     }
 
     /** {@code PUT /org/nodes/{id}/move}。 */
