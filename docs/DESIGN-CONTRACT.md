@@ -805,7 +805,7 @@ vod_watch_progress。【第一版不判完播】：watch_status 只在 0/1 流�
 | 指标 | 类型 | 告警线 | 为什么是它 |
 | --- | --- | --- | --- |
 | `heartbeat_flush_lag_seconds` | Gauge | > 180s | 心跳落盘滞后即学习时长丢失，且用户无感知 |
-| `heartbeat_reject_total{rule}` | Counter | 单租户 5min 内 > 1000 | 按 8 条防刷规则分标签；突增说明有人在刷或前端发版出错 |
+| `heartbeat_reject_total{rule}` | Counter | 单租户 5min 内 > 1000 | 按 `vod_heartbeat_log.reject_rule` 分标签，**实际取值只有 2/5/6/7/9 五个**（1/4 保留不使用，3 与 8 是墓碑）。原文写「按 8 条防刷规则分标签」——**规则数与标签数从来就不相等**，且「防刷」半个理由随 F-113 已不成立。突增说明有人在刷或前端发版出错<br>**⚠ 它分不出规则 2 内部的两种拒绝**（撞会话级上限 vs `Δt<8s` 间隔闸）：两者都是 `rule=2`。要分辨看 `vod_heartbeat_log.interval_sec`，判据见 03-03 §8.3.1 规则 2（F-116 定案四） |
 | `grant_dangling_count` | Gauge | **> 0** | 契约 §2.5 规则 6 的真悬挂授权，目标值恒为 0；`crossScopeCount` 单独打点，**不进告警** |
 | `grant_rows_per_node` | Histogram | P99 > 2000 | `org_resource_grant` 单节点持有的授权行数。**盯它而不是盯表总量**——点查的扫描行数只由单节点持有量决定，且该上界由人均持有量决定、不随机构人数变化。触发通常意味着有人把整个题库一次性授给了某个节点 |
 | `stat_settle_job_duration_seconds` | Histogram | P99 > 30min | 日结算跑不完则次日看板空白 |
