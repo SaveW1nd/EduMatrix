@@ -76,7 +76,7 @@ class FlywayBaselineIT {
     }
 
     @Test
-    @DisplayName("六个 Flyway 脚本全部 success，且基线版本号是 202608120000")
+    @DisplayName("全部 Flyway 脚本 success，且清单逐条登记在下方注释里（基线 202608120000）")
     void allMigrationsSucceeded() {
         List<String> versions = jdbcTemplate.queryForList(
                 "SELECT version FROM flyway_schema_history WHERE success = 1 ORDER BY installed_rank",
@@ -93,6 +93,10 @@ class FlywayBaselineIT {
         // 202608210100 需方定案：删掉孤儿权限 org:grant:edit（菜单 1 行 + 绑定 2 行，F-104）
         // 202608210200 需方定案（排期 A）：撤销 teacher 的 21 行受管资源【写】权限绑定
         // 202608210300 F-114：vod_video 加 template_group_id（上传时请求的模板组，重转要复用它）
+        // 202608230000 模块 13：vod_watch_progress 加 last_position（断点续播起点，F-113）
+        // 202608230100 模块 13：vod_heartbeat_log 加 trigger_type + play_rate
+        //              （F-116「取枚举不取布尔」的理由是「它会落进 vod_heartbeat_log」，
+        //               而那张表原来没有这一列；playRate 的「仅落日志供行为分析」同理）
         //
         // 【本断言用 containsExactly 而不是 contains】新增迁移必须显式登记在这里 ——
         // 一个「多跑了一个没人知道的脚本」的环境与「少跑了一个」同样危险，
@@ -100,7 +104,8 @@ class FlywayBaselineIT {
         assertThat(versions).containsExactly(
                 "202608120000", "202608140000", "202608140100",
                 "202608150000", "202608160000", "202608160100", "202608200000",
-                "202608210000", "202608210100", "202608210200", "202608210300");
+                "202608210000", "202608210100", "202608210200", "202608210300",
+                "202608230000", "202608230100");
     }
 
     @Test
