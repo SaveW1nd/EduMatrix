@@ -492,7 +492,8 @@ var timing = {
   tickCount: 0,        // 本次心跳周期内 tick 实际触发了几次（节流的直接证据）
   buffering: false,
   seq: 0,
-  startedAt: Date.now()
+  startedAt: Date.now(),
+  aliAtEnded: null,      // ended 那一刻接住的官方值（之后它会被清零）
 };
 
 function timingStopReason() {
@@ -518,6 +519,28 @@ setInterval(function () {
 
 function sec(ms) { return (ms / 1000).toFixed(1); }
 
+/**
+ * 阿里云官方的「真实播放时长」（秒）。2.28.0 起才有。
+ *
+ * 【为什么要并排报它】它的算法（读 2.28.0 发布代码还原）：
+ *   每秒一拍，n =（内容前进量 ÷ 倍速）、i = 墙钟增量
+ *   位置倒退 / 还没 canplay / 页面不可见 → 整拍跳过
+ *   n < 0.8*i（判定卡顿）→ 只加 n，不加墙钟；否则加 i
+ * 套到安卓解锁那一幕（实测墙钟 34.8s、内容前进 0s）：0 < 0.8*34.8 → 走卡顿分支 → 加 0。
+ * 也就是说【它在我们测出来的那个 bug 上是对的】，所以这一轮把它拉进来当第三个数，
+ * 让真机判它准不准，而不是我在这儿猜。
+ *
+ * 【已知的两个坑，本轮就是要验它们】
+ *   ① ended 会清零（见 aliAtEnded）；
+ *   ② 卡顿超过 waitingTimeout（默认 60 秒）会 stopPlayTimeMonitor()，
+ *      而且看不到自动重启 —— 那之后它可能【永远不动了，且不报错】。
+ */
+function aliPlayTime() {
+  try {
+    return (player && typeof player.getPlayTime === 'function') ? player.getPlayTime() : null;
+  } catch (e) { return null; }
+}
+
 setInterval(function () {
   var v = activeVideo;
   timing.seq++;
@@ -533,6 +556,13 @@ setInterval(function () {
     buffering: timing.buffering,
     tickCount: timing.tickCount,        // 应当 ≈ HB_MS/TICK_MS = 10
     expectedTicks: HB_MS / TICK_MS,
+    // 【第三个数：阿里云官方的 getPlayTime()】—— 与我们自己算的两个数【并排报，互不干扰】。
+    // 官方口径与 F-113 一字不差：「真实播放时长，不含暂停，倍速下按真实物理时间」。
+    // 它 2.28.0 才有；拿不到时报 null（而不是 0）——0 会被读成"它算出来是 0"。
+    aliPlayTime: aliPlayTime(),
+    // ended 会把 _playingTime 清零（内部走 _onPlayerInit），所以必须在 ended 事件里
+    // 当场接住那个值；这里报的是接住的那一份，跑完整段之后 aliPlayTime 归零也不丢
+    aliPlayTimeAtEnded: timing.aliAtEnded,
     stopReason: timingStopReason(),
     elapsedSinceReset: Number(sec(Date.now() - timing.startedAt))
   };
@@ -575,7 +605,8 @@ setInterval(function () {
     '<span>全屏=<b>' + (el ? 'YES' : 'no') + '</b></span>' +
     '<span>水印=<b>' + (!opt.wm ? 'off' : (wm.isConnected && wmInner.isConnected ? (wmState.alive ? '在' : '已锁') : '丢失')) + '</b></span>' +
     '<span>裸计时=<b>' + sec(timing.wallRaw) + 's</b></span>' +
-    '<span>封顶计时=<b>' + sec(timing.wallCapped) + 's</b></span>';
+    '<span>封顶计时=<b>' + sec(timing.wallCapped) + 's</b></span>' +
+    '<span>阿里云=<b>' + (aliPlayTime() === null ? '无' : aliPlayTime() + 's') + '</b></span>';
 }, 500);
 
 // ---------- 按钮 ----------
@@ -711,6 +742,16 @@ function afterCreated(p) {
   ['ready','play','pause','ended','error','waiting'].forEach(function (ev) {
     p.on(ev, function (e) {
       (ev === 'error' ? L.err : L.info)('ALI', 'player.' + ev + (e && e.paramData ? ' ' + safe(e.paramData) : ''));
+      // 【必须在 ended 当场接住】：Aliplayer 在 ended 里会走 _onPlayerInit() →
+      // resetHeartBeatStatusData() → startPlayTimeMonitor()，而后者第一件事就是
+      // _playingTime = 0。晚一拍去读就只剩 0 了。
+      // 官方自己也是这么设计的：ended 事件的 paramData 里直接带了 playTime
+      if (ev === 'ended') {
+        var fromEvent = e && e.paramData && e.paramData.playTime;
+        timing.aliAtEnded = (fromEvent != null) ? fromEvent : aliPlayTime();
+        L.hi('ALI', '★ ended —— 已接住官方 getPlayTime=' + timing.aliAtEnded +
+                    's（我们的裸计时=' + sec(timing.wallRaw) + 's 封顶=' + sec(timing.wallCapped) + 's）');
+      }
     });
   });
 }
