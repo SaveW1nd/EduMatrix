@@ -746,7 +746,7 @@ MyBatis-Plus 租户插件从**当前会话**取 `tenant_id` 并自动注入 `WHE
 ### 6.4 关键接口签名（心跳——最高频接口，签名固定；**F-113 已推翻一次，见下**）
 ```
 POST /api/v1/vod/heartbeat
-Body: {"lessonId":"...","videoId":"...","currentTime":123.4,"duration":600,"playRate":1.0,"seeked":false,"sessionId":"...","sessionPlayedSeconds":118}
+Body: {"lessonId":"...","videoId":"...","currentTime":123.4,"duration":600,"playRate":1.0,"seeked":false,"sessionId":"...","sessionPlayedSeconds":118,"trigger":"tick"}
 Resp: {"code":200,"data":{"watchedDuration":130,"watchStatus":1,"maxPosition":135}}
 服务端逻辑（F-113 改写）：时长【由前端计时器给出】，服务端不再按到达间隔计时 →
 delta = max(0, 本次 sessionPlayedSeconds − 该会话上次值)，再 delta = min(delta, Δt + 5) 做物理上限截断 →

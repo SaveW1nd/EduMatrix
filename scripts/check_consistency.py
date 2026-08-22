@@ -19,6 +19,7 @@ EduMatrix 设计文档一致性检查
 """
 
 import json
+import glob
 import os
 import re
 import sys
@@ -992,6 +993,44 @@ def check_c19_f_registry():
                f'（F-8 是已登记的历史缺口，F-49~F-69 是并行分段保留区，均不计入）')
 
 
+
+# ============ C21 实施方案文档内部的小节引用不得悬空
+
+def check_c21_plan_section_refs():
+    """C21 `docs/模块*-实施方案-*.md` 里【本文件内部】的小节引用不得悬空
+
+    【为什么需要这条 —— 它补的是一个真实吃过的亏】
+    2026-08-22 写模块 13 方案时，一次编辑被外部还原、而实施方没有复核就提交，
+    结果是：§7 里写着「见 §6.6 第 6 条」，而 §6 只到 6.5 ——
+    那个引用指向一个**不存在的章节**，而它本该说明的内容（会话级上限怎么定义、
+    Redis 挂了怎么办、撞上限返回什么码）**一个字都没写**。
+    是需方读文档时发现的，检查器当时一条都没报。
+
+    【怎么区分内部引用与跨文档引用】
+    带出处的（`契约 §6.4`、`03-03 §8.3.1`、`PRD F2-7`）跳过，只校验**裸写**的 `§X.Y`。
+    为此把方案里 3 处裸写的跨文档引用补上了出处 —— 那本来也是可读性 bug：
+    模块 13 方案里裸写 `§8.1`，读者会去本文件找，而本文件的 §8.1 是「Redis」。
+
+    【为什么只扫实施方案，不扫全部文档】
+    契约 / PRD / API 分册之间大量互相引用，同文件内解析必然误报，
+    而**一条会误报的检查等于没有检查**。实施方案是自包含的，范围收窄换来零误报。
+    """
+    prefix = re.compile(r'(契约|DESIGN-CONTRACT|PRD|0[1-5]-|模块\s*\d+|分册)\s*$')
+    for path in sorted(glob.glob(os.path.join(DOCS, '模块*-实施方案-*.md'))):
+        text = read(path)
+        have = set(re.findall(r'^#{2,4}\s*([0-9]+(?:\.[0-9]+)*)[\.、 ]', text, re.M))
+        have |= {h.split('.')[0] for h in have}
+        for m in re.finditer(r'§\s*([0-9]+(?:\.[0-9]+)*)', text):
+            if prefix.search(text[max(0, m.start() - 16):m.start()]):
+                continue                      # 带出处 = 跨文档引用，不校验
+            ref = m.group(1)
+            if ref not in have:
+                line = text[:m.start()].count('\n') + 1
+                report('ERROR', 'C21', path,
+                       f'第 {line} 行写「§{ref}」，但本文件里没有这个小节'
+                       f'（现有：{sorted(have)}）')
+
+
 # ============ C20 §A 核对行的逐模块数 = §B 该模块「涉及接口」表的行数
 
 def check_c20_module_interface_counts():
@@ -1496,6 +1535,7 @@ def main():
         ('C18', check_c18_endpoint_paths),
         ('C19', check_c19_f_registry),
         ('C20', check_c20_module_interface_counts),
+        ('C21', check_c21_plan_section_refs),
     ]
     for code, fn in checks:
         if only and code != only:
@@ -1523,6 +1563,7 @@ def main():
         'C18': '端点路径存在性（正文引用 ↔ 接口目录）',
         'C19': 'F 清单编号唯一 + 状态唯一',
         'C20': '§A 逐模块接口数 = §B 该模块表行数',
+        'C21': '实施方案内部小节引用不悬空',
     }
     errors = [r for r in results if r[0] == 'ERROR']
     warns = [r for r in results if r[0] == 'WARN']

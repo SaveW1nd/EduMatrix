@@ -51,7 +51,29 @@ step "vendor/ 阿里云播放器"
 # 必须本地托管：微信里 CDN 偶发被拦，页面会报 "Aliplayer 没加载到"，
 # 在手机上它长得和「①播不了」一模一样 —— 基线那轮已经吃过这个亏。
 mkdir -p "$APP_DIR/vendor"
-ALI_BASE="https://g.alicdn.com/apsara-media-box/imp-web-player/2.25.1"
+# 【⚠ 2026-08-22：试过升到 2.28.0，当天回滚。别再升，除非先买 License】
+#
+# 起因：想用官方的 getPlayTime()（"真实播放时长"，不含暂停、倍速按真实物理时间，
+# 口径与 F-113 一字不差）。实测各版本里搜 getPlayTime：
+#     2.25.1 / 2.26.0 / 2.27.0 → 0 次       2.28.0 及以后 → 2 次
+# 也就是【它从 2.28.0 才有】。
+#
+# 但 2.28.0 起【强制 License 校验】（阿里云 2024-12-01 生效，需购买 Web 播放器 SDK License）。
+# 实测升上去之后，播放器容器里直接显示「未配置License ... 点击申请License」。
+# 【这是个花钱才能过的门，不是配置问题】——所以钉回 2.25.1。
+#
+# index.html 里读 getPlayTime() 的代码【保留着】：拿不到就报 null，无害；
+# 哪天买了 License，把这里的版本号一改就能用上，不用再改页面。
+ALI_VER="2.25.1"
+ALI_BASE="https://g.alicdn.com/apsara-media-box/imp-web-player/$ALI_VER"
+
+# 【版本变了必须重下，否则是一次静默失败】：下面的 fetch 见到文件已存在就跳过，
+# 光改 ALI_BASE 的话 vendor 里躺的还是旧版，而页面表现是
+# 「player.getPlayTime is not a function」—— 在手机上它和「播放器没加载到」长得一样。
+if [ "$(cat "$APP_DIR/vendor/.version" 2>/dev/null)" != "$ALI_VER" ]; then
+  say "播放器版本变了（$(cat "$APP_DIR/vendor/.version" 2>/dev/null || echo 无) → $ALI_VER），清掉 vendor 重下"
+  rm -rf "$APP_DIR/vendor"; mkdir -p "$APP_DIR/vendor"
+fi
 fetch() {
   local name="$1" url="$2" dest="$APP_DIR/vendor/$1"
   if [ -s "$dest" ] && [ "$(stat -c%s "$dest")" -gt 1000 ]; then skip "$name 已存在"; return; fi
@@ -74,6 +96,8 @@ for f in bigplay.png cc.png dragcursorhover.png fullscreen.png pauseanimation.pn
     || warn "皮肤图片 $f 下载失败（控件图标会缺一个，不影响判定）"
 done
 ok "皮肤图片 $(ls -1 "$APP_DIR/vendor/img" | wc -l | tr -d ' ')/16"
+echo "$ALI_VER" > "$APP_DIR/vendor/.version"
+ok "播放器版本 $ALI_VER 已记入 vendor/.version"
 
 # ---------------------------------------------------------------------------
 step "systemd 服务 $SERVICE"
