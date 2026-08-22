@@ -96,6 +96,7 @@
   <button id="btnSeek">前跳 +30s（测④）</button>
   <button class="danger" id="btnKillWm">删除水印（测③）</button>
   <button class="danger" id="btnHideWm">隐藏水印（测③）</button>
+  <button id="btnResetTiming">计时清零（测⑤）</button>
   <button id="btnFlush">上报日志</button>
   <button id="btnCopy">复制日志</button>
 </div>
@@ -384,6 +385,14 @@ function wireVideo(el) {
     L.info('SEEK', 'seeked 落点 ' + landed.toFixed(2) + 's  maxPosition=' + maxPosition.toFixed(2) + 's');
   });
 
+  // ⑤ 计时用：缓冲期间停表。waiting 进缓冲，playing/canplay 出缓冲。
+  // 不看 readyState 而看事件 —— readyState 在部分 WebView 上缓冲时并不回落
+  el.addEventListener('waiting',  function () { timing.buffering = true;  });
+  el.addEventListener('playing',  function () { timing.buffering = false; });
+  el.addEventListener('canplay',  function () { timing.buffering = false; });
+  el.addEventListener('seeking',  function () { timing.buffering = true;  });
+  el.addEventListener('seeked',   function () { timing.buffering = false; });
+
   el.addEventListener('webkitbeginfullscreen', function () {
     L.err('FS', '★ webkitbeginfullscreen —— iOS 原生全屏接管，DOM 水印在此期间不可见');
   });
@@ -448,6 +457,109 @@ function applyVideoAttrs(el) {
   });
 });
 
+// =====================================================================
+// ⑤ 前端计时（F-113 验证）—— 【同时报两个数】，一次跑完回答两个问题
+// =====================================================================
+//
+// F-113 定案「观看时长改由前端计时、后端照单全收」，而【前端到底能不能准确计时
+// 从来没有被测过】。不成立的话模块 13 的接口签名要重做，所以先验比先建划算。
+//
+// 【为什么不挑一种实现去测】挑一种只能测出「这一种行不行」。这里同时维护两个累计值，
+// 每次心跳【两个都报】，它们的【差】就是节流/冻结造成的虚增：
+//
+//   wallRaw     裸墙钟：每次 tick 累加 (now - 上次 tick 的 now)，【不封顶】
+//   wallCapped  封顶：同样算增量，但每次增量【截断到 tick 间隔 + 容差】
+//
+//   一次跑完同时得到「问题有多大」（wallRaw - wallCapped）
+//   和「封顶能不能治」（wallCapped 准不准）两个答案。
+//
+// 【累加的是墙钟，不是 currentTime 的增量】——
+// 后者会让倍速把计时一起加速（2 倍速看 5 分钟记成 10 分钟），
+// 正好违反 F-113 规则 4「允许倍速，时长按真实观看时间算」。
+//
+// 【三种情况停表】：paused / waiting(缓冲) / 页面不可见。
+// 停表时【仍然更新 lastTick】—— 不更新的话，恢复播放那一刻会把整段暂停时间补进去，
+// 而那正是本轮要测的那个 bug 本身，不能由计时器自己制造出来。
+
+var TICK_MS = 1000;                 // tick 间隔
+var CAP_MS  = TICK_MS * 2;          // 每次增量最多计 2 秒（tick 间隔 + 容差）
+var HB_MS   = 10000;                // 心跳 10 秒一次（F-113 定的口径，顺便一起验）
+
+var timing = {
+  wallRaw: 0,          // 毫秒
+  wallCapped: 0,       // 毫秒
+  lastTick: Date.now(),
+  tickCount: 0,        // 本次心跳周期内 tick 实际触发了几次（节流的直接证据）
+  buffering: false,
+  seq: 0,
+  startedAt: Date.now()
+};
+
+function timingStopReason() {
+  var v = activeVideo;
+  if (!v) return 'no-video';
+  if (v.paused) return 'paused';
+  if (v.ended) return 'ended';
+  if (timing.buffering) return 'buffering';
+  if (document.hidden) return 'hidden';
+  return null;                       // null = 真播，走表
+}
+
+setInterval(function () {
+  var now = Date.now();
+  var dt = now - timing.lastTick;
+  timing.lastTick = now;             // 【无论走不走表都要更新】，理由见上
+  timing.tickCount++;
+  if (dt <= 0) return;               // 系统时钟被调过，跳过这一拍
+  if (timingStopReason() !== null) return;
+  timing.wallRaw    += dt;
+  timing.wallCapped += Math.min(dt, CAP_MS);
+}, TICK_MS);
+
+function sec(ms) { return (ms / 1000).toFixed(1); }
+
+setInterval(function () {
+  var v = activeVideo;
+  timing.seq++;
+  var raw = timing.wallRaw, cap = timing.wallCapped;
+  var fields = {
+    seq: timing.seq,
+    wallRaw: Number(sec(raw)),          // 【累计值不是增量】——F-113 定的口径
+    wallCapped: Number(sec(cap)),
+    drift: Number(sec(raw - cap)),      // 两个数的差 = 节流/冻结造成的虚增
+    currentTime: v ? Number(v.currentTime.toFixed(1)) : null,
+    paused: v ? v.paused : null,
+    visible: !document.hidden,
+    buffering: timing.buffering,
+    tickCount: timing.tickCount,        // 应当 ≈ HB_MS/TICK_MS = 10
+    expectedTicks: HB_MS / TICK_MS,
+    stopReason: timingStopReason(),
+    elapsedSinceReset: Number(sec(Date.now() - timing.startedAt))
+  };
+  timing.tickCount = 0;                 // 每个心跳周期单独计
+  // 用 hi（★）是有意的：★ 开头的会【立刻回传】不攒批，
+  // 心跳攒着等 3 秒轮询的话，锁屏那一段的证据会连同页面一起被系统回收掉
+  L.hi('HB', '★ 心跳 #' + fields.seq +
+             '  wallRaw=' + fields.wallRaw + 's' +
+             '  wallCapped=' + fields.wallCapped + 's' +
+             '  虚增=' + fields.drift + 's' +
+             '  tick=' + fields.tickCount + '/' + fields.expectedTicks +
+             (fields.stopReason ? '  停表=' + fields.stopReason : '  走表中'),
+             fields);
+}, HB_MS);
+
+document.addEventListener('visibilitychange', function () {
+  L.hi('HB', '★ 可见性变化 → ' + (document.hidden ? 'hidden（停表）' : 'visible（恢复走表）') +
+             '  当前 wallRaw=' + sec(timing.wallRaw) + 's / wallCapped=' + sec(timing.wallCapped) + 's');
+});
+
+function resetTiming() {
+  timing.wallRaw = 0; timing.wallCapped = 0;
+  timing.lastTick = Date.now(); timing.tickCount = 0;
+  timing.seq = 0; timing.startedAt = Date.now();
+  L.hi('HB', '★ 计时已清零 —— 下一个场景从 0 开始');
+}
+
 // ---------- vitals ----------
 var vitals = document.getElementById('vitals');
 setInterval(function () {
@@ -461,7 +573,9 @@ setInterval(function () {
     '<span>拦截=<b>' + guardHits + '</b></span>' +
     '<span>paused=<b>' + (v ? v.paused : '-') + '</b></span>' +
     '<span>全屏=<b>' + (el ? 'YES' : 'no') + '</b></span>' +
-    '<span>水印=<b>' + (!opt.wm ? 'off' : (wm.isConnected && wmInner.isConnected ? (wmState.alive ? '在' : '已锁') : '丢失')) + '</b></span>';
+    '<span>水印=<b>' + (!opt.wm ? 'off' : (wm.isConnected && wmInner.isConnected ? (wmState.alive ? '在' : '已锁') : '丢失')) + '</b></span>' +
+    '<span>裸计时=<b>' + sec(timing.wallRaw) + 's</b></span>' +
+    '<span>封顶计时=<b>' + sec(timing.wallCapped) + 's</b></span>';
 }, 500);
 
 // ---------- 按钮 ----------
@@ -496,6 +610,7 @@ document.getElementById('btnHideWm').onclick = function () {
   if (!opt.wm) return L.warn('ACT','水印已关闭');
   L.info('ACT','手动置 #wm display:none'); wm.style.display = 'none';
 };
+document.getElementById('btnResetTiming').onclick = function () { resetTiming(); flush(false); };
 document.getElementById('btnFlush').onclick = function () { flush(false); L.ok('ACT','已手动上报'); };
 document.getElementById('btnCopy').onclick = function () {
   try {
