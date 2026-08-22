@@ -452,7 +452,7 @@ function timingStart(why) {
   timing.lastTick = null;              // 【关键】置 null，恢复的第一拍不累加
   timing.lastPos = null;
   timing.timer = setInterval(timingTick, TICK_MS);
-  if (timing.silent) { timing.silent = false; emitHeartbeat('resume:' + why); }
+  if (timing.silent) { timing.silent = false; emitHeartbeat('resume'); }
 }
 
 /** 停止走表（pause / seeking / waiting / ended）。先结算，再停掉定时器。 */
@@ -466,7 +466,8 @@ function timingStop(why) {
   // 变异照样全绿（M65 实测过）。而它恰恰是把 34.8 秒挡在门外的那一行，
   // 不能让它变成"看起来在守、其实没人验"的摆设（F-115 的纪律）。
   // 停表期间定时器已经 clearInterval，留着旧检查点不会被读到。
-  emitHeartbeat('stop:' + why);        // 停下来发【一条】，然后静默
+  // 停下来发【一条】，然后静默。ended 单列 —— 它带的是最终累计值，之后不会再有心跳
+  emitHeartbeat(why === 'ended' ? 'ended' : 'pause');
   timing.silent = true;
 }
 
@@ -477,12 +478,18 @@ function timingStop(why) {
 //   而那正是要验的地方。生产用默认，验证用 hb=all。
 var HB_ALL = (Q.get('hb') || '') === 'all';
 
-function emitHeartbeat(reason) {
+/**
+ * 发一条心跳。
+ * @param trigger 契约 §6.4 的第 9 个字段，取值 tick / pause / resume / ended / leave。
+ *   tick = 播放中每 10 秒的周期心跳；其余四种是事件心跳。
+ *   服务端据此分流规则 2：tick 走 8 秒闸，事件心跳一律采纳、不做间隔限制（F-116）。
+ */
+function emitHeartbeat(trigger) {
   var v = activeVideo;
   timing.seq++;
   var fields = {
     seq: timing.seq,
-    reason: reason,
+    trigger: trigger,        // 契约 §6.4 第 9 个字段：tick/pause/resume/ended/leave
     counted: Number(sec(timing.counted)),      // 【主口径】累计值不是增量
     wallRaw: Number(sec(timing.wallRaw)),      // 【对照】第一版的纯墙钟口径
     drift: Number(sec(timing.wallRaw - timing.counted)),  // 差 = 本版修掉了多少
@@ -500,7 +507,7 @@ function emitHeartbeat(reason) {
     elapsedSinceReset: Number(sec(Date.now() - timing.startedAt))
   };
   timing.tickCount = 0; timing.posDelta = 0;
-  L.hi('HB', '★ 心跳 #' + fields.seq + ' [' + reason + ']' +
+  L.hi('HB', '★ 心跳 #' + fields.seq + ' [' + trigger + ']' +
              '  观看=' + fields.counted + 's' +
              '  裸墙钟=' + fields.wallRaw + 's' +
              '  修掉=' + fields.drift + 's' +
@@ -511,7 +518,7 @@ function emitHeartbeat(reason) {
 
 setInterval(function () {
   // 走表中：照常发。停表后：只有 hb=all 才继续发
-  if (timing.running || HB_ALL) { emitHeartbeat(timing.running ? 'tick' : 'tick(silent-off)'); }
+  if (timing.running || HB_ALL) { emitHeartbeat('tick'); }
 }, HB_MS);
 
 // 可见性只做【诊断记录 + 隐藏时抢救一次上报】—— 第四版的计时逻辑里
@@ -523,7 +530,7 @@ document.addEventListener('visibilitychange', function () {
              '  观看=' + sec(timing.counted) + 's  裸墙钟=' + sec(timing.wallRaw) + 's' +
              '  走表中=' + timing.running);
 });
-window.addEventListener('pagehide', function () { emitHeartbeat('pagehide'); flush(true); });
+window.addEventListener('pagehide', function () { emitHeartbeat('leave'); flush(true); });
 
 function resetTiming() {
   timing.counted = 0; timing.wallRaw = 0;

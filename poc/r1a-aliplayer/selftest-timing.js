@@ -171,7 +171,7 @@ if (ctx.timing.clampTicks < 1) failed++;
 
 // ---------------------------------------------------------------- 字段
 console.log('\n【心跳字段】需方要的字段必须条条都在');
-ctx.emitHeartbeat('field-check');        // 逼一条出来再检查，否则 beats 是空的
+ctx.emitHeartbeat('tick');   // 契约枚举值        // 逼一条出来再检查，否则 beats 是空的
 const last = beats[beats.length - 1] || {};
 for (const k of ['counted', 'wallRaw', 'drift', 'currentTime', 'paused', 'visible',
                  'tickCount', 'posDelta', 'skippedBackward', 'stallTicks', 'clampTicks']) {
