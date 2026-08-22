@@ -1131,7 +1131,8 @@ def check_c15_heartbeat_signature():
     而它已经改过两次（补 seeked 解 seek 复看被误判、补 sessionId 解多端并发永久归零）。
     每改一次就要同步三个文件，漏一处就是前后端对不上，且这类不一致直到联调才暴露。
 
-    契约与 PRD 里是一行 `Body: {...}` 字面量，03-03 里是参数表，形态不同故分别解析。
+    契约与 PRD 里是一行 `Body: {...}` 字面量，03-03 里既有参数表又有 JSON 请求示例，
+    形态不同故分别解析 —— **四处都核**。示例是第四处，F-116 就漏在它上面（见下方注释）。
     """
     got = {}
 
@@ -1146,12 +1147,20 @@ def check_c15_heartbeat_signature():
     text = read(vol)
     anchor = '**请求参数（Body，契约 6.4 固定签名）**'
     if anchor in text:
-        seg = text[text.index(anchor):][:2500]
+        seg = text[text.index(anchor):][:6000]
         got['03-03 参数表'] = re.findall(r'^\| (\w+) \| \w+ \| 是 \|', seg, re.M)
+        # 第四处：紧跟在参数表后面的那个 JSON 请求示例。
+        # F-116 加 trigger 时【只改了参数表、漏了这个示例】，而当时 C15 全绿 ——
+        # 因为它只解析"必填行"，示例块根本没人看。前端照示例写就少一个字段，
+        # 而少了 trigger 会被规则 5 丢弃（不得默认成 tick），表现是心跳全被拒。
+        # 「写下警告不等于守住了它」的同一形状：签名固定这条铁律写了三遍，示例却没人核。
+        m = re.search(r'\*\*请求示例\*\*\s*\n+```json\n(.*?)\n```', seg, re.S)
+        if m:
+            got['03-03 请求示例'] = re.findall(r'^\s*"(\w+)":', m.group(1), re.M)
 
-    if len(got) < 3:
+    if len(got) < 4:
         report('ERROR', 'C15', os.path.join(DOCS, 'DESIGN-CONTRACT.md'),
-               f'只解析到 {sorted(got)} 三处中的 {len(got)} 处心跳签名，检查锚点格式')
+               f'只解析到 {sorted(got)} 四处中的 {len(got)} 处心跳签名，检查锚点格式')
         return
 
     base_label, base = next(iter(got.items()))
@@ -1557,7 +1566,7 @@ def main():
         'C12': '承重论证锚句存在性',
         'C13': '平台级行（tenant_id=0）已逐表定案',
         'C14': 'DDL 列集合 = 02-数据库设计字段表',
-        'C15': '心跳签名三处一致',
+        'C15': '心跳签名四处一致（契约 / PRD / 03-03 参数表 / 03-03 请求示例）',
         'C16': '心跳校验规则编号 PRD ↔ API 对应',
         'C17': 'JSON 示例内部自洽（nodeType/userType/childCount）',
         'C18': '端点路径存在性（正文引用 ↔ 接口目录）',
