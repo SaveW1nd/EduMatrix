@@ -49,31 +49,6 @@
     transform:translate(-50%, -50%);
   }
 
-  /* 与基线同一套结构：#wm 是防篡改锚点（样式永不由脚本改动），漂移只作用在 #wmInner。
-     红色虚线框是诊断用的 —— 全屏时若连这圈框都看不见，说明视频走了独立原生层。 */
-  #wm { position:absolute; left:0; top:0; right:0; bottom:0; z-index:2147483000; pointer-events:none;
-        border:3px dashed rgba(255,60,60,.85); }
-  #wm::before { content:'H5 层'; position:absolute; left:4px; top:2px;
-        font:700 13px/1.2 -apple-system,sans-serif; color:#fff; background:rgba(255,60,60,.85);
-        padding:2px 6px; border-radius:3px; }
-  #wmInner { position:absolute; left:0; top:0; white-space:nowrap;
-        color:rgba(255,255,255,.72); font-size:clamp(15px, 3.2vmin, 44px); font-weight:700;
-        text-shadow:0 2px 6px rgba(0,0,0,.95);
-        transition:transform 2.6s linear; will-change:transform; }
-
-  .btns { display:flex; gap:6px; flex-wrap:wrap; padding:8px 10px; background:#17171a;
-          border-bottom:1px solid #2a2a30; }
-  button { font:13px/1.2 inherit; color:#e6e6e6; background:#2a2a32; border:1px solid #3d3d48;
-           border-radius:6px; padding:8px 10px; }
-  button:active { background:#3a3a46; }
-  button.danger { background:#4a1f1f; border-color:#7f2a2a; }
-  button.primary{ background:#123d2a; border-color:#1f7a4d; }
-
-  #vitals { padding:8px 10px; background:#121216; border-bottom:1px solid #2a2a30;
-            font:12px/1.5 ui-monospace,Menlo,Consolas,monospace; color:#9fb3c8; }
-  #vitals span { display:inline-block; margin-right:12px; }
-  #vitals b { color:#fff; }
-
   #panel { padding:6px 8px 40px; font:12px/1.45 ui-monospace,Menlo,Consolas,monospace; }
   .row { padding:3px 4px; border-bottom:1px solid #1c1c22; white-space:pre-wrap; word-break:break-all; }
   .t { color:#666; }
@@ -86,16 +61,12 @@
 
 <div id="stage">
   <div id="playerbox"></div>
-  <div id="wm"><span id="wmInner">R1a-POC · 138****0000 · <span id="wmclock">00:00</span></span></div>
 </div>
 
 <div class="btns">
   <button class="primary" id="btnPlay">播放</button>
   <button id="btnPause">暂停</button>
   <button id="btnFs">请求全屏</button>
-  <button id="btnSeek">前跳 +30s（测④）</button>
-  <button class="danger" id="btnKillWm">删除水印（测③）</button>
-  <button class="danger" id="btnHideWm">隐藏水印（测③）</button>
   <button id="btnResetTiming">计时清零（测⑤）</button>
   <button id="btnFlush">上报日志</button>
   <button id="btnCopy">复制日志</button>
@@ -124,7 +95,7 @@
  *                  【注意】此模式下 ② 这一项不存在：私有加密的密钥由点播服务托管，
  *                  没有自建密钥接口，要验的换成 PlayAuth 的签发与时效。
  *
- * 其余开关与基线同名：?wm=on|off  ?seekguard=on|off  ?inline=on|off  ?x5=on|off  ?src=
+ * 其余开关：?inline=on|off  ?x5=on|off  ?src=  ?hb=all（调试：停表期间也发心跳）
  * ===================================================================== */
 (function () {
 'use strict';
@@ -139,8 +110,6 @@ var opt = {
   src:       Q.get('src')       || '',
   inline:    (Q.get('inline')    || 'on') === 'on',
   x5:        (Q.get('x5')        || 'on') === 'on',
-  wm:        (Q.get('wm')        || 'on') === 'on',
-  seekguard: (Q.get('seekguard') || 'on') === 'on',
   // enc=off：不传 encryptType，用来播【不加密】的视频。
   // 存在的理由：③水印 与 ④禁前跳 跟加密毫无关系，加不加密都要做、都能被绕过。
   // 私有加密在 iOS 上要 Service Worker（硬性要 HTTPS），备案没下来之前测不了；
@@ -214,8 +183,6 @@ function flush(useBeacon) {
 }
 
 setInterval(function () { flush(false); }, 3000);
-document.addEventListener('visibilitychange', function () { if (document.hidden) flush(true); });
-window.addEventListener('pagehide', function () { flush(true); });
 window.onerror = function (m, s, l) { L.err('JS', 'window.onerror: ' + m + ' @' + s + ':' + l); };
 window.addEventListener('unhandledrejection', function (ev) { L.err('JS', 'unhandledrejection', String(ev.reason).slice(0, 300)); });
 
@@ -236,14 +203,10 @@ window.addEventListener('unhandledrejection', function (ev) { L.err('JS', 'unhan
   pill(opt.enc ? null : 'warn', opt.enc ? '加密=私有加密' : '加密=关（本轮只验 ③④）');
   pill(opt.inline, 'inline ' + (opt.inline ? 'ON' : 'OFF'));
   pill(opt.x5, 'x5同层 ' + (opt.x5 ? 'ON' : 'OFF'));
-  pill(opt.wm, '水印 ' + (opt.wm ? 'ON' : 'OFF'));
-  pill(opt.seekguard, '禁拖拽 ' + (opt.seekguard ? 'ON' : 'OFF'));
   pill(null, SESSION);
 })();
 
 var stage = document.getElementById('stage');
-var wm = document.getElementById('wm');
-var wmInner = document.getElementById('wmInner');
 var playerbox = document.getElementById('playerbox');
 var activeVideo = null;
 var player = null;
@@ -263,131 +226,22 @@ var env = {
 };
 
 // =====================================================================
-// ③ 水印（与基线完全同一套实现，结论才可比）
 // =====================================================================
-var wmState = { alive: true, lastReport: '', badStreak: 0 };
-
-if (!opt.wm) {
-  wm.remove();
-  L.warn('WM', '水印按参数关闭（wm=off）');
-} else {
-  (function drift() {
-    if (!wmInner.isConnected) return;
-    var w = wm.clientWidth || stage.clientWidth || 320;
-    var h = wm.clientHeight || stage.clientHeight || 180;
-    var x = Math.random() * Math.max(10, w - wmInner.offsetWidth - 10);
-    var y = Math.random() * Math.max(10, h - wmInner.offsetHeight - 10);
-    wmInner.style.transform = 'translate(' + x.toFixed(0) + 'px,' + y.toFixed(0) + 'px)';
-    setTimeout(drift, 2800);
-  })();
-  setInterval(function () {
-    var el = document.getElementById('wmclock');
-    if (el) el.textContent = new Date().toTimeString().slice(3, 8);
-  }, 1000);
-
-  var mo = new MutationObserver(function (muts) {
-    var hit = null;
-    for (var i = 0; i < muts.length && !hit; i++) {
-      var m = muts[i];
-      if (m.type === 'childList') {
-        if (!wm.isConnected || !wmInner.isConnected) {
-          hit = 'childList:水印节点被移除（wm=' + wm.isConnected + ' inner=' + wmInner.isConnected + '）';
-        }
-      } else if (m.type === 'attributes' && m.target === wm) {
-        hit = 'attributes:锚点 #wm 的 ' + m.attributeName + ' 被改（新值=' + wm.getAttribute(m.attributeName) + '）';
-      }
-    }
-    if (hit) onTamper(hit);
-  });
-  mo.observe(stage, { childList: true, subtree: true, attributes: true, attributeFilter: ['style','class','id','hidden'] });
-  L.info('WM', 'MutationObserver 已挂载（锚点 #wm，漂移在 #wmInner 上）');
-
-  setInterval(function () {
-    var connected = wm.isConnected && wmInner.isConnected;
-    var csOuter = connected ? getComputedStyle(wm) : null;
-    var cs = connected ? getComputedStyle(wmInner) : null;
-    var r = connected ? wmInner.getBoundingClientRect() : null;
-    function hidden(s) { return s && (s.display === 'none' || s.visibility === 'hidden' || Number(s.opacity) < 0.05); }
-    var report = [
-      'connected=' + connected,
-      csOuter ? '外层display=' + csOuter.display + '/vis=' + csOuter.visibility + '/op=' + csOuter.opacity : '',
-      cs ? '内层display=' + cs.display : '',
-      csOuter ? 'zIndex=' + csOuter.zIndex : '',
-      r ? 'rect=' + Math.round(r.width) + 'x' + Math.round(r.height) : ''
-    ].filter(Boolean).join(' ');
-
-    // 容器还没布局出尺寸时不判，否则播放器初始化的头几帧会把播放锁死
-    var host = wm.parentElement;
-    var hostR = host ? host.getBoundingClientRect() : null;
-    if (connected && hostR && (hostR.width < 1 || hostR.height < 1)) { wmState.badStreak = 0; return; }
-
-    var bad = !connected || hidden(csOuter) || hidden(cs) || (r && r.width < 1);
-    wmState.badStreak = bad ? wmState.badStreak + 1 : 0;
-    if (report !== wmState.lastReport) { wmState.lastReport = report; (bad ? L.err : L.ok)('WM', '自检 ' + report); }
-    if (bad && wmState.badStreak === 2) onTamper('自检:' + report);
-  }, 2000);
-}
-
-function onTamper(reason) {
-  if (!wmState.alive) return;
-  wmState.alive = false;
-  L.err('WM', '★ 水印被破坏 → 暂停并锁死', reason);
-  try { pausePlayer(); } catch (e) {}
-}
-function blockPlayIfTampered() {
-  if (wmState.alive || !opt.wm) return false;
-  L.err('WM', '★ 水印已被破坏，拒绝恢复播放');
-  try { pausePlayer(); } catch (e) {}
-  return true;
-}
-
+// video 元素接线 —— 计时的事件开关 + 诊断日志
 // =====================================================================
-// ④ 禁止向前拖拽（口径与基线一致：高水位只认连续播放，终判在 seeked）
-// =====================================================================
-var maxPosition = 0, SEEK_TOL = 1.0, PLAY_STEP_MAX = 1.5, guardHits = 0, lastT = 0;
-
-function pullBack(el) {
-  try { el.currentTime = maxPosition; lastT = maxPosition; }
-  catch (e) { L.err('SEEK', '拉回失败', String(e)); }
-}
-
+/**
+ * 【这个函数是计时能成立的地方】计时不靠轮询状态标志，靠这些事件开关定时器：
+ *   play / playing / seeked  → timingStart（置检查点为 null，恢复的第一拍累加 0）
+ *   pause / ended / waiting / seeking → timingStop（先结算，再停掉定时器）
+ *
+ * 【为什么不轮询 paused】安卓熄屏再亮屏那一幕：paused=false、hidden=false，
+ * 而视频位置一帧没动 —— 三个标志一起撒谎，第一版就是在那儿凭空多算 34.8 秒。
+ * 事件不会撒谎：真机日志里 pause 是【熄屏当场】发的（安卓 12:09:28、iOS 同），
+ * 不是解冻后补发的。这套结构成立的前提就是这一条实测。
+ */
 function wireVideo(el) {
   activeVideo = el;
-  lastT = el.currentTime || 0;
 
-  el.addEventListener('play', blockPlayIfTampered);
-  el.addEventListener('playing', blockPlayIfTampered);
-
-  el.addEventListener('timeupdate', function () {
-    var t = el.currentTime, delta = t - lastT;
-    if (!el.seeking && delta > 0 && delta < PLAY_STEP_MAX && t > maxPosition) maxPosition = t;
-    lastT = t;
-  });
-
-  el.addEventListener('seeking', function () {
-    var target = el.currentTime;
-    if (!opt.seekguard) { L.warn('SEEK', 'seeking → ' + target.toFixed(2) + 's（守卫已关闭）'); return; }
-    if (target > maxPosition + SEEK_TOL) {
-      guardHits++;
-      L.hi('SEEK', '★ 拦截 #' + guardHits + '：目标 ' + target.toFixed(2) + 's > maxPosition ' + maxPosition.toFixed(2) + 's → 拉回');
-      pullBack(el);
-    } else {
-      L.info('SEEK', 'seeking → ' + target.toFixed(2) + 's（允许，maxPosition=' + maxPosition.toFixed(2) + 's）');
-    }
-  });
-  el.addEventListener('seeked', function () {
-    var landed = el.currentTime;
-    if (opt.seekguard && landed > maxPosition + SEEK_TOL) {
-      guardHits++;
-      L.hi('SEEK', '★ 落点仍超限：' + landed.toFixed(2) + 's > maxPosition ' + maxPosition.toFixed(2) + 's → 再次拉回');
-      pullBack(el); return;
-    }
-    L.info('SEEK', 'seeked 落点 ' + landed.toFixed(2) + 's  maxPosition=' + maxPosition.toFixed(2) + 's');
-  });
-
-  // ⑤ 计时（第四版，Mux 结构）：【累加定时器由这些事件开关，不空转】。
-  // 不再轮询 paused/hidden —— 安卓解锁那一幕上三个标志一起撒谎，34.8 秒就是那么来的。
-  // 停的时候 timingStop 会先结算再把检查点置 null，恢复的第一拍因此【累加 0】。
   el.addEventListener('play',    function () { timingStart('play');    });
   el.addEventListener('playing', function () { timingStart('playing'); });
   el.addEventListener('pause',   function () { timingStop('pause');    });
@@ -396,14 +250,17 @@ function wireVideo(el) {
   el.addEventListener('seeking', function () { timingStop('seeking');  });
   el.addEventListener('seeked',  function () { if (!el.paused) timingStart('seeked'); });
 
+  // iOS 原生全屏接管的信号。安卓走的是 DIV 全屏（见上面的 fullscreenchange），
+  // iOS 走这一条 —— 两条路不同，而计时在全屏下灵不灵取决于走哪条，所以两条都记。
   el.addEventListener('webkitbeginfullscreen', function () {
-    L.err('FS', '★ webkitbeginfullscreen —— iOS 原生全屏接管，DOM 水印在此期间不可见');
+    L.hi('FS', '★ webkitbeginfullscreen —— iOS 原生播放器接管');
   });
   el.addEventListener('webkitendfullscreen', function () { L.info('FS', 'webkitendfullscreen'); });
   ['x5videoenterfullscreen','x5videoexitfullscreen'].forEach(function (ev) {
     el.addEventListener(ev, function () { L.hi('FS', 'X5 事件 ' + ev); });
   });
 
+  // 诊断日志：出问题时靠它还原时序（哪一步没走到、error code 是几）
   ['loadstart','loadedmetadata','canplay','play','playing','pause','waiting','stalled','ended','error']
   .forEach(function (ev) {
     el.addEventListener(ev, function () {
@@ -439,24 +296,15 @@ function applyVideoAttrs(el) {
   }, 1000);
 }
 
-// 全屏判定（与基线同口径）
+// 全屏判定 —— 只记「进没进、全屏的是哪个元素」。
+// 【留着的理由】安卓是 DIV 全屏（元素=DIV#playerbox），iOS 是原生播放器接管
+// （webkitbeginfullscreen）—— 两条路不一样，而计时能不能在全屏下工作取决于走哪条。
 ['fullscreenchange','webkitfullscreenchange'].forEach(function (ev) {
   document.addEventListener(ev, function () {
     var el = document.fullscreenElement || document.webkitFullscreenElement;
     if (!el) { L.info('FS', ev + ' → 退出全屏'); return; }
-    var where = '进入全屏，元素=' + el.tagName + '#' + (el.id || '') + '.' + (el.className || '').split(' ')[0];
-    if (!opt.wm) { L.hi('FS', where + '（水印已关闭）'); return; }
-    if (!el.contains(wm)) {
-      L.err('FS', where + '｜★ 水印【不在】全屏元素内 —— 全屏期间画面上必然没有水印');
-      return;
-    }
-    L.hi('FS', where + '｜水印在全屏子树内（只排除了"没渲染"，压不压得住原生视频层要看画面）');
-    setTimeout(function () {
-      var r = wm.getBoundingClientRect();
-      L.hi('FS', '全屏实测：水印框=' + Math.round(r.width) + 'x' + Math.round(r.height) +
-                 '  屏幕=' + window.innerWidth + 'x' + window.innerHeight);
-      L.hi('FS', '看画面：红色虚线框 + 左上角"H5 层"标签在不在？不在 = 视频走了独立原生层');
-    }, 400);
+    L.hi('FS', '进入全屏，元素=' + el.tagName + '#' + (el.id || '') +
+               '.' + (el.className || '').split(' ')[0]);
   });
 });
 
@@ -499,6 +347,12 @@ function applyVideoAttrs(el) {
 //   · n < 0.8 × i  内容跟不上墙钟 ⇒ 判定卡顿 → 【只加 n，不加 i】
 //   · 否则         正常 → 加 i
 //   除以倍速是「倍速下按真实物理时间」的实现：2 倍速时内容走 2 秒，÷2 = 真实 1 秒。
+//
+// 【为什么这里【没有】直接调阿里云官方的 getPlayTime()】
+//   它的口径与 F-113 一字不差，算法也确实对（下面「借阿里云」那两条就是从它扒的），
+//   但它 2.28.0 才有，而 2.28.0 起【强制 License】，且 Web License【绑域名、填不了 IP】——
+//   本 POC 跑在裸 IP 上用不了。曾经把它并排报过第三个数，2.25.1 上恒为 null，已删。
+//   完整经过、以及买了 License 之后怎么切回去，记在 RESULT.md。
 //
 // 【兜底：clamp —— 这一条是我们自己加的，阿里云和 Mux 都没有】
 //   防的是「页面被冻结、却【没有】pause 事件」那条路：那时事件靠不住，
@@ -546,23 +400,10 @@ var timing = {
   clampTicks: 0,       // 被【兜底 clamp】截断的次数 —— 这个数不该是 0 以外的值
   seq: 0,
   startedAt: Date.now(),
-  aliAtEnded: null,
   silent: false        // 已进入静默（停表后不再发心跳）
 };
 
 function sec(ms) { return (ms / 1000).toFixed(1); }
-
-/**
- * 阿里云官方的「真实播放时长」（秒）。**2.28.0 起才有，本 POC 钉在 2.25.1**，
- * 所以这里【正常就是 null】—— 不是坏了。
- * 留着是为了：买了 License、升到 2.29.1+ 之后，不用改页面就能并排对照。
- * 拿不到时报 null 而不是 0（0 会被读成"它算出来是 0"）。
- */
-function aliPlayTime() {
-  try {
-    return (player && typeof player.getPlayTime === 'function') ? player.getPlayTime() : null;
-  } catch (e) { return null; }
-}
 
 // ---------------------------------------------------------------- 累加
 function timingTick() {
@@ -580,21 +421,23 @@ function timingTick() {
   var i = now - timing.lastTick;                       // 墙钟增量(ms)
   var pos = v ? v.currentTime : timing.lastPos;
   var rate = (v && v.playbackRate) ? v.playbackRate : 1;
-  var n = ((pos - timing.lastPos) / rate) * 1000;      // 内容前进量÷倍速，折算成真实 ms
+  var dpos = pos - timing.lastPos;                     // 视频位置前进了几秒（原始，未折倍速）
+  var n = (dpos / rate) * 1000;                        // ÷倍速折算成真实 ms —— 2 倍速走 2 秒 = 真实 1 秒
 
   timing.lastTick = now;
   timing.lastPos = pos;
   if (i <= 0) return;                                  // 系统时钟被调过
-  timing.posDelta += (n / 1000) * rate;                // 本周期视频位置前进量（秒，未折倍速）
 
-  timing.wallRaw += i;                                 // 对照口径：一律加墙钟
+  timing.posDelta += dpos;                             // 诊断用：本周期视频位置总共走了多少
+  timing.wallRaw += i;                                 // 对照：走表期间的墙钟合计（见文件头说明）
 
   // 借阿里云 ①：位置倒退（往回拖）→ 整拍跳过
   if (n < 0) { timing.skippedBackward++; return; }
 
   // 借阿里云 ②：内容跟不上墙钟 ⇒ 卡顿 → 只加内容前进量
-  var add = (n < STALL_RATIO * i) ? n : i;
-  if (n < STALL_RATIO * i) timing.stallTicks++;
+  var stalled = n < STALL_RATIO * i;
+  if (stalled) timing.stallTicks++;
+  var add = stalled ? n : i;
 
   // 我们自己加的兜底：单拍再多也不超过 CLAMP_MS
   if (add > CLAMP_MS) { add = CLAMP_MS; timing.clampTicks++; }
@@ -612,7 +455,7 @@ function timingStart(why) {
   if (timing.silent) { timing.silent = false; emitHeartbeat('resume:' + why); }
 }
 
-/** 停止走表（pause / seeking / waiting / ended）。先结算，再把检查点清空。 */
+/** 停止走表（pause / seeking / waiting / ended）。先结算，再停掉定时器。 */
 function timingStop(why) {
   if (!timing.running) return;
   timingTick();                        // 先把这一段结算掉
@@ -654,8 +497,6 @@ function emitHeartbeat(reason) {
     skippedBackward: timing.skippedBackward,   // 往回拖被跳过的拍数
     stallTicks: timing.stallTicks,             // 走卡顿分支的拍数
     clampTicks: timing.clampTicks,             // ⚠ 兜底被触发的次数，正常应为 0
-    aliPlayTime: aliPlayTime(),                // 2.25.1 上恒为 null，见函数注释
-    aliPlayTimeAtEnded: timing.aliAtEnded,
     elapsedSinceReset: Number(sec(Date.now() - timing.startedAt))
   };
   timing.tickCount = 0; timing.posDelta = 0;
@@ -673,7 +514,11 @@ setInterval(function () {
   if (timing.running || HB_ALL) { emitHeartbeat(timing.running ? 'tick' : 'tick(silent-off)'); }
 }, HB_MS);
 
+// 可见性只做【诊断记录 + 隐藏时抢救一次上报】—— 第四版的计时逻辑里
+// 【已经不看 document.hidden 了】（看的是播放事件）。留它是因为读日志时
+// 要能对上"这一刻用户熄屏了"，而那正是几轮里最关键的时间点。
 document.addEventListener('visibilitychange', function () {
+  if (document.hidden) flush(true);
   L.hi('HB', '★ 可见性变化 → ' + (document.hidden ? 'hidden' : 'visible') +
              '  观看=' + sec(timing.counted) + 's  裸墙钟=' + sec(timing.wallRaw) + 's' +
              '  走表中=' + timing.running);
@@ -685,7 +530,8 @@ function resetTiming() {
   timing.lastTick = null; timing.lastPos = null;
   timing.tickCount = 0; timing.posDelta = 0;
   timing.skippedBackward = 0; timing.stallTicks = 0; timing.clampTicks = 0;
-  timing.seq = 0; timing.startedAt = Date.now(); timing.aliAtEnded = null;
+  timing.seq = 0; timing.startedAt = Date.now();
+  timing.silent = false;   // 漏了它的话：在静默中清零，之后会一直不发心跳
   L.hi('HB', '★ 计时已清零 —— 下一个场景从 0 开始');
 }
 
@@ -698,14 +544,11 @@ setInterval(function () {
     '<span>enc=<b>' + (opt.enc ? 'on/私有加密' : 'off/不加密') + '</b></span>' +
     '<span>readyState=<b>' + (v ? v.readyState : '-') + '</b></span>' +
     '<span>t=<b>' + (v ? v.currentTime.toFixed(1) : '-') + '</b>/' + (v && isFinite(v.duration) ? v.duration.toFixed(1) : '?') + '</span>' +
-    '<span>max=<b>' + maxPosition.toFixed(1) + '</b></span>' +
-    '<span>拦截=<b>' + guardHits + '</b></span>' +
     '<span>paused=<b>' + (v ? v.paused : '-') + '</b></span>' +
     '<span>全屏=<b>' + (el ? 'YES' : 'no') + '</b></span>' +
-    '<span>水印=<b>' + (!opt.wm ? 'off' : (wm.isConnected && wmInner.isConnected ? (wmState.alive ? '在' : '已锁') : '丢失')) + '</b></span>' +
-    '<span>裸计时=<b>' + sec(timing.wallRaw) + 's</b></span>' +
-    '<span>封顶计时=<b>' + sec(timing.wallCapped) + 's</b></span>' +
-    '<span>阿里云=<b>' + (aliPlayTime() === null ? '无' : aliPlayTime() + 's') + '</b></span>';
+    '<span>观看=<b>' + sec(timing.counted) + 's</b></span>' +
+    '<span>走表=<b>' + (timing.running ? 'YES' : 'no') + '</b></span>' +
+    '<span>兜底=<b>' + timing.clampTicks + '</b></span>';
 }, 500);
 
 // ---------- 按钮 ----------
@@ -724,21 +567,6 @@ document.getElementById('btnFs').onclick = function () {
     } else if (stage.requestFullscreen) { stage.requestFullscreen(); L.info('ACT','走 stage.requestFullscreen()'); }
     else { L.warn('ACT','没有可用的全屏 API'); }
   } catch (e) { L.err('ACT','全屏调用抛错', String(e)); }
-};
-document.getElementById('btnSeek').onclick = function () {
-  if (!activeVideo) return L.warn('ACT','还没有 video 元素');
-  var target = activeVideo.currentTime + 30;
-  L.info('ACT', '脚本置 currentTime = ' + target.toFixed(2));
-  activeVideo.currentTime = target;
-  setTimeout(function () { L.hi('ACT', '0.5s 后实际落点 = ' + activeVideo.currentTime.toFixed(2) + 's'); }, 500);
-};
-document.getElementById('btnKillWm').onclick = function () {
-  if (!opt.wm) return L.warn('ACT','水印已关闭');
-  L.info('ACT','手动删除水印节点'); wm.remove();
-};
-document.getElementById('btnHideWm').onclick = function () {
-  if (!opt.wm) return L.warn('ACT','水印已关闭');
-  L.info('ACT','手动置 #wm display:none'); wm.style.display = 'none';
 };
 document.getElementById('btnResetTiming').onclick = function () { resetTiming(); flush(false); };
 document.getElementById('btnFlush').onclick = function () { flush(false); L.ok('ACT','已手动上报'); };
@@ -815,42 +643,9 @@ function afterCreated(p) {
     L.ok('ENGINE', '已挂上属性与拖拽守卫（video 元素级）');
   }
 
-  // 水印必须移进播放器容器内，否则全屏时不在全屏渲染层里（基线那轮的教训）
-  if (opt.wm && wm.isConnected) {
-    playerbox.appendChild(wm);
-    L.info('WM', '已把水印移进播放器容器 #playerbox 内');
-  }
-
-  // ④ 的产品形态挂点：包住 player.seek()
-  if (typeof p.seek === 'function') {
-    var rawSeek = p.seek.bind(p);
-    p.seek = function (time) {
-      if (opt.seekguard && time > maxPosition + SEEK_TOL) {
-        guardHits++;
-        L.hi('SEEK', '★ Aliplayer.seek 拦截 #' + guardHits + '：目标 ' + Number(time).toFixed(2) +
-                     's > maxPosition ' + maxPosition.toFixed(2) + 's → 夹到 maxPosition');
-        return rawSeek(maxPosition);
-      }
-      return rawSeek(time);
-    };
-    L.info('ENGINE', '已包住 Aliplayer.seek()');
-  } else {
-    L.warn('ENGINE', 'Aliplayer 上没有 seek()，只能靠 video 元素级守卫');
-  }
-
   ['ready','play','pause','ended','error','waiting'].forEach(function (ev) {
     p.on(ev, function (e) {
       (ev === 'error' ? L.err : L.info)('ALI', 'player.' + ev + (e && e.paramData ? ' ' + safe(e.paramData) : ''));
-      // 【必须在 ended 当场接住】：Aliplayer 在 ended 里会走 _onPlayerInit() →
-      // resetHeartBeatStatusData() → startPlayTimeMonitor()，而后者第一件事就是
-      // _playingTime = 0。晚一拍去读就只剩 0 了。
-      // 官方自己也是这么设计的：ended 事件的 paramData 里直接带了 playTime
-      if (ev === 'ended') {
-        var fromEvent = e && e.paramData && e.paramData.playTime;
-        timing.aliAtEnded = (fromEvent != null) ? fromEvent : aliPlayTime();
-        L.hi('ALI', '★ ended —— 已接住官方 getPlayTime=' + timing.aliAtEnded +
-                    's（我们的裸计时=' + sec(timing.wallRaw) + 's 封顶=' + sec(timing.wallCapped) + 's）');
-      }
     });
   });
 }
