@@ -47,6 +47,13 @@ public final class QuestionFixtures {
     /** 租户 2 的分类 —— 验跨租户 404。 */
     public static final long CAT_OTHER = 1969000000000001004L;
 
+    /**
+     * <b>库里已经成环</b>的一对分类，只由 {@link #seedCyclicCategories()} 按需种
+     * （{@link #seed()} 不种它们）—— 走接口造不出环。
+     */
+    public static final long CYCLE_A = 1969000000000001091L;
+    public static final long CYCLE_B = 1969000000000001092L;
+
     // ---------------------------------------------------------------- 题目
     /** ROOT 自有单选题（启用）。 */
     public static final long Q_SINGLE = 1969000000000002001L;
@@ -133,6 +140,27 @@ public final class QuestionFixtures {
     }
 
     // ================================================================ 播种
+
+    /**
+     * 种一对<b>库里已经成环</b>的分类（{@code CYCLE_A.parent = CYCLE_B}，{@code CYCLE_B.parent = CYCLE_A}）。
+     *
+     * <h2>为什么必须直接 JDBC 插</h2>
+     * <p>接口 3 的 {@code assertMovable} 每次移动都拦「移到自己子孙之下」，
+     * 所以<b>走接口造不出环</b>。而 {@code QuestionCategoryService} 里那条
+     * 「分类层级超过 32 层，疑似成环」的兜底 {@code throw} 要的正是<b>已经成环的数据</b> ——
+     * 手工改库、并发写、或将来某次迁移写错都可能留下这种行。
+     *
+     * <p><b>实测（自查）</b>：在这个夹具之前，把那条兜底 {@code throw} 整个删掉，
+     * {@code QuestionCategoryIT} <b>18 条全绿</b> —— 它一次都没被执行到。
+     * 这是 F-115 归纳的<b>第三种形态</b>：另一条规则（每次移动都查环）
+     * 先把输入空间掐掉了，于是这条兜底永远够不着。
+     *
+     * <p>只被 {@code cyclicCategoryDataIsRejectedNotHung} 用，别的用例不要碰它。
+     */
+    public void seedCyclicCategories() {
+        category(CYCLE_A, CYCLE_B, "环-甲", 1, TENANT_ID);
+        category(CYCLE_B, CYCLE_A, "环-乙", 1, TENANT_ID);
+    }
 
     private void tenant(long id, long rootNodeId, String name) {
         jdbc.update("INSERT INTO sys_tenant (id, root_node_id, name, expire_time, status, "
