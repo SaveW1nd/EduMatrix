@@ -65,12 +65,24 @@ class CourseCrudIT extends CourseIntegrationTestBase {
         JsonNode teacher = client.postWithToken("/api/v1/course/courses",
                 loginAs(CourseFixtures.TB), body);
         assertEquals(403, code(teacher),
-                "教师不再能建课程 —— 判定来自 sys_role_menu 的绑定，不是代码里的角色门");
+                "教师拿不到建课端点（【结果】断言；成因见 teacherHasNoCourseWritePerms）");
 
         JsonNode admin = client.postWithToken("/api/v1/course/courses",
                 loginAs(CourseFixtures.ROOT), body);
         assertEquals(200, code(admin),
                 "这一侧不写，等于把建课整个关掉也全绿");
+    }
+
+    @Test
+    @DisplayName("⚠ F-72 的成因判据：教师的 perms 里【没有】course:course:add")
+    void teacherHasNoCourseWritePerms() throws Exception {
+        // 【上一轮 F-114 收窄之后，上面那条 403 变成了过定的，而我当时没发现】
+        // 教师既没有 course:course:add 绑定（F-72），也不在机构根上（F-114）——
+        // 两道闸都会 403。实测 M62：把绑定加回 sys_role_menu，
+        // createCourseIsOrgAdminOnly 照样全绿，全库只有 AuthMeIT.teacherPerms 会红，
+        // 而那是个【计数】（61 → 66）不是身份：删一个加一个，数字不变，全绿。
+        assertFalse(permsOf(CourseFixtures.TB).contains("course:course:add"),
+                "F-72 撤的是 sys_role_menu 里那行绑定，不是代码里的角色门");
     }
 
     @Test

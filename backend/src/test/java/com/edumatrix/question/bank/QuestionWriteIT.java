@@ -69,10 +69,19 @@ class QuestionWriteIT extends QuestionIntegrationTestBase {
         String body = single("{\"answer\":\"A\"}");
 
         assertEquals(403, code(postWithToken(QUESTIONS, loginAs(QuestionFixtures.TA), body)),
-                "教师不再能建题目 —— 判定来自 sys_role_menu 的绑定，不是代码里的角色门");
+                "教师拿不到建题端点（【结果】断言；成因见 teacherHasNoQuestionWritePerms）");
 
         assertEquals(200, code(postWithToken(QUESTIONS, loginAs(QuestionFixtures.ROOT), body)),
                 "这一侧不写，等于把建题整个关掉也全绿");
+    }
+
+    @Test
+    @DisplayName("⚠ F-72 的成因判据：教师的 perms 里【没有】question:question:add")
+    void teacherHasNoQuestionWritePerms() throws Exception {
+        // 与 CourseCrudIT#teacherHasNoCourseWritePerms 同一个来历：F-114 收窄之后
+        // 「教师 403」两道闸都成立，403 说明不了成因。实测 M62 见那条的注释。
+        assertFalse(permsOf(QuestionFixtures.TA).contains("question:question:add"),
+                "F-72 撤的是 sys_role_menu 里那行绑定，不是代码里的角色门");
     }
 
     /** <b>三处静默故障之一</b>：判断题必须是 JSON 布尔字面量。 */

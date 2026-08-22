@@ -14,6 +14,7 @@ import org.springframework.transaction.annotation.Transactional;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.edumatrix.common.errorcode.ErrorCode;
 import com.edumatrix.common.response.BizException;
+import com.edumatrix.common.subtree.OrgRootGuard;
 import com.edumatrix.question.category.dto.CategoryCreateReq;
 import com.edumatrix.question.category.dto.CategoryUpdateReq;
 import com.edumatrix.question.category.entity.QbCategory;
@@ -43,6 +44,24 @@ import com.edumatrix.question.category.vo.CategoryNodeVO;
  *
  * <h2>{@code questionCount} 是直属计数</h2>
  * <p>03-04 §1.1 脚注：不含子孙节点，材料题只计父题（{@code parent_id = 0}）。
+ *
+ * <h2>⚠ 写操作（接口 2/3/4）另有一道闸：<b>仅机构根</b>（F-114 需方定案）</h2>
+ * <p>上一段说的「写权限只有 perms 一道门」<b>已经不成立了</b>，别照着它写新代码。
+ * 现在是两道：{@code @SaCheckPermission} 判「这个角色能不能碰分类」，
+ * {@link OrgRootGuard} 判「你在不在机构根这一层」。
+ *
+ * <p><b>需方的理由，原样登记</b>：F-114 那 18 个接口之后，分校管理员对题库<b>已经完全只读</b>
+ * （建不了题、改不了题、删不了题、停不了用）。那么他新建一个分类<b>放不进任何题</b>，
+ * 改一个分类名<b>改的是别人题目的归类</b> —— 这是一个<b>残缺的权限</b>：
+ * 只覆盖了一个完整动作的一半，剩下的只有副作用。<b>这类半个权限，要么补全要么去掉。</b>
+ *
+ * <p><b>一处事实修正</b>：删除分类<b>本来就有引用保护</b> —— 分类下有未删除的子分类或题目时
+ * 返回 {@code 30004}，所以<b>只有空分类删得掉</b>，删不掉别人正在用的分类。
+ * 真正没有保护、也确实会影响全机构的是<b>新建</b>与<b>改名</b>。
+ *
+ * <p><b>判定不在本类</b>：与那 18 个接口共用 {@link OrgRootGuard} 同一份
+ * （{@code course} / {@code question} / {@code vod} 三个域互不能 import，检查③）。
+ * <b>不要在这里写第二份</b>，漂移的表现是「有的收窄了、有的没有」——不报错。
  */
 @Service
 public class QuestionCategoryService {
@@ -51,9 +70,11 @@ public class QuestionCategoryService {
     private static final int MAX_DEPTH = 32;
 
     private final QbCategoryMapper categoryMapper;
+    private final OrgRootGuard orgRootGuard;
 
-    public QuestionCategoryService(QbCategoryMapper categoryMapper) {
+    public QuestionCategoryService(QbCategoryMapper categoryMapper, OrgRootGuard orgRootGuard) {
         this.categoryMapper = categoryMapper;
+        this.orgRootGuard = orgRootGuard;
     }
 
     // =====================================================================
@@ -132,6 +153,7 @@ public class QuestionCategoryService {
 
     @Transactional(rollbackFor = Exception.class)
     public CategoryCreatedVO create(CategoryCreateReq req) {
+        orgRootGuard.assertOrgRoot("题库分类");   // F-114 收窄：分类写操作仅机构根
         Long parentId = req.getParentId();
         if (parentId != QbCategory.ROOT_PARENT) {
             requireExisting(parentId);
@@ -153,6 +175,7 @@ public class QuestionCategoryService {
 
     @Transactional(rollbackFor = Exception.class)
     public void update(Long id, CategoryUpdateReq req) {
+        orgRootGuard.assertOrgRoot("题库分类");   // F-114 收窄：分类写操作仅机构根
         QbCategory row = requireExisting(id);
 
         Long targetParent = req.getParentId() == null ? row.getParentId() : req.getParentId();
@@ -187,6 +210,7 @@ public class QuestionCategoryService {
      */
     @Transactional(rollbackFor = Exception.class)
     public void delete(Long id) {
+        orgRootGuard.assertOrgRoot("题库分类");   // F-114 收窄：分类写操作仅机构根
         requireExisting(id);
         long children = categoryMapper.selectCount(new LambdaQueryWrapper<QbCategory>()
                 .eq(QbCategory::getParentId, id));

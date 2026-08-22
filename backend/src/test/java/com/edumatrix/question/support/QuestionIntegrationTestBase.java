@@ -156,4 +156,21 @@ public abstract class QuestionIntegrationTestBase extends AuthIntegrationTestBas
         JsonNode json = objectMapper.readTree(content.isBlank() ? "{}" : content);
         return new HttpOutcome(result.getResponse().getStatus(), json.path("code").asInt());
     }
+
+    /**
+     * 某个节点上的账号<b>实际拿到的 perms</b>（走 {@code /auth/me}，
+     * 即 {@code sys_role_menu → sys_menu.perms} 那条真实链路）。
+     *
+     * <h2>为什么需要它 —— F-114 收窄之后「教师 403」不再能证明 F-72</h2>
+     * <p>写端点上现在压着两道闸：{@code @SaCheckPermission}（权限位）与
+     * {@code OrgRootGuard}（在不在机构根）。教师两道都过不了，<b>403 说明不了是哪一道</b>。
+     * 实测（M62）：把撤掉的绑定加回 {@code sys_role_menu}，那些「教师 403」的用例<b>照样全绿</b>。
+     * 要断 F-72 说的那个「真相」，判据必须落在 perms 本身上。
+     */
+    protected java.util.List<String> permsOf(long nodeId) throws Exception {
+        JsonNode me = getWithToken("/api/v1/auth/me", loginAs(nodeId));
+        java.util.List<String> perms = new java.util.ArrayList<>();
+        data(me).path("perms").forEach(node -> perms.add(node.asText()));
+        return perms;
+    }
 }
